@@ -1,0 +1,36 @@
+[package]
+name = "vitaforge"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+description = "Homebrew catalog browser for games/apps/ports on the PS Vita"
+
+[dependencies]
+anyhow = "1"
+egui = "0.31"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+md-5 = "0.10"
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"], default-features = false }
+sdl2 = { version = "0.38", features = ["use-pkgconfig", "unsafe_textures"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
+vita-newlib-shims = "0.3"
+vitasdk-sys = { version = "0.3", features = ["SceAppUtil_stub", "SceSysmem_stub", "SceSysmodule_stub", "ScePromoterUtil_stub", "SceKernelThreadMgr_stub", "SceIme_stub", "SceCommonDialog_stub"] }
+sha1 = "0.10"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[patch.crates-io]
+# vanilla `ring` doesn't build for this target: it finds no libc RNG source it
+# recognizes. This fork patches one in.
+ring = { git = "https://github.com/vita-rust/ring.git", branch = "v0.17.14-vita" }
+
+[package.metadata.vita]
+title_id = "VITAFORGE"
+title_name = "VitaF"
+assets = "static"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
