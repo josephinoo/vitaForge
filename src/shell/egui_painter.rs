@@ -1,5 +1,4 @@
-
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::collections::HashMap;
 
 #[derive(Default)]
@@ -23,7 +22,7 @@ impl SdlEguiPainter {
         primitives: &[egui::ClippedPrimitive],
         textures_delta: &egui::TexturesDelta,
     ) -> Result<()> {
-        self.apply_textures(canvas, primitives, textures_delta)?;
+        self.apply_textures(canvas, textures_delta);
 
         for clipped_primitive in primitives {
             let Some(clip_rect) =
@@ -40,8 +39,12 @@ impl SdlEguiPainter {
                 continue;
             }
 
-            self.vertices.clear();
             let texture = self.textures.get(&mesh.texture_id);
+
+            if texture.is_none() && mesh.texture_id != egui::TextureId::default() {
+                continue;
+            }
+            self.vertices.clear();
             let uv_scale = texture.map(|t| t.uv_scale).unwrap_or(egui::vec2(1.0, 1.0));
             self.vertices.extend(
                 mesh.vertices
@@ -53,10 +56,10 @@ impl SdlEguiPainter {
             self.indices.extend(mesh.indices.iter().map(|&i| i as i32));
 
             let texture_ref = texture.map(|t| &t.texture);
-            canvas
-                .render_geometry(&self.vertices, texture_ref, &self.indices)
-                .map_err(anyhow::Error::msg)
-                .context("failed to render egui geometry through SDL")?;
+
+            if let Err(err) = canvas.render_geometry(&self.vertices, texture_ref, &self.indices) {
+                eprintln!("skipped a draw call: {err}");
+            }
         }
 
         canvas.set_clip_rect(None);
@@ -70,13 +73,11 @@ impl SdlEguiPainter {
     fn apply_textures(
         &mut self,
         canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
-        _primitives: &[egui::ClippedPrimitive],
         textures_delta: &egui::TexturesDelta,
-    ) -> Result<()> {
+    ) {
         for (texture_id, delta) in &textures_delta.set {
-            Self::upload_texture(canvas, &mut self.textures, *texture_id, delta)?;
+            Self::upload_texture(canvas, &mut self.textures, *texture_id, delta);
         }
-        Ok(())
     }
 
     fn upload_texture(
@@ -84,7 +85,7 @@ impl SdlEguiPainter {
         textures: &mut HashMap<egui::TextureId, SdlEguiTexture>,
         texture_id: egui::TextureId,
         delta: &egui::epaint::ImageDelta,
-    ) -> Result<()> {
+    ) {
         use sdl2::pixels::PixelFormatEnum;
         use sdl2::rect::Rect;
         use sdl2::render::BlendMode;
@@ -93,46 +94,34 @@ impl SdlEguiPainter {
         let pixels = Self::image_to_sdl_rgba(&delta.image);
 
         if delta.pos.is_none() || !textures.contains_key(&texture_id) {
-            let mut texture = canvas
-                .create_texture_streaming(
-                    PixelFormatEnum::RGBA32,
-                    width as u32,
-                    height as u32,
-                )
-                .map_err(anyhow::Error::msg)
-                .context("failed to create SDL egui texture")?;
+            let texture = canvas.create_texture_streaming(PixelFormatEnum::RGBA32, width as u32, height as u32);
+            let mut texture = match texture {
+                Ok(texture) => texture,
+                Err(err) => {
+                    eprintln!("couldn't allocate a texture ({width}x{height}): {err}");
+                    return;
+                }
+            };
             texture.set_blend_mode(BlendMode::Blend);
-            texture
-                .update(
-                    Rect::new(0, 0, width as u32, height as u32),
-                    &pixels,
-                    width * 4,
-                )
-                .map_err(anyhow::Error::msg)
-                .context("failed to upload SDL egui texture")?;
-            textures.insert(
-                texture_id,
-                SdlEguiTexture {
-                    texture,
-                    uv_scale: egui::vec2(1.0, 1.0),
-                },
-            );
-            return Ok(());
+            if let Err(err) = texture.update(Rect::new(0, 0, width as u32, height as u32), &pixels, width * 4) {
+                eprintln!("couldn't upload a texture: {err}");
+                return;
+            }
+            textures.insert(texture_id, SdlEguiTexture { texture, uv_scale: egui::vec2(1.0, 1.0) });
+            return;
         }
 
-        let [x, y] = delta.pos.expect("partial texture update has a position");
-        textures
-            .get_mut(&texture_id)
-            .context("missing SDL texture for egui partial update")?
-            .texture
-            .update(
-                Rect::new(x as i32, y as i32, width as u32, height as u32),
-                &pixels,
-                width * 4,
-            )
-            .map_err(anyhow::Error::msg)
-            .context("failed to upload SDL egui texture patch")?;
-        Ok(())
+        let Some(&[x, y]) = delta.pos.as_ref() else {
+            eprintln!("partial texture update with no position, skipped");
+            return;
+        };
+        let Some(existing) = textures.get_mut(&texture_id) else {
+            eprintln!("partial update for a texture that no longer exists, skipped");
+            return;
+        };
+        if let Err(err) = existing.texture.update(Rect::new(x as i32, y as i32, width as u32, height as u32), &pixels, width * 4) {
+            eprintln!("couldn't patch a texture: {err}");
+        }
     }
 
     fn image_to_sdl_rgba(image: &egui::ImageData) -> Vec<u8> {

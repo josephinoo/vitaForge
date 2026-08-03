@@ -29,13 +29,6 @@ impl Language {
         Language::English
     }
 
-    pub fn discover(self) -> &'static str {
-        match self {
-            Language::Spanish => "DESCUBRIR",
-            Language::English => "DISCOVER",
-        }
-    }
-
     pub fn apps_count(self, count: usize) -> String {
         match self {
             Language::Spanish => format!("{count} APPS"),
@@ -88,8 +81,8 @@ impl Language {
 
     pub fn sort_by_prefix(self) -> &'static str {
         match self {
-            Language::Spanish => "ORDENAR:",
-            Language::English => "SORT BY:",
+            Language::Spanish => "Ordenar por:",
+            Language::English => "Sort by:",
         }
     }
 
@@ -139,20 +132,6 @@ impl Language {
         }
     }
 
-    pub fn featured(self) -> &'static str {
-        match self {
-            Language::Spanish => "DESTACADO",
-            Language::English => "FEATURED",
-        }
-    }
-
-    pub fn view_details(self) -> &'static str {
-        match self {
-            Language::Spanish => "VER DETALLES",
-            Language::English => "VIEW DETAILS",
-        }
-    }
-
     pub fn install(self) -> &'static str {
         match self {
             Language::Spanish => "INSTALAR",
@@ -199,6 +178,52 @@ impl Language {
         match self {
             Language::Spanish => "Instalación en curso, no salgas de esta pantalla",
             Language::English => "Install running - stay on this screen",
+        }
+    }
+
+    pub fn plugin_manual_note(self) -> &'static str {
+        match self {
+            Language::Spanish => {
+                "Se descarga en ux0:data/vitaforge/plugins. Debes moverlo y añadirlo a config.txt tú mismo."
+            }
+            Language::English => {
+                "Downloaded to ux0:data/vitaforge/plugins. Moving it and editing config.txt is up to you."
+            }
+        }
+    }
+
+    pub fn release_page(self) -> &'static str {
+        match self {
+            Language::Spanish => "Página del autor",
+            Language::English => "Release page",
+        }
+    }
+
+    pub fn download(self) -> &'static str {
+        match self {
+            Language::Spanish => "DESCARGAR",
+            Language::English => "DOWNLOAD",
+        }
+    }
+
+    pub fn requirements(self) -> &'static str {
+        match self {
+            Language::Spanish => "Requisitos",
+            Language::English => "Requirements",
+        }
+    }
+
+    pub fn changelog(self) -> &'static str {
+        match self {
+            Language::Spanish => "Novedades",
+            Language::English => "What's new",
+        }
+    }
+
+    pub fn needs_game_data(self) -> &'static str {
+        match self {
+            Language::Spanish => "REQUIERE DATOS ADICIONALES",
+            Language::English => "NEEDS EXTRA GAME DATA",
         }
     }
 

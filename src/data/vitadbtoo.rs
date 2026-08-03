@@ -1,18 +1,32 @@
-use super::{AppEntry, Category};
+use super::{AppEntry, Category, Platform};
 use serde::Deserialize;
 
-const ICON_BASE: &str = "https://drdecki.github.io/VitaDBtoo-db/icons/";
-const ASSET_BASE: &str = "https://drdecki.github.io/VitaDBtoo-db/";
+use super::source::base_url;
 
 #[derive(Debug, Deserialize)]
 pub struct RawEntry {
     id: String,
+    #[serde(default)]
     titleid: String,
     name: String,
     author: String,
     description: String,
-    #[serde(rename = "type")]
+    #[serde(default)]
+    long_description: String,
+    #[serde(default)]
+    requirements: String,
+    #[serde(default)]
+    changelog: String,
+    #[serde(default)]
+    release_page: String,
+    #[serde(default)]
+    data: String,
+    #[serde(default)]
+    data_size: String,
+
+    #[serde(rename = "type", default)]
     kind: String,
+    #[serde(default)]
     icon: String,
     url: String,
     #[serde(default)]
@@ -20,6 +34,8 @@ pub struct RawEntry {
     version: String,
     #[serde(default)]
     hash: String,
+    #[serde(default)]
+    hash2: String,
     #[serde(default)]
     size: String,
     #[serde(default)]
@@ -29,6 +45,15 @@ pub struct RawEntry {
     date: String,
     #[serde(default)]
     screenshots: String,
+}
+
+fn non_empty(value: String) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_owned())
+}
+
+fn offset_type(kind: &str, by: i32) -> String {
+    kind.trim().parse::<i32>().map(|n| (n - by).to_string()).unwrap_or_default()
 }
 
 fn category_from_type(kind: &str) -> Option<Category> {
@@ -42,11 +67,17 @@ fn category_from_type(kind: &str) -> Option<Category> {
 }
 
 impl RawEntry {
-    pub fn into_app_entry(self) -> Option<AppEntry> {
+    pub fn into_app_entry(self, platform: Platform) -> Option<AppEntry> {
+
         if self.url.is_empty() || self.url.contains("get_hb_url.php") {
             return None;
         }
-        let category = category_from_type(&self.kind)?;
+        let category = match platform {
+            Platform::Plugin => Category::Plugin,
+
+            Platform::Psp => category_from_type(&offset_type(&self.kind, 10))?,
+            Platform::Vita => category_from_type(&self.kind)?,
+        };
         let score: f32 = self.score.parse().unwrap_or(0.0);
         let rating = (score / 100.0 * 5.0).clamp(0.0, 5.0);
 
@@ -57,19 +88,28 @@ impl RawEntry {
             name: self.name,
             author: if self.author.is_empty() { "unknown".to_owned() } else { self.author },
             description: self.description,
+            long_description: self.long_description,
+            requirements: self.requirements,
+            changelog: self.changelog,
+            release_page: non_empty(self.release_page),
             category,
-            icon_url: if self.icon.is_empty() { None } else { Some(format!("{ICON_BASE}{}", self.icon)) },
+            platform,
+            icon_url: (!self.icon.is_empty())
+                .then(|| format!("{}icons/{}", base_url(), self.icon)),
             screenshot_urls: self
                 .screenshots
                 .split(';')
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
-                .map(|s| format!("{ASSET_BASE}{s}"))
+                .map(|s| format!("{}{s}", base_url()))
                 .collect(),
             download_url: self.url,
             source: if self.source.contains("github.com") { Some(self.source) } else { None },
             version: self.version,
             hash: self.hash.trim().to_lowercase(),
+            hash2: self.hash2.trim().to_lowercase(),
+            data_url: non_empty(self.data),
+            data_size_bytes: self.data_size.parse().unwrap_or(0),
             size_bytes: self.size.parse().unwrap_or(0),
             downloads: self.downloads.parse().unwrap_or(0),
             rating,

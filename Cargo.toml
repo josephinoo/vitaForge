@@ -17,7 +17,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
 vita-newlib-shims = "0.3"
-vitasdk-sys = { version = "0.3", features = ["SceAppUtil_stub", "SceSysmem_stub", "SceSysmodule_stub", "ScePromoterUtil_stub", "SceKernelThreadMgr_stub", "SceIme_stub", "SceCommonDialog_stub"] }
+vitasdk-sys = { version = "0.3", features = ["SceAppUtil_stub", "SceSysmem_stub", "SceSysmodule_stub", "ScePromoterUtil_stub", "SceKernelThreadMgr_stub", "SceIme_stub", "SceCommonDialog_stub", "SceLibKernel_stub", "SceIofilemgr_stub"] }
 sha1 = "0.10"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
@@ -28,7 +28,7 @@ ring = { git = "https://github.com/vita-rust/ring.git", branch = "v0.17.14-vita"
 
 [package.metadata.vita]
 title_id = "VITAFORGE"
-title_name = "VitaF"
+title_name = "VitaForge"
 assets = "static"
 
 [profile.release]

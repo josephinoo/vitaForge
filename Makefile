@@ -1,5 +1,10 @@
 .PHONY: vpk desktop ftp eboot upload-vpk run-vita
 
+# Without this the build never sees SERVER_URL and silently falls back to the
+# default catalog url baked into the source.
+-include .env
+export SERVER_URL
+
 RUSTFLAGS ?= -C target-feature=-neon
 CARGO_VITA ?= cargo +nightly vita
 VPK := target/armv7-sony-vita-newlibeabihf/release/vitaforge.vpk

@@ -1,5 +1,6 @@
-
 use anyhow::Result;
+
+static PROMOTER: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(target_os = "vita")]
 mod sys {
@@ -38,6 +39,14 @@ mod sys {
                 }
             }
             Ok(Self)
+        }
+
+        pub fn is_installed(&self, titleid: &str) -> Option<bool> {
+            let path = CString::new(titleid).ok()?;
+            let mut res: i32 = 0;
+            let ret = unsafe { scePromoterUtilityCheckExist(path.as_ptr(), &mut res) };
+
+            Some(ret >= 0)
         }
 
         pub fn promote(&self, dir: &str) -> Result<()> {
@@ -82,11 +91,36 @@ mod sys {
 
 #[cfg(target_os = "vita")]
 pub fn promote_package(dir: &str) -> Result<()> {
+    let _guard = PROMOTER.lock().map_err(|_| anyhow::anyhow!("the promoter lock is poisoned"))?;
     let session = sys::Session::open()?;
     session.promote(dir)
+}
+
+#[cfg(target_os = "vita")]
+pub fn installed_titles(titleids: &[String]) -> Option<Vec<String>> {
+    let _guard = PROMOTER.lock().ok()?;
+    let session = match sys::Session::open() {
+        Ok(session) => session,
+        Err(err) => {
+            eprintln!("couldn't ask the system what is installed: {err:#}");
+            return None;
+        }
+    };
+    let mut found = Vec::new();
+    for titleid in titleids {
+        if session.is_installed(titleid) == Some(true) {
+            found.push(titleid.clone());
+        }
+    }
+    Some(found)
 }
 
 #[cfg(not(target_os = "vita"))]
 pub fn promote_package(_dir: &str) -> Result<()> {
     anyhow::bail!("installing only works on the vita itself")
+}
+
+#[cfg(not(target_os = "vita"))]
+pub fn installed_titles(_titleids: &[String]) -> Option<Vec<String>> {
+    None
 }

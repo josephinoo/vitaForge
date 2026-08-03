@@ -1,6 +1,11 @@
 use serde::Deserialize;
 
 const USER_AGENT: &str = "vitaforge";
+const DEFAULT_GITHUB_API_URL: &str = "https://api.github.com";
+
+fn github_api_url() -> &'static str {
+    option_env!("GITHUB_API_URL").unwrap_or(DEFAULT_GITHUB_API_URL)
+}
 
 #[derive(Deserialize)]
 struct Release {
@@ -34,7 +39,7 @@ fn parse_owner_repo(url: &str) -> Option<(String, String)> {
 
 pub async fn latest_release(repo_url: &str) -> Option<LatestRelease> {
     let (owner, repo) = parse_owner_repo(repo_url)?;
-    let api = format!("https://api.github.com/repos/{owner}/{repo}/releases/latest");
+    let api = format!("{}/repos/{owner}/{repo}/releases/latest", github_api_url());
 
     let response = crate::net::client()
         .get(&api)
@@ -42,12 +47,21 @@ pub async fn latest_release(repo_url: &str) -> Option<LatestRelease> {
         .send()
         .await
         .ok()?;
+
     if !response.status().is_success() {
-        eprintln!("github said {} for {api}", response.status());
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            eprintln!("github release not found (404) for {owner}/{repo}: repo has no releases yet or is private");
+        } else {
+            eprintln!("github api returned status {} for {api}", response.status());
+        }
         return None;
     }
 
     let release: Release = response.json().await.ok()?;
+    if release.tag_name.trim().is_empty() {
+        return None;
+    }
+
     let asset = release
         .assets
         .into_iter()

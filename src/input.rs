@@ -27,6 +27,7 @@ pub enum AppCommand {
     BackToCatalog,
     InstallCurrent,
     DismissInstall,
+    SelfUpdate,
 }
 
 impl From<InputCommand> for AppCommand {

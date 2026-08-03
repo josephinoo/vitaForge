@@ -11,7 +11,7 @@ use tokio::sync::{oneshot, watch};
 
 pub struct CatalogState {
     pub apps: Vec<AppEntry>,
-    /// Rebuilt only when the sort changes, not on every keystroke.
+
     sorted_indices: Vec<usize>,
     pub filtered_indices: Vec<usize>,
     pub search_query: String,
@@ -19,8 +19,7 @@ pub struct CatalogState {
     pub category_filter: Option<Category>,
     pub sort_order: SortOrder,
     pub selected: usize,
-    /// A fresh result list starts with nothing highlighted, so the first hit of a
-    /// search never looks pre-picked.
+
     pub selection_active: bool,
     pub scroll_to_selected: bool,
 }
@@ -58,7 +57,6 @@ impl CatalogState {
         }
     }
 
-    /// Resorts and refilters. Only needed when the catalog or sort order changes.
     fn resort(&mut self) {
         let mut order: Vec<usize> = (0..self.apps.len()).collect();
         let apps = &self.apps;
@@ -73,7 +71,6 @@ impl CatalogState {
         self.refresh_filter();
     }
 
-    /// One pass over the sorted indices; runs on every keystroke.
     fn refresh_filter(&mut self) {
         let query = self.search_query.trim().to_lowercase();
         let apps = &self.apps;
@@ -90,9 +87,14 @@ impl CatalogState {
             })
             .collect();
 
-        self.selected = self.selected.min(self.filtered_indices.len().saturating_sub(1));
-        // The list moved under the cursor, so drop the highlight.
-        self.selection_active = false;
+        if self.filtered_indices.is_empty() {
+            self.selected = 0;
+            self.selection_active = false;
+        } else {
+            self.selected = self.selected.min(self.filtered_indices.len() - 1);
+            self.selection_active = true;
+            self.scroll_to_selected = true;
+        }
     }
 
     fn move_selection(&mut self, delta: isize) {
@@ -100,7 +102,7 @@ impl CatalogState {
             return;
         }
         self.scroll_to_selected = true;
-        // The first press only lights up the entry, it does not step past it.
+
         if !self.selection_active {
             self.selection_active = true;
             self.selected = 0;
@@ -128,21 +130,31 @@ enum CatalogSource {
     Failed,
 }
 
+const SELF_REPO_URL: &str = "https://github.com/josephinoo/vitaForge";
+
+#[derive(Debug, Clone)]
+pub struct SelfUpdateInfo {
+    pub tag: String,
+    pub vpk_url: String,
+}
+
 pub struct App {
     pub state: AppState,
     pub icons: IconCache,
     pub installed: crate::install::installed::InstalledIndex,
     pub lang: Language,
     pub install: Option<InstallJob>,
-    /// Apps are uninstalled from LiveArea while we are not running, so recheck on
-    /// startup and whenever the catalog comes back into view.
+    pub self_update: Option<SelfUpdateInfo>,
+
     needs_installed_rescan: bool,
     load_rx: Option<oneshot::Receiver<CatalogSource>>,
+    hashes_rx: Option<oneshot::Receiver<Vec<data::source::MinimalEntry>>>,
+    self_update_rx: Option<oneshot::Receiver<SelfUpdateInfo>>,
 }
 
 pub struct InstallJob {
     pub app_id: String,
-    /// Kept here so a finished job can update the index without a lookup.
+
     pub app_id_title: String,
     pub progress: crate::install::Progress,
     rx: watch::Receiver<crate::install::Progress>,
@@ -154,7 +166,7 @@ impl App {
         tokio::spawn(async move {
             let result = match data::source::fetch_live().await {
                 Ok(apps) if !apps.is_empty() => {
-                    // Handed in and back out so the UI thread never pays for a copy.
+
                     let apps = tokio::task::spawn_blocking(move || {
                         data::source::save_cache(&apps);
                         apps
@@ -174,55 +186,116 @@ impl App {
             };
             let _ = tx.send(result);
         });
+
+        let (self_update_tx, self_update_rx) = oneshot::channel();
+        tokio::spawn(async move {
+            if let Some(release) = crate::install::github::latest_release(SELF_REPO_URL).await {
+                let current_ver = env!("CARGO_PKG_VERSION").trim_start_matches('v');
+                let release_ver = release.tag.trim_start_matches('v');
+                if release_ver != current_ver && !release_ver.is_empty() {
+                    let _ = self_update_tx.send(SelfUpdateInfo {
+                        tag: release.tag,
+                        vpk_url: release.vpk_url,
+                    });
+                }
+            }
+        });
+
+        let cached = data::source::initial_catalog();
+        let (state, hashes_rx) = if cached.is_empty() {
+            (AppState::Loading, None)
+        } else {
+            let (hash_tx, hash_rx) = oneshot::channel();
+            tokio::spawn(async move {
+                match data::source::fetch_minimal().await {
+                    Ok(minimal) => {
+                        let _ = hash_tx.send(minimal);
+                    }
+                    Err(err) => eprintln!("hash refresh failed: {err:#}"),
+                }
+            });
+            (AppState::Catalog(CatalogState::new(cached)), Some(hash_rx))
+        };
+
         Ok(Self {
-            state: AppState::Loading,
+            state,
             icons: IconCache::new(),
             installed: crate::install::installed::InstalledIndex::new(),
             lang: Language::detect(),
             install: None,
+            self_update: None,
             needs_installed_rescan: true,
             load_rx: Some(rx),
+            hashes_rx,
+            self_update_rx: Some(self_update_rx),
         })
     }
 
-    /// True while a package is still downloading, extracting or promoting.
     pub fn install_busy(&self) -> bool {
         self.install.as_ref().is_some_and(|job| !job.progress.is_finished())
     }
 
     pub fn tick(&mut self, ctx: &egui::Context) -> Result<()> {
         if self.needs_installed_rescan {
-            self.needs_installed_rescan = false;
-            // Needs the catalog's hashes, so it waits for the catalog.
+
             let entries: &[AppEntry] = match &self.state {
                 AppState::Catalog(catalog) => &catalog.apps,
                 AppState::Detail { previous, .. } => &previous.apps,
                 AppState::Loading => &[],
             };
-            self.installed.refresh(ctx, entries);
+            if self.installed.refresh(ctx, entries) {
+                self.needs_installed_rescan = false;
+            }
         }
         if let Some(job) = &mut self.install {
             let previous = std::mem::replace(&mut job.progress, job.rx.borrow_and_update().clone());
-            // The package carries its own stamp, so this needs no rehash.
+
             if previous != job.progress && job.progress == crate::install::Progress::Done {
                 self.installed.mark_installed(&job.app_id_title);
             }
         }
 
-        let Some(rx) = &mut self.load_rx else { return Ok(()) };
-        match rx.try_recv() {
-            // The first request fired before the hashes existed, so ask again.
-            Ok(CatalogSource::Live(apps)) => {
-                self.state = AppState::Catalog(CatalogState::new(apps));
-                self.load_rx = None;
-                self.needs_installed_rescan = true;
+        if let Some(rx) = &mut self.hashes_rx
+            && let Ok(minimal) = rx.try_recv()
+        {
+            self.hashes_rx = None;
+            if let AppState::Catalog(catalog) = &mut self.state {
+                data::source::apply_hashes(&mut catalog.apps, &minimal);
+                self.installed.force_refresh(ctx, &catalog.apps);
                 ctx.request_repaint();
             }
-            Ok(CatalogSource::Failed) => {
-                self.state = AppState::Catalog(CatalogState::new(data::source::initial_catalog()));
+        }
+
+        if let Some(rx) = &mut self.self_update_rx
+            && let Ok(info) = rx.try_recv()
+        {
+            self.self_update_rx = None;
+            self.self_update = Some(info);
+
+            let _ = self.handle_command(AppCommand::SelfUpdate);
+            ctx.request_repaint();
+        }
+
+        let Some(rx) = &mut self.load_rx else { return Ok(()) };
+        match rx.try_recv() {
+
+            Ok(CatalogSource::Live(apps)) => {
                 self.load_rx = None;
-                self.needs_installed_rescan = true;
-                ctx.request_repaint();
+                if matches!(self.state, AppState::Loading) && !self.install_busy() {
+                    let catalog = CatalogState::new(apps);
+                    self.installed.force_refresh(ctx, &catalog.apps);
+                    self.state = AppState::Catalog(catalog);
+                    ctx.request_repaint();
+                }
+            }
+            Ok(CatalogSource::Failed) => {
+                self.load_rx = None;
+                if matches!(self.state, AppState::Loading) && !self.install_busy() {
+                    let catalog = CatalogState::new(data::source::initial_catalog());
+                    self.installed.force_refresh(ctx, &catalog.apps);
+                    self.state = AppState::Catalog(catalog);
+                    ctx.request_repaint();
+                }
             }
             Err(oneshot::error::TryRecvError::Empty) => {}
             Err(oneshot::error::TryRecvError::Closed) => self.load_rx = None,
@@ -234,8 +307,7 @@ impl App {
         match command {
             AppCommand::Input(InputCommand::Back) => self.back_to_catalog(),
             AppCommand::SetSearchQuery(query) => {
-                // Refiltering drops the highlight, so an unchanged query must be a
-                // no-op or dismissing the keyboard would reset the cursor.
+
                 if let AppState::Catalog(catalog) = &mut self.state
                     && catalog.search_query != query
                 {
@@ -268,7 +340,7 @@ impl App {
                 }
             }
             AppCommand::Input(InputCommand::Confirm) => {
-                // With nothing highlighted, confirm picks up the cursor instead.
+
                 let target = match &mut self.state {
                     AppState::Catalog(catalog) if catalog.selection_active => Some(catalog.selected),
                     AppState::Catalog(catalog) => {
@@ -345,13 +417,52 @@ impl App {
                 {
                     let entry = app.clone();
                     let app_id = entry.id.clone();
-                    let app_id_title = entry.titleid.clone();
+                    let app_id_title = crate::install::installed::index_key(&entry);
                     let rx = crate::install::start(entry);
                     let progress = rx.borrow().clone();
                     self.install = Some(InstallJob { app_id, app_id_title, progress, rx });
                 }
             }
             AppCommand::DismissInstall => self.install = None,
+            AppCommand::SelfUpdate => {
+                let busy = self.install.as_ref().is_some_and(|job| !job.progress.is_finished());
+                if let Some(info) = self.self_update.clone()
+                    && !busy
+                {
+                    let entry = AppEntry {
+                        id: "vitaforge_self_update".to_owned(),
+                        titleid: "VITAFORGE".to_owned(),
+                        name: format!("VitaForge {}", info.tag),
+                        name_lower: "vitaforge".to_owned(),
+                        author: "josephinoo".to_owned(),
+                        description: format!("Self-update for VitaForge {}", info.tag),
+                        long_description: String::new(),
+                        requirements: String::new(),
+                        changelog: String::new(),
+                        release_page: Some("https://github.com/josephinoo/vitaForge/releases".to_owned()),
+                        category: Category::Utility,
+                        platform: crate::data::Platform::Vita,
+                        icon_url: None,
+                        screenshot_urls: Vec::new(),
+                        download_url: info.vpk_url.clone(),
+                        source: Some(SELF_REPO_URL.to_owned()),
+                        version: info.tag.clone(),
+                        hash: String::new(),
+                        hash2: String::new(),
+                        data_url: None,
+                        data_size_bytes: 0,
+                        size_bytes: 0,
+                        downloads: 0,
+                        rating: 5.0,
+                        updated_at: String::new(),
+                    };
+                    let app_id = entry.id.clone();
+                    let app_id_title = entry.titleid.clone();
+                    let rx = crate::install::start(entry);
+                    let progress = rx.borrow().clone();
+                    self.install = Some(InstallJob { app_id, app_id_title, progress, rx });
+                }
+            }
         }
         Ok(())
     }
@@ -373,7 +484,7 @@ impl App {
             unreachable!("checked above that self.state is Catalog")
         };
         catalog.selected = filtered_index;
-        // Coming back from the detail page should land on the entry that was opened.
+
         catalog.selection_active = true;
         self.state = AppState::Detail { app: entry, previous: Box::new(catalog), origin, scroll_offset: 0.0 };
     }
@@ -385,7 +496,7 @@ impl App {
     }
 
     fn back_to_catalog(&mut self) {
-        // The detail page is the only place progress is shown, so stay put.
+
         if self.install_busy() {
             return;
         }

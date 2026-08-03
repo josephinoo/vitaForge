@@ -1,4 +1,4 @@
-mod github;
+pub mod github;
 mod head;
 pub mod installed;
 mod promoter;
@@ -12,10 +12,18 @@ use tokio::sync::watch;
 const WORK_DIR: &str = "ux0:data/vitaforge";
 const TEMP_VPK: &str = "ux0:data/vitaforge/tmp.vpk";
 const EXTRACT_DIR: &str = "ux0:data/vitaforge/vpk_install";
+const TEMP_DATA: &str = "ux0:data/vitaforge/tmp_data.zip";
+
+const DATA_STAGE_DIR: &str = "ux0:data/vitaforge/data_stage";
+const DATA_ROOT: &str = "ux0:data";
+const PSP_GAME_DIR: &str = "ux0:pspemu/PSP/GAME";
+
+const PLUGIN_DIR: &str = "ux0:data/vitaforge/plugins";
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Progress {
     Resolving,
+    DownloadingData { received: u64, total: Option<u64> },
     Downloading { received: u64, total: Option<u64> },
     Extracting,
     Installing,
@@ -32,6 +40,12 @@ impl Progress {
                     format!("Downloading {}%", (*received * 100 / *total).min(100))
                 }
                 _ => format!("Downloading {:.1} MB", *received as f64 / (1024.0 * 1024.0)),
+            },
+            Progress::DownloadingData { received, total } => match total {
+                Some(total) if *total > 0 => {
+                    format!("Game data {}%", (*received * 100 / *total).min(100))
+                }
+                _ => format!("Game data {:.1} MB", *received as f64 / (1024.0 * 1024.0)),
             },
             Progress::Extracting => "Extracting…".to_owned(),
             Progress::Installing => "Installing…".to_owned(),
@@ -55,6 +69,8 @@ pub fn start(entry: AppEntry) -> watch::Receiver<Progress> {
                 eprintln!("install failed: {err:#}");
                 let _ = std::fs::remove_dir_all(EXTRACT_DIR);
                 let _ = std::fs::remove_file(TEMP_VPK);
+
+                installed::clear_pending_install(&installed::index_key(&entry));
                 Progress::Failed(format!("{err}"))
             }
         };
@@ -64,6 +80,51 @@ pub fn start(entry: AppEntry) -> watch::Receiver<Progress> {
 }
 
 async fn run(entry: &AppEntry, tx: &watch::Sender<Progress>) -> Result<()> {
+    match entry.platform {
+        crate::data::Platform::Vita => run_vita(entry, tx).await,
+        crate::data::Platform::Psp => run_psp(entry, tx).await,
+        crate::data::Platform::Plugin => run_plugin(entry, tx).await,
+    }
+}
+
+async fn run_psp(entry: &AppEntry, tx: &watch::Sender<Progress>) -> Result<()> {
+    let _ = tx.send(Progress::Resolving);
+    if entry.download_url.is_empty() {
+        bail!("no download link for this app");
+    }
+    std::fs::create_dir_all(WORK_DIR).context("couldn't create the work folder")?;
+    download(&entry.download_url, Path::new(TEMP_VPK), tx).await?;
+
+    let dest = PathBuf::from(PSP_GAME_DIR).join(&entry.id);
+    let _ = tx.send(Progress::Extracting);
+    tokio::task::spawn_blocking(move || extract(Path::new(TEMP_VPK), &dest))
+        .await
+        .context("the extract worker crashed")??;
+    let _ = std::fs::remove_file(TEMP_VPK);
+
+    installed::stamp_pending_install(&installed::index_key(entry), &entry.hash, None);
+    Ok(())
+}
+
+async fn run_plugin(entry: &AppEntry, tx: &watch::Sender<Progress>) -> Result<()> {
+    let _ = tx.send(Progress::Resolving);
+    if entry.download_url.is_empty() {
+        bail!("no download link for this plugin");
+    }
+    let name = entry
+        .download_url
+        .rsplit('/')
+        .next()
+        .filter(|name| !name.is_empty())
+        .unwrap_or("plugin.skprx");
+
+    std::fs::create_dir_all(PLUGIN_DIR).context("couldn't create the plugins folder")?;
+    let dest = PathBuf::from(PLUGIN_DIR).join(name);
+    download(&entry.download_url, &dest, tx).await?;
+    Ok(())
+}
+
+async fn run_vita(entry: &AppEntry, tx: &watch::Sender<Progress>) -> Result<()> {
     let _ = tx.send(Progress::Resolving);
 
     let url = match entry.source.as_deref() {
@@ -82,21 +143,35 @@ async fn run(entry: &AppEntry, tx: &watch::Sender<Progress>) -> Result<()> {
 
     std::fs::create_dir_all(WORK_DIR).context("couldn't create the work folder")?;
     let _ = std::fs::remove_dir_all(EXTRACT_DIR);
+    let _ = std::fs::remove_dir_all(DATA_STAGE_DIR);
+
+    if let Some(data_url) = entry.data_url.as_deref() {
+        stage_data(data_url, tx).await?;
+    }
 
     download(&url, Path::new(TEMP_VPK), tx).await?;
 
-    // Unzipping the vpk and promoting it are long synchronous jobs; on the
-    // current-thread runtime they would freeze the UI until the install finished.
     let _ = tx.send(Progress::Extracting);
     tokio::task::spawn_blocking(|| extract(Path::new(TEMP_VPK), Path::new(EXTRACT_DIR)))
         .await
         .context("the extract worker crashed")??;
     let _ = std::fs::remove_file(TEMP_VPK);
 
-    // Stamped before promoting so the hash ships inside the package.
-    installed::stamp_pending_install(Path::new(EXTRACT_DIR), &entry.hash);
+    installed::stamp_pending_install(&installed::index_key(entry), &entry.hash, Some(Path::new(EXTRACT_DIR)));
 
     head::write(Path::new(EXTRACT_DIR))?;
+
+    let titleid = entry.titleid.trim().to_uppercase();
+    if !titleid.is_empty() {
+        for root in &["ux0:app", "ur0:app", "uma0:app"] {
+            let path = format!("{root}/{titleid}");
+            if installed::vita_fs::exists(&path) || Path::new(&path).exists() {
+                if let Err(err) = std::fs::remove_dir_all(&path) {
+                    eprintln!("couldn't clear the previous install at {path}: {err}");
+                }
+            }
+        }
+    }
 
     let _ = tx.send(Progress::Installing);
     tokio::task::spawn_blocking(|| promoter::promote_package(EXTRACT_DIR))
@@ -105,12 +180,67 @@ async fn run(entry: &AppEntry, tx: &watch::Sender<Progress>) -> Result<()> {
 
     if Path::new(EXTRACT_DIR).exists() {
         let _ = std::fs::remove_dir_all(EXTRACT_DIR);
+        let _ = std::fs::remove_dir_all(DATA_STAGE_DIR);
         bail!("the system didn't accept the package");
+    }
+
+    if Path::new(DATA_STAGE_DIR).exists() {
+        tokio::task::spawn_blocking(|| merge_into(Path::new(DATA_STAGE_DIR), Path::new(DATA_ROOT)))
+            .await
+            .context("the data worker crashed")??;
+        let _ = std::fs::remove_dir_all(DATA_STAGE_DIR);
+    }
+    Ok(())
+}
+
+async fn stage_data(url: &str, tx: &watch::Sender<Progress>) -> Result<()> {
+    let dest = Path::new(TEMP_DATA);
+    download_with(url, dest, tx, |received, total| Progress::DownloadingData { received, total })
+        .await
+        .context("couldn't download the required game data")?;
+
+    let _ = tx.send(Progress::Extracting);
+    tokio::task::spawn_blocking(|| extract(Path::new(TEMP_DATA), Path::new(DATA_STAGE_DIR)))
+        .await
+        .context("the data extract worker crashed")??;
+    let _ = std::fs::remove_file(TEMP_DATA);
+    Ok(())
+}
+
+fn merge_into(from: &Path, to: &Path) -> Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let target = to.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            merge_into(&entry.path(), &target)?;
+        } else {
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            if target.exists() {
+                let _ = std::fs::remove_file(&target);
+            }
+            if std::fs::rename(entry.path(), &target).is_err() {
+                std::fs::copy(entry.path(), &target)
+                    .with_context(|| format!("couldn't copy {}", target.display()))?;
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
     }
     Ok(())
 }
 
 async fn download(url: &str, dest: &Path, tx: &watch::Sender<Progress>) -> Result<()> {
+    download_with(url, dest, tx, |received, total| Progress::Downloading { received, total }).await
+}
+
+async fn download_with(
+    url: &str,
+    dest: &Path,
+    tx: &watch::Sender<Progress>,
+    progress: impl Fn(u64, Option<u64>) -> Progress,
+) -> Result<()> {
     use futures_util::StreamExt;
 
     let response = crate::net::client()
@@ -132,7 +262,7 @@ async fn download(url: &str, dest: &Path, tx: &watch::Sender<Progress>) -> Resul
         let chunk = chunk.context("the download was interrupted")?;
         std::io::Write::write_all(&mut file, &chunk).context("couldn't write the download")?;
         received += chunk.len() as u64;
-        let _ = tx.send(Progress::Downloading { received, total });
+        let _ = tx.send(progress(received, total));
     }
     Ok(())
 }

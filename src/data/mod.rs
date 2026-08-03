@@ -28,7 +28,6 @@ impl Category {
         Category::Other,
     ];
 
-    /// Literals, to avoid a `to_uppercase()` per card per frame.
     pub fn label_upper(self) -> &'static str {
         match self {
             Category::Game => "GAMES",
@@ -39,6 +38,27 @@ impl Category {
             Category::Media => "MEDIA",
             Category::Theme => "THEMES",
             Category::Other => "OTHER",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Platform {
+    #[default]
+    Vita,
+
+    Psp,
+
+    Plugin,
+}
+
+impl Platform {
+    pub fn label(self) -> &'static str {
+        match self {
+            Platform::Vita => "VITA",
+            Platform::Psp => "PSP",
+            Platform::Plugin => "PLUGIN",
         }
     }
 }
@@ -73,12 +93,24 @@ pub struct AppEntry {
     pub id: String,
     pub titleid: String,
     pub name: String,
-    /// Precomputed: lowercasing 1000+ names per keystroke was the main typing lag.
+
     #[serde(skip)]
     pub name_lower: String,
     pub author: String,
     pub description: String,
+
+    #[serde(default)]
+    pub long_description: String,
+
+    #[serde(default)]
+    pub requirements: String,
+    #[serde(default)]
+    pub changelog: String,
+    #[serde(default)]
+    pub release_page: Option<String>,
     pub category: Category,
+    #[serde(default)]
+    pub platform: Platform,
     pub icon_url: Option<String>,
     #[serde(default)]
     pub screenshot_urls: Vec<String>,
@@ -86,28 +118,43 @@ pub struct AppEntry {
     #[serde(default)]
     pub source: Option<String>,
     pub version: String,
-    /// MD5 the catalog expects `eboot.bin` to have; empty if it ships none.
+
     #[serde(default)]
     pub hash: String,
+
+    #[serde(default)]
+    pub hash2: String,
+
+    #[serde(default)]
+    pub data_url: Option<String>,
+    #[serde(default)]
+    pub data_size_bytes: u64,
     pub size_bytes: u64,
     pub downloads: u64,
     pub rating: f32,
     pub updated_at: String,
 }
 
+fn format_size(bytes: u64) -> String {
+    let mb = bytes as f64 / (1024.0 * 1024.0);
+    if mb < 1.0 {
+        format!("{:.0} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{mb:.1} MB")
+    }
+}
+
 impl AppEntry {
-    /// Refills fields skipped by serde after loading from the on-disk cache.
+
     pub fn rebuild_derived(&mut self) {
         self.name_lower = self.name.to_lowercase();
     }
 
     pub fn size_label(&self) -> String {
-        let mb = self.size_bytes as f64 / (1024.0 * 1024.0);
-        if mb < 1.0 {
-            let kb = self.size_bytes as f64 / 1024.0;
-            format!("{kb:.0} KB")
-        } else {
-            format!("{mb:.1} MB")
-        }
+        format_size(self.size_bytes)
+    }
+
+    pub fn data_size_label(&self) -> String {
+        format_size(self.data_size_bytes)
     }
 }

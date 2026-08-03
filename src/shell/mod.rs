@@ -22,11 +22,9 @@ const INPUT_POLL_INTERVAL: Duration = Duration::from_millis(4);
 const IDLE_REPAINT_FLOOR: Duration = Duration::from_millis(200);
 const STICK_REPEAT_DELAY: Duration = Duration::from_millis(350);
 const STICK_REPEAT_INTERVAL: Duration = Duration::from_millis(110);
-/// Bail out if the dialog never opens, instead of waiting for it forever.
+
 const IME_OPEN_GRACE: Duration = Duration::from_millis(500);
 
-/// A system keyboard that is currently on screen. Whether it is still up has to
-/// come from SDL, since cancelling an empty one reports nothing back.
 struct ImeSession {
     opened_at: Instant,
     seen_open: bool,
@@ -58,11 +56,11 @@ pub fn run(mut app: App) -> Result<()> {
         let screen_points = (WIDTH as f32 / UI_SCALE, HEIGHT as f32 / UI_SCALE);
 
         for event in event_pump.poll_iter() {
-            // The dialog owns the pad while it is up, so nothing here reaches the app.
+
             if let Some(session) = &mut ime {
                 match event {
                     sdl2::event::Event::TextInput { text, .. } => session.text = Some(text),
-                    // Return only arrives when the dialog was accepted, never cancelled.
+
                     sdl2::event::Event::KeyDown { keycode: Some(Keycode::Return), .. } => {
                         session.confirmed = true;
                     }
@@ -92,7 +90,7 @@ pub fn run(mut app: App) -> Result<()> {
         if let Some(session) = &mut ime {
             let shown = video.text_input().is_screen_keyboard_shown(surface.window());
             session.seen_open |= shown;
-            // Any result at all means it closed; SDL only sends one once it has.
+
             let reported_result = session.text.is_some() || session.confirmed;
             let finished = if session.seen_open {
                 !shown || reported_result
@@ -108,12 +106,12 @@ pub fn run(mut app: App) -> Result<()> {
 
             let session = ime.take().expect("checked above that a session is open");
             video.text_input().stop();
-            // Cancelling leaves the query untouched; SDL reports the buffer either way.
+
             if session.confirmed && let Some(text) = session.text {
                 app.handle_command(AppCommand::SetSearchQuery(text))?;
             }
             app.handle_command(AppCommand::CloseSearch)?;
-            // The pad state is stale after the dialog held it.
+
             held_direction = None;
             held_since = Instant::now();
             last_repeat_at = Instant::now();
@@ -147,7 +145,7 @@ pub fn run(mut app: App) -> Result<()> {
             &app.state,
             crate::app::AppState::Catalog(catalog) if catalog.search_requested
         );
-        // Snapshot this frame, then hand the thread over to the keyboard.
+
         let entering_ime = search_requested;
 
         let _had_egui_events = !egui_events.is_empty();

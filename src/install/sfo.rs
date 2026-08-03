@@ -1,4 +1,3 @@
-
 use anyhow::{Context, Result, bail};
 
 const SFO_MAGIC: u32 = 0x4653_5000;

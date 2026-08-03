@@ -9,7 +9,7 @@ pub const HEIGHT: u32 = 544;
 pub struct VitaSurface {
     canvas: Canvas<Window>,
     egui_painter: SdlEguiPainter,
-    /// Last frame rendered before the keyboard opened.
+
     frame_snapshot: Option<Texture>,
 }
 
@@ -58,8 +58,6 @@ impl VitaSurface {
         Ok(())
     }
 
-    /// Renders one frame to an offscreen texture, then shows it. The keyboard only
-    /// advances as fast as we flip, so we replay this instead of redrawing.
     pub fn snapshot_egui(
         &mut self,
         pixels_per_point: f32,
@@ -69,41 +67,36 @@ impl VitaSurface {
         use sdl2::pixels::PixelFormatEnum;
         use sdl2::render::{BlendMode, TextureAccess};
 
-        let Self { canvas, egui_painter, frame_snapshot } = self;
-        let texture = match frame_snapshot {
-            Some(texture) => texture,
-            slot => {
-                let mut created = canvas
-                    .create_texture(PixelFormatEnum::RGBA32, TextureAccess::Target, WIDTH, HEIGHT)
-                    .map_err(anyhow::Error::msg)
-                    .context("failed to create the IME snapshot texture")?;
-                created.set_blend_mode(BlendMode::None);
-                slot.insert(created)
+        if self.frame_snapshot.is_none() {
+            match self.canvas.create_texture(PixelFormatEnum::RGBA32, TextureAccess::Target, WIDTH, HEIGHT) {
+                Ok(mut created) => {
+                    created.set_blend_mode(BlendMode::None);
+                    self.frame_snapshot = Some(created);
+                }
+                Err(err) => eprintln!("couldn't create the keyboard snapshot texture: {err}"),
             }
+        }
+
+        let Self { canvas, egui_painter, frame_snapshot } = self;
+        let Some(texture) = frame_snapshot else {
+            let _ = egui_painter.paint(canvas, [WIDTH, HEIGHT], pixels_per_point, primitives, textures_delta);
+            canvas.present();
+            return Ok(());
         };
 
-        let mut painted = Ok(());
-        canvas
-            .with_texture_canvas(texture, |canvas| {
-                canvas.set_clip_rect(None);
-                canvas.set_draw_color(sdl2::pixels::Color::BLACK);
-                canvas.clear();
-                painted = egui_painter.paint(
-                    canvas,
-                    [WIDTH, HEIGHT],
-                    pixels_per_point,
-                    primitives,
-                    textures_delta,
-                );
-            })
-            .map_err(anyhow::Error::msg)
-            .context("failed to target the IME snapshot texture")?;
-        painted?;
+        let rendered = canvas.with_texture_canvas(texture, |canvas| {
+            canvas.set_clip_rect(None);
+            canvas.set_draw_color(sdl2::pixels::Color::BLACK);
+            canvas.clear();
+            let _ = egui_painter.paint(canvas, [WIDTH, HEIGHT], pixels_per_point, primitives, textures_delta);
+        });
+        if let Err(err) = rendered {
+            eprintln!("couldn't render into the keyboard snapshot: {err}");
+        }
 
         self.present_snapshot()
     }
 
-    /// Blits the cached frame and flips. One textured quad, no egui, no tessellation.
     pub fn present_snapshot(&mut self) -> Result<()> {
         self.canvas.set_clip_rect(None);
         self.canvas.set_draw_color(sdl2::pixels::Color::BLACK);
