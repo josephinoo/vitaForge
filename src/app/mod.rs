@@ -1,8 +1,9 @@
 pub mod i18n;
 pub mod icons;
+pub mod text;
 pub mod ui;
 
-use crate::data::{self, AppEntry, Category, SortOrder};
+use crate::data::{self, AppEntry, Category, SortOrder, Platform};
 use crate::input::{AppCommand, InputCommand};
 use anyhow::Result;
 use i18n::Language;
@@ -17,6 +18,7 @@ pub struct CatalogState {
     pub search_query: String,
     pub search_requested: bool,
     pub category_filter: Option<Category>,
+    pub platform_filter: Option<Platform>,
     pub sort_order: SortOrder,
     pub selected: usize,
 
@@ -33,6 +35,7 @@ impl CatalogState {
             search_query: String::new(),
             search_requested: false,
             category_filter: None,
+            platform_filter: None,
             sort_order: SortOrder::Downloads,
             selected: 0,
             selection_active: false,
@@ -50,6 +53,7 @@ impl CatalogState {
             search_query: String::new(),
             search_requested: false,
             category_filter: None,
+            platform_filter: None,
             sort_order: SortOrder::Downloads,
             selected: 0,
             selection_active: false,
@@ -75,6 +79,7 @@ impl CatalogState {
         let query = self.search_query.trim().to_lowercase();
         let apps = &self.apps;
         let category_filter = self.category_filter;
+        let platform_filter = self.platform_filter;
 
         self.filtered_indices = self
             .sorted_indices
@@ -82,8 +87,22 @@ impl CatalogState {
             .copied()
             .filter(|&index| {
                 let app = &apps[index];
-                category_filter.is_none_or(|c| c as u8 == app.category as u8)
-                    && (query.is_empty() || app.name_lower.contains(&query))
+                let matches_cat = category_filter.is_none_or(|c| c as u8 == app.category as u8);
+                let matches_plat = platform_filter.is_none_or(|p| {
+                    match p {
+                        Platform::Vita => app.platform == Platform::Vita,
+                        Platform::Psp | Platform::NpsPsp => matches!(app.platform, Platform::Psp | Platform::NpsPsp),
+                        Platform::NpsPsx => app.platform == Platform::NpsPsx,
+                        Platform::NpsVita => app.platform == Platform::NpsVita,
+                        Platform::Plugin => app.platform == Platform::Plugin,
+                    }
+                });
+                matches_cat
+                    && matches_plat
+                    && (query.is_empty()
+                        || app.name_lower.contains(&query)
+                        || app.author.to_lowercase().contains(&query)
+                        || app.titleid.to_lowercase().contains(&query))
             })
             .collect();
 
@@ -122,6 +141,9 @@ pub enum AppState {
         previous: Box<CatalogState>,
         origin: Option<egui::Rect>,
         scroll_offset: f32,
+        comments: Vec<data::api::Comment>,
+        comments_loaded: bool,
+        comment_entry_requested: bool,
     },
 }
 
@@ -148,8 +170,9 @@ pub struct App {
 
     needs_installed_rescan: bool,
     load_rx: Option<oneshot::Receiver<CatalogSource>>,
-    hashes_rx: Option<oneshot::Receiver<Vec<data::source::MinimalEntry>>>,
+    pub loading_start_time: std::time::Instant,
     self_update_rx: Option<oneshot::Receiver<SelfUpdateInfo>>,
+    comments_rx: Option<oneshot::Receiver<(String, Vec<data::api::Comment>)>>,
 }
 
 pub struct InstallJob {
@@ -165,7 +188,7 @@ impl App {
         let (tx, rx) = oneshot::channel();
         tokio::spawn(async move {
             let result = match data::source::fetch_live().await {
-                Ok(apps) if !apps.is_empty() => {
+                Ok(Some(apps)) if !apps.is_empty() => {
 
                     let apps = tokio::task::spawn_blocking(move || {
                         data::source::save_cache(&apps);
@@ -179,10 +202,10 @@ impl App {
                     if apps.is_empty() { CatalogSource::Failed } else { CatalogSource::Live(apps) }
                 }
                 Ok(_) => CatalogSource::Failed,
-                Err(err) => {
-                    eprintln!("live catalog fetch failed: {err:#}");
-                    CatalogSource::Failed
-                }
+            Err(err) => {
+                eprintln!("live catalog fetch failed: {err:#}");
+                CatalogSource::Failed
+            }
             };
             let _ = tx.send(result);
         });
@@ -202,19 +225,10 @@ impl App {
         });
 
         let cached = data::source::initial_catalog();
-        let (state, hashes_rx) = if cached.is_empty() {
-            (AppState::Loading, None)
+        let state = if cached.is_empty() {
+            AppState::Loading
         } else {
-            let (hash_tx, hash_rx) = oneshot::channel();
-            tokio::spawn(async move {
-                match data::source::fetch_minimal().await {
-                    Ok(minimal) => {
-                        let _ = hash_tx.send(minimal);
-                    }
-                    Err(err) => eprintln!("hash refresh failed: {err:#}"),
-                }
-            });
-            (AppState::Catalog(CatalogState::new(cached)), Some(hash_rx))
+            AppState::Catalog(CatalogState::new(cached))
         };
 
         Ok(Self {
@@ -226,8 +240,9 @@ impl App {
             self_update: None,
             needs_installed_rescan: true,
             load_rx: Some(rx),
-            hashes_rx,
+            loading_start_time: std::time::Instant::now(),
             self_update_rx: Some(self_update_rx),
+            comments_rx: None,
         })
     }
 
@@ -252,17 +267,12 @@ impl App {
 
             if previous != job.progress && job.progress == crate::install::Progress::Done {
                 self.installed.mark_installed(&job.app_id_title);
-            }
-        }
-
-        if let Some(rx) = &mut self.hashes_rx
-            && let Ok(minimal) = rx.try_recv()
-        {
-            self.hashes_rx = None;
-            if let AppState::Catalog(catalog) = &mut self.state {
-                data::source::apply_hashes(&mut catalog.apps, &minimal);
-                self.installed.force_refresh(ctx, &catalog.apps);
-                ctx.request_repaint();
+                let app_id = job.app_id.clone();
+                tokio::spawn(async move {
+                    if let Err(err) = data::api::notify_install(&app_id).await {
+                        eprintln!("install counter notify failed: {err:#}");
+                    }
+                });
             }
         }
 
@@ -274,6 +284,20 @@ impl App {
 
             let _ = self.handle_command(AppCommand::SelfUpdate);
             ctx.request_repaint();
+        }
+
+        if let Some(rx) = &mut self.comments_rx
+            && let Ok((app_id, fetched)) = rx.try_recv()
+        {
+            self.comments_rx = None;
+            if let AppState::Detail { app, comments, comments_loaded, .. } = &mut self.state
+                && app.id == app_id
+            {
+                app.comments_count = fetched.len() as u32;
+                *comments = fetched;
+                *comments_loaded = true;
+                ctx.request_repaint();
+            }
         }
 
         let Some(rx) = &mut self.load_rx else { return Ok(()) };
@@ -328,6 +352,12 @@ impl App {
             AppCommand::SetCategoryFilter(category) => {
                 if let AppState::Catalog(catalog) = &mut self.state {
                     catalog.category_filter = category;
+                    catalog.refresh_filter();
+                }
+            }
+            AppCommand::SetPlatformFilter(platform) => {
+                if let AppState::Catalog(catalog) = &mut self.state {
+                    catalog.platform_filter = platform;
                     catalog.refresh_filter();
                 }
             }
@@ -433,6 +463,8 @@ impl App {
                         id: "vitaforge_self_update".to_owned(),
                         titleid: "VITAFORGE".to_owned(),
                         name: format!("VitaForge {}", info.tag),
+                        original_name: None,
+                        overview: Vec::new(),
                         name_lower: "vitaforge".to_owned(),
                         author: "josephinoo".to_owned(),
                         description: format!("Self-update for VitaForge {}", info.tag),
@@ -443,10 +475,15 @@ impl App {
                         category: Category::Utility,
                         platform: crate::data::Platform::Vita,
                         icon_url: None,
+                        cover_url: None,
+                        background_url: None,
                         screenshot_urls: Vec::new(),
                         download_url: info.vpk_url.clone(),
                         source: Some(SELF_REPO_URL.to_owned()),
                         version: info.tag.clone(),
+                        region: None,
+                        source_catalog: "self".to_owned(),
+                        source_labels: Vec::new(),
                         hash: String::new(),
                         hash2: String::new(),
                         data_url: None,
@@ -455,12 +492,88 @@ impl App {
                         downloads: 0,
                         rating: 5.0,
                         updated_at: String::new(),
+                        ratings_count: 0,
+                        likes_count: 0,
+                        comments_count: 0,
+                        user_liked: false,
+                        user_rating: None,
                     };
                     let app_id = entry.id.clone();
                     let app_id_title = entry.titleid.clone();
                     let rx = crate::install::start(entry);
                     let progress = rx.borrow().clone();
                     self.install = Some(InstallJob { app_id, app_id_title, progress, rx });
+                }
+            }
+            AppCommand::ToggleLike => {
+                if let AppState::Detail { app, .. } = &mut self.state {
+                    let liked = !app.user_liked;
+                    app.user_liked = liked;
+                    app.likes_count = if liked {
+                        app.likes_count.saturating_add(1)
+                    } else {
+                        app.likes_count.saturating_sub(1)
+                    };
+                    let app_id = app.id.clone();
+                    tokio::spawn(async move {
+                        if let Err(err) = data::api::set_like(&app_id, liked).await {
+                            eprintln!("like update failed: {err:#}");
+                        }
+                    });
+                }
+            }
+            AppCommand::RateCurrent(score) => {
+                if let AppState::Detail { app, .. } = &mut self.state {
+                    if app.user_rating.is_none() {
+                        app.ratings_count = app.ratings_count.saturating_add(1);
+                        let total = app.ratings_count as f32;
+                        app.rating = if total > 1.0 {
+                            (app.rating * (total - 1.0) + score as f32) / total
+                        } else {
+                            score as f32
+                        };
+                    }
+                    app.user_rating = Some(score);
+                    let app_id = app.id.clone();
+                    tokio::spawn(async move {
+                        if let Err(err) = data::api::post_rating(&app_id, score).await {
+                            eprintln!("rating submit failed: {err:#}");
+                        }
+                    });
+                }
+            }
+            AppCommand::RequestCommentEntry => {
+                if let AppState::Detail { comment_entry_requested, .. } = &mut self.state {
+                    *comment_entry_requested = true;
+                }
+            }
+            AppCommand::CloseCommentEntry => {
+                if let AppState::Detail { comment_entry_requested, .. } = &mut self.state {
+                    *comment_entry_requested = false;
+                }
+            }
+            AppCommand::SubmitComment(content) => {
+                let content = content.trim().to_owned();
+                if !content.is_empty()
+                    && let AppState::Detail { app, comments, .. } = &mut self.state
+                {
+                    let author_name = data::client_id::display_name();
+                    comments.insert(
+                        0,
+                        data::api::Comment {
+                            id: String::new(),
+                            author_name: author_name.clone(),
+                            content: content.clone(),
+                            created_at: String::new(),
+                        },
+                    );
+                    app.comments_count = app.comments_count.saturating_add(1);
+                    let app_id = app.id.clone();
+                    tokio::spawn(async move {
+                        if let Err(err) = data::api::post_comment(&app_id, &author_name, &content).await {
+                            eprintln!("comment submit failed: {err:#}");
+                        }
+                    });
                 }
             }
         }
@@ -478,15 +591,43 @@ impl App {
         };
         let Some(entry) = entry else { return };
 
-        let placeholder =
-            AppState::Detail { app: entry.clone(), previous: Box::new(CatalogState::empty()), origin, scroll_offset: 0.0 };
+        let placeholder = AppState::Detail {
+            app: entry.clone(),
+            previous: Box::new(CatalogState::empty()),
+            origin,
+            scroll_offset: 0.0,
+            comments: Vec::new(),
+            comments_loaded: false,
+            comment_entry_requested: false,
+        };
         let AppState::Catalog(mut catalog) = std::mem::replace(&mut self.state, placeholder) else {
             unreachable!("checked above that self.state is Catalog")
         };
         catalog.selected = filtered_index;
 
         catalog.selection_active = true;
-        self.state = AppState::Detail { app: entry, previous: Box::new(catalog), origin, scroll_offset: 0.0 };
+
+        let app_id = entry.id.clone();
+        let (tx, rx) = oneshot::channel();
+        tokio::spawn(async move {
+            match data::api::fetch_comments(&app_id).await {
+                Ok(comments) => {
+                    let _ = tx.send((app_id, comments));
+                }
+                Err(err) => eprintln!("comments fetch failed: {err:#}"),
+            }
+        });
+        self.comments_rx = Some(rx);
+
+        self.state = AppState::Detail {
+            app: entry,
+            previous: Box::new(catalog),
+            origin,
+            scroll_offset: 0.0,
+            comments: Vec::new(),
+            comments_loaded: false,
+            comment_entry_requested: false,
+        };
     }
 
     pub fn clear_scroll_to_selected(&mut self) {

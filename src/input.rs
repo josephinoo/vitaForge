@@ -15,6 +15,12 @@ pub enum InputCommand {
     CategoryNext,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextTarget {
+    Search,
+    Comment,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum AppCommand {
     Input(InputCommand),
@@ -22,12 +28,18 @@ pub enum AppCommand {
     RequestSearch,
     CloseSearch,
     SetCategoryFilter(Option<crate::data::Category>),
+    SetPlatformFilter(Option<crate::data::Platform>),
     SetSortOrder(crate::data::SortOrder),
     SelectApp { index: usize, origin: Option<egui::Rect> },
     BackToCatalog,
     InstallCurrent,
     DismissInstall,
     SelfUpdate,
+    ToggleLike,
+    RateCurrent(u8),
+    RequestCommentEntry,
+    CloseCommentEntry,
+    SubmitComment(String),
 }
 
 impl From<InputCommand> for AppCommand {
@@ -52,6 +64,8 @@ pub fn map_keyboard_event(event: &Event) -> Option<AppCommand> {
         Keycode::Q | Keycode::PageUp => InputCommand::CategoryPrev,
         Keycode::E | Keycode::PageDown => InputCommand::CategoryNext,
         Keycode::F | Keycode::Slash => return Some(AppCommand::RequestSearch),
+        Keycode::L => return Some(AppCommand::ToggleLike),
+        Keycode::C => return Some(AppCommand::RequestCommentEntry),
         _ => return None,
     };
     Some(command.into())
@@ -65,6 +79,7 @@ pub fn map_controller_button_event(event: &Event) -> Option<AppCommand> {
         Button::A => InputCommand::Confirm,
         Button::B => InputCommand::Back,
         Button::Y => return Some(AppCommand::RequestSearch),
+        Button::X => return Some(AppCommand::ToggleLike),
         Button::DPadUp => InputCommand::MoveUp,
         Button::DPadDown => InputCommand::MoveDown,
         Button::DPadLeft => InputCommand::MoveLeft,

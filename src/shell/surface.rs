@@ -41,6 +41,10 @@ impl VitaSurface {
         self.canvas.window()
     }
 
+    pub fn has_pending_uploads(&self) -> bool {
+        self.egui_painter.has_pending_uploads()
+    }
+
     pub fn draw_scene(&mut self) {
         self.canvas.set_clip_rect(None);
         self.canvas.set_draw_color(sdl2::pixels::Color::BLACK);

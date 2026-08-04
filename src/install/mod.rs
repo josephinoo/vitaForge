@@ -37,18 +37,18 @@ impl Progress {
             Progress::Resolving => "Checking latest…".to_owned(),
             Progress::Downloading { received, total } => match total {
                 Some(total) if *total > 0 => {
-                    format!("Downloading {}%", (*received * 100 / *total).min(100))
+                    format!("[2/3] Downloading {}%", (*received * 100 / *total).min(100))
                 }
-                _ => format!("Downloading {:.1} MB", *received as f64 / (1024.0 * 1024.0)),
+                _ => format!("[2/3] Downloading {:.1} MB", *received as f64 / (1024.0 * 1024.0)),
             },
             Progress::DownloadingData { received, total } => match total {
                 Some(total) if *total > 0 => {
-                    format!("Game data {}%", (*received * 100 / *total).min(100))
+                    format!("[1/3] Game data {}%", (*received * 100 / *total).min(100))
                 }
-                _ => format!("Game data {:.1} MB", *received as f64 / (1024.0 * 1024.0)),
+                _ => format!("[1/3] Game data {:.1} MB", *received as f64 / (1024.0 * 1024.0)),
             },
-            Progress::Extracting => "Extracting…".to_owned(),
-            Progress::Installing => "Installing…".to_owned(),
+            Progress::Extracting => "[3/3] Extracting…".to_owned(),
+            Progress::Installing => "[3/3] Installing…".to_owned(),
             Progress::Done => "Installed".to_owned(),
             Progress::Failed(err) => format!("Failed: {err}"),
         }
@@ -84,7 +84,46 @@ async fn run(entry: &AppEntry, tx: &watch::Sender<Progress>) -> Result<()> {
         crate::data::Platform::Vita => run_vita(entry, tx).await,
         crate::data::Platform::Psp => run_psp(entry, tx).await,
         crate::data::Platform::Plugin => run_plugin(entry, tx).await,
+        crate::data::Platform::NpsVita => run_nps_vita(entry, tx).await,
+        crate::data::Platform::NpsPsp | crate::data::Platform::NpsPsx => run_psp(entry, tx).await,
     }
+}
+
+async fn run_nps_vita(entry: &AppEntry, tx: &watch::Sender<Progress>) -> Result<()> {
+    let _ = tx.send(Progress::Resolving);
+    if entry.download_url.is_empty() {
+        bail!("no download link for this NPS game");
+    }
+    std::fs::create_dir_all(WORK_DIR).context("couldn't create the work folder")?;
+    let _ = std::fs::remove_dir_all(EXTRACT_DIR);
+
+    download(&entry.download_url, Path::new(TEMP_VPK), tx).await?;
+
+    let _ = tx.send(Progress::Extracting);
+    let extracted = {
+        let src = Path::new(TEMP_VPK);
+        let dest = Path::new(EXTRACT_DIR);
+        tokio::task::spawn_blocking(move || extract(src, dest)).await
+    };
+
+    if extracted.is_ok_and(|r| r.is_ok()) {
+        installed::stamp_pending_install(&installed::index_key(entry), &entry.hash, Some(Path::new(EXTRACT_DIR)));
+        head::write(Path::new(EXTRACT_DIR))?;
+        let _ = tx.send(Progress::Installing);
+        tokio::task::spawn_blocking(|| promoter::promote_package(EXTRACT_DIR))
+            .await
+            .context("install worker crashed")??;
+    } else {
+        // Direct PKG download - copy to packages folder for user
+        let pkgs_dir = "ux0:data/vitaforge/pkgs";
+        std::fs::create_dir_all(pkgs_dir).ok();
+        let dest = format!("{}/{}.pkg", pkgs_dir, entry.titleid);
+        let _ = std::fs::rename(TEMP_VPK, &dest)
+            .or_else(|_| std::fs::copy(TEMP_VPK, &dest).map(|_| ()));
+        installed::stamp_pending_install(&installed::index_key(entry), &entry.hash, None);
+    }
+    let _ = std::fs::remove_file(TEMP_VPK);
+    Ok(())
 }
 
 async fn run_psp(entry: &AppEntry, tx: &watch::Sender<Progress>) -> Result<()> {
@@ -239,13 +278,35 @@ async fn download_with(
     url: &str,
     dest: &Path,
     tx: &watch::Sender<Progress>,
+    progress: impl Fn(u64, Option<u64>) -> Progress + Copy,
+) -> Result<()> {
+    let mut last_err = anyhow::anyhow!("download not attempted");
+    for attempt in 0u32..3 {
+        if attempt > 0 {
+            tokio::time::sleep(std::time::Duration::from_secs(2u64.pow(attempt))).await;
+            eprintln!("retrying download (attempt {}): {url}", attempt + 1);
+        }
+        match download_attempt(url, dest, tx, progress).await {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                last_err = e;
+            }
+        }
+    }
+    Err(last_err)
+}
+
+async fn download_attempt(
+    url: &str,
+    dest: &Path,
+    tx: &watch::Sender<Progress>,
     progress: impl Fn(u64, Option<u64>) -> Progress,
 ) -> Result<()> {
     use futures_util::StreamExt;
 
     let response = crate::net::client()
         .get(url)
-        .header("User-Agent", "vitaforge")
+        .header("User-Agent", "VitaForge")
         .send()
         .await
         .context("couldn't reach the download server")?;

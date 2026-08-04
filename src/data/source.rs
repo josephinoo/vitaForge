@@ -1,22 +1,9 @@
-use super::vitadbtoo::RawEntry;
-use super::{AppEntry, Platform};
+use super::AppEntry;
+use super::api::{self, CatalogFetch};
 use std::path::Path;
 
-const DEFAULT_CATALOG_URL: &str = "https://drdecki.github.io/VitaDBtoo-db/apps.json";
 const CACHE_PATH: &str = "ux0:data/vitaforge/cache.json";
-
-pub fn catalog_url() -> &'static str {
-    option_env!("SERVER_URL").unwrap_or(DEFAULT_CATALOG_URL)
-}
-
-pub fn base_url() -> &'static str {
-    let url = catalog_url();
-    url.rfind('/').map_or(url, |cut| &url[..=cut])
-}
-
-fn minimal_url() -> String {
-    format!("{}minimal.json", base_url())
-}
+const ETAG_PATH: &str = "ux0:data/vitaforge/cache.etag";
 
 pub fn load_catalog() -> Vec<AppEntry> {
     Vec::new()
@@ -30,7 +17,6 @@ fn load_cached() -> Option<Vec<AppEntry>> {
     let text = std::fs::read_to_string(CACHE_PATH).ok()?;
     match serde_json::from_str::<Vec<AppEntry>>(&text) {
         Ok(mut entries) => {
-
             for entry in &mut entries {
                 entry.rebuild_derived();
             }
@@ -41,6 +27,14 @@ fn load_cached() -> Option<Vec<AppEntry>> {
             None
         }
     }
+}
+
+fn load_etag() -> Option<String> {
+    std::fs::read_to_string(ETAG_PATH).ok().map(|s| s.trim().to_owned()).filter(|s| !s.is_empty())
+}
+
+fn save_etag(etag: &str) {
+    let _ = std::fs::write(ETAG_PATH, etag);
 }
 
 pub fn save_cache(entries: &[AppEntry]) {
@@ -59,44 +53,18 @@ pub fn save_cache(entries: &[AppEntry]) {
     }
 }
 
-#[derive(serde::Deserialize)]
-pub struct MinimalEntry {
-    pub id: String,
-    pub hash: String,
-}
-
-pub async fn fetch_minimal() -> anyhow::Result<Vec<MinimalEntry>> {
-    Ok(crate::net::client().get(minimal_url()).send().await?.json().await?)
-}
-
-pub fn apply_hashes(entries: &mut [AppEntry], minimal: &[MinimalEntry]) {
-    let fresh: std::collections::HashMap<&str, &str> =
-        minimal.iter().map(|m| (m.id.as_str(), m.hash.trim())).collect();
-    for entry in entries {
-        if let Some(hash) = fresh.get(entry.id.as_str()) {
-            entry.hash = hash.to_lowercase();
+/// Fetches the live catalog from the VitaForge API. Returns `None` when the server
+/// reports the catalog hasn't changed since the last fetch (ETag match) — callers
+/// should keep using the on-disk cache in that case.
+pub async fn fetch_live() -> anyhow::Result<Option<Vec<AppEntry>>> {
+    let etag = load_etag();
+    match api::fetch_catalog(etag.as_deref()).await? {
+        CatalogFetch::NotModified => Ok(None),
+        CatalogFetch::Fresh { entries, etag } => {
+            if let Some(etag) = etag {
+                save_etag(&etag);
+            }
+            Ok(Some(entries))
         }
     }
-}
-
-pub async fn fetch_live() -> anyhow::Result<Vec<AppEntry>> {
-    let mut entries = fetch_section(catalog_url(), Platform::Vita).await?;
-
-    let base = base_url();
-    let sections = [
-        (format!("{base}psp_apps.json"), Platform::Psp),
-        (format!("{base}preserved/plugins.json"), Platform::Plugin),
-    ];
-    for (url, platform) in sections {
-        match fetch_section(&url, platform).await {
-            Ok(extra) => entries.extend(extra),
-            Err(err) => eprintln!("couldn't load the {} catalog: {err:#}", platform.label()),
-        }
-    }
-    Ok(entries)
-}
-
-async fn fetch_section(url: &str, platform: Platform) -> anyhow::Result<Vec<AppEntry>> {
-    let raw: Vec<RawEntry> = crate::net::client().get(url).send().await?.json().await?;
-    Ok(raw.into_iter().filter_map(|entry| entry.into_app_entry(platform)).collect())
 }

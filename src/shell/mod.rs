@@ -8,7 +8,7 @@ use crate::app::ui::build_ui;
 use crate::app::App;
 use crate::input::{
     held_stick_direction, map_controller_button_event, map_keyboard_event, map_pointer_event,
-    open_first_controller, register_vita_controller_mapping, AppCommand,
+    open_first_controller, register_vita_controller_mapping, AppCommand, TextTarget,
 };
 use anyhow::Result;
 use sdl2::keyboard::Keycode;
@@ -30,6 +30,7 @@ struct ImeSession {
     seen_open: bool,
     text: Option<String>,
     confirmed: bool,
+    target: TextTarget,
 }
 
 pub fn run(mut app: App) -> Result<()> {
@@ -108,9 +109,15 @@ pub fn run(mut app: App) -> Result<()> {
             video.text_input().stop();
 
             if session.confirmed && let Some(text) = session.text {
-                app.handle_command(AppCommand::SetSearchQuery(text))?;
+                match session.target {
+                    TextTarget::Search => app.handle_command(AppCommand::SetSearchQuery(text))?,
+                    TextTarget::Comment => app.handle_command(AppCommand::SubmitComment(text))?,
+                }
             }
-            app.handle_command(AppCommand::CloseSearch)?;
+            match session.target {
+                TextTarget::Search => app.handle_command(AppCommand::CloseSearch)?,
+                TextTarget::Comment => app.handle_command(AppCommand::CloseCommentEntry)?,
+            }
 
             held_direction = None;
             held_since = Instant::now();
@@ -141,12 +148,13 @@ pub fn run(mut app: App) -> Result<()> {
         }
         app.tick(&egui_ctx)?;
 
-        let search_requested = matches!(
-            &app.state,
-            crate::app::AppState::Catalog(catalog) if catalog.search_requested
-        );
+        let text_target = match &app.state {
+            crate::app::AppState::Catalog(catalog) if catalog.search_requested => Some(TextTarget::Search),
+            crate::app::AppState::Detail { comment_entry_requested: true, .. } => Some(TextTarget::Comment),
+            _ => None,
+        };
 
-        let entering_ime = search_requested;
+        let entering_ime = text_target.is_some();
 
         let _had_egui_events = !egui_events.is_empty();
         let raw_input = egui::RawInput {
@@ -181,7 +189,9 @@ pub fn run(mut app: App) -> Result<()> {
         let idle = repaint_after > Duration::ZERO
             && !_had_egui_events
             && !_had_direct_commands
-            && !has_texture_delta;
+            && !has_texture_delta
+            // Retries only run while painting, so don't go idle on one.
+            && !surface.has_pending_uploads();
 
         if !idle || entering_ime {
             let clipped_primitives = egui_ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
@@ -193,13 +203,14 @@ pub fn run(mut app: App) -> Result<()> {
             }
         }
 
-        if entering_ime {
+        if let Some(target) = text_target {
             video.text_input().start();
             ime = Some(ImeSession {
                 opened_at: Instant::now(),
                 seen_open: false,
                 text: None,
                 confirmed: false,
+                target,
             });
             continue;
         }

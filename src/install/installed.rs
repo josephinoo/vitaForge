@@ -33,7 +33,7 @@ struct Wanted {
 
 impl Wanted {
     fn from_entry(entry: &AppEntry) -> Option<Self> {
-        let psp = entry.platform == Platform::Psp;
+        let psp = matches!(entry.platform, Platform::Psp | Platform::NpsPsp | Platform::NpsPsx);
         let folder = if psp { entry.id.trim().to_owned() } else { key_of(&entry.titleid) };
         if folder.is_empty() {
             return None;
@@ -61,7 +61,7 @@ impl Wanted {
 }
 
 pub fn index_key(entry: &AppEntry) -> String {
-    if entry.platform == Platform::Psp {
+    if matches!(entry.platform, Platform::Psp | Platform::NpsPsp | Platform::NpsPsx) {
         format!("PSP-{}", entry.id.trim())
     } else {
         key_of(&entry.titleid)
@@ -380,6 +380,13 @@ fn key_of(titleid: &str) -> String {
     titleid.trim().to_uppercase()
 }
 
+/// Directory access through the console's own `sceIo` calls, which see mount
+/// points (`ux0:`, `ur0:`) that Rust's `std::fs` does not.
+///
+/// Off-console these report "unavailable" so the `std::fs` fallback every
+/// caller already has takes over — that is what lets the crate build and its
+/// tests run on a dev machine.
+#[cfg(target_os = "vita")]
 pub mod vita_fs {
     use std::ffi::CString;
 
@@ -421,6 +428,19 @@ pub mod vita_fs {
             .map(|&c| c as u8)
             .collect();
         String::from_utf8_lossy(&bytes).into_owned()
+    }
+}
+
+#[cfg(not(target_os = "vita"))]
+pub mod vita_fs {
+    /// `-1` mirrors what `sceIoDopen` returns for a path it cannot open, so
+    /// callers take their `std::fs` branch.
+    pub fn list_dir(_path: &str) -> Result<Vec<String>, i32> {
+        Err(-1)
+    }
+
+    pub fn exists(_path: &str) -> bool {
+        false
     }
 }
 

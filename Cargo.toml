@@ -9,17 +9,23 @@ description = "Homebrew catalog browser for games/apps/ports on the PS Vita"
 anyhow = "1"
 egui = "0.31"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
-image = { version = "0.25", default-features = false, features = ["png"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 md-5 = "0.10"
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"], default-features = false }
 sdl2 = { version = "0.38", features = ["use-pkgconfig", "unsafe_textures"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
-vita-newlib-shims = "0.3"
-vitasdk-sys = { version = "0.3", features = ["SceAppUtil_stub", "SceSysmem_stub", "SceSysmodule_stub", "ScePromoterUtil_stub", "SceKernelThreadMgr_stub", "SceIme_stub", "SceCommonDialog_stub", "SceLibKernel_stub", "SceIofilemgr_stub"] }
 sha1 = "0.10"
 zip = { version = "2", default-features = false, features = ["deflate"] }
+
+# Console-only. Every use site is already behind `cfg(target_os = "vita")`;
+# keeping the crates themselves off the host build means the pure-logic unit
+# tests (catalog parsing, text sanitizing, rate-limit handling) can be linked
+# and run with plain `cargo test` on a dev machine.
+[target.'cfg(target_os = "vita")'.dependencies]
+vita-newlib-shims = "0.3"
+vitasdk-sys = { version = "0.3", features = ["SceAppUtil_stub", "SceSysmem_stub", "SceSysmodule_stub", "ScePromoterUtil_stub", "SceKernelThreadMgr_stub", "SceIme_stub", "SceCommonDialog_stub", "SceLibKernel_stub", "SceIofilemgr_stub"] }
 
 [patch.crates-io]
 # vanilla `ring` doesn't build for this target: it finds no libc RNG source it

@@ -9,7 +9,7 @@ pub fn client() -> reqwest::Client {
     CLIENT
         .get_or_init(|| {
             reqwest::Client::builder()
-                .user_agent("vitaforge")
+                .user_agent("VitaForge")
                 .redirect(reqwest::redirect::Policy::limited(10))
                 .connect_timeout(CONNECT_TIMEOUT)
                 .read_timeout(READ_TIMEOUT)

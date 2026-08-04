@@ -20,7 +20,35 @@ const TEXT_DIM: egui::Color32 = egui::Color32::from_rgb(0x94, 0xa3, 0xb8);
 const TEXT_FAINT: egui::Color32 = egui::Color32::from_rgb(0x64, 0x74, 0x8b);
 const STAR_GOLD: egui::Color32 = egui::Color32::from_rgb(0xfb, 0xbf, 0x24);
 
-const CARD_RADIUS: f32 = 10.0;
+/// Panels are translucent so the backdrop reads through them. This is plain
+/// alpha blending over what is already drawn — no blur pass, no extra
+/// geometry, so it costs nothing beyond the fill that was happening anyway.
+const GLASS_ALPHA: f32 = 0.62;
+/// The thin top-edge highlight that makes a translucent panel read as a pane
+/// of glass rather than a flat wash.
+const GLASS_EDGE: egui::Color32 = egui::Color32::from_rgba_premultiplied(0x16, 0x18, 0x20, 0x16);
+
+/// Every distinct font size claims its own row in the glyph atlas, and the
+/// painter re-uploads the whole atlas when it grows. Seven steps instead of the
+/// sixteen ad-hoc sizes this file used to carry keeps that atlas small.
+const FONT_MICRO: f32 = 9.0;
+const FONT_SMALL: f32 = 11.0;
+const FONT_BODY: f32 = 13.0;
+const FONT_LARGE: f32 = 15.0;
+const FONT_TITLE: f32 = 22.0;
+const FONT_HEADLINE: f32 = 28.0;
+const FONT_DISPLAY: f32 = 44.0;
+
+fn font(size: f32) -> egui::FontId {
+    egui::FontId::proportional(size)
+}
+
+/// Backdrop tint for a panel sitting on top of the hero image.
+fn glass(color: egui::Color32) -> egui::Color32 {
+    color.gamma_multiply(GLASS_ALPHA)
+}
+
+const CARD_RADIUS: f32 = 12.0;
 const HINT_BAR_HEIGHT: f32 = 36.0;
 const SEARCH_FIELD_WIDTH: f32 = 190.0;
 const SEARCH_FIELD_HEIGHT: f32 = 30.0;
@@ -35,9 +63,6 @@ const SCROLLBAR_RESERVE: f32 = 30.0;
 const PRESS_ANIM_SECS: f32 = 0.08;
 const HOVER_ANIM_SECS: f32 = 0.12;
 const PRESS_SHRINK: f32 = 2.5;
-const TILE_INSET: f32 = 3.0;
-#[allow(dead_code)]
-const TILE_GROW: f32 = 3.0;
 
 pub fn apply_theme(ctx: &egui::Context) {
     let mut style = (*ctx.style()).clone();
@@ -89,6 +114,74 @@ fn paint_background(painter: &egui::Painter, rect: egui::Rect) {
     );
 }
 
+/// Height of the hero image on the detail screen, as a fraction of the screen.
+const HERO_FRACTION: f32 = 0.46;
+
+/// Picks what to blur behind the detail screen. `background_url` is the
+/// intended source, but the catalog leaves it null on effectively every entry,
+/// so the first screenshot (then the cover) stands in — that is what makes the
+/// banner actually appear instead of the flat gradient.
+fn backdrop_url(entry: &crate::data::AppEntry) -> Option<&str> {
+    entry
+        .background_url
+        .as_deref()
+        .or_else(|| entry.screenshot_urls.first().map(String::as_str))
+        .or(entry.cover_url.as_deref())
+}
+
+/// Paints the detail backdrop: gradient, then the app's own art blurred across
+/// the top band, then a scrim that melts it into the page.
+///
+/// The blur is free. The image is decoded once at 64px (see
+/// [`icons::HERO_SIDE`]) and stretched over the band with linear filtering, so
+/// the whole effect is a single textured quad per frame.
+///
+/// Returns whether the backdrop is still loading and the frame should be redrawn.
+fn paint_hero(ui: &egui::Ui, icons: &IconCache, entry: &crate::data::AppEntry) -> bool {
+    let screen = ui.ctx().screen_rect();
+    paint_background(ui.painter(), screen);
+
+    let Some(url) = backdrop_url(entry) else { return false };
+    let Some(texture) = icons.get_hero(ui.ctx(), url) else {
+        return icons.is_loading(url, super::icons::HERO_SIDE);
+    };
+
+    let band = egui::Rect::from_min_max(
+        screen.left_top(),
+        egui::pos2(screen.right(), screen.top() + screen.height() * HERO_FRACTION),
+    );
+
+    // Crop through the UVs so the art fills the band without stretching.
+    let size = texture.size_vec2();
+    let scale = (band.width() / size.x).max(band.height() / size.y);
+    let uv_size = egui::vec2(band.width() / scale / size.x, band.height() / scale / size.y);
+    let uv = egui::Rect::from_min_size(
+        ((egui::Vec2::splat(1.0) - uv_size) / 2.0).to_pos2(),
+        uv_size,
+    );
+
+    let mut mesh = egui::Mesh::with_texture(texture.id());
+    mesh.add_rect_with_uv(band, uv, egui::Color32::WHITE.gamma_multiply(0.7));
+    ui.painter().add(egui::Shape::mesh(mesh));
+
+    // Bottom-up scrim, same trick as the tile labels: keeps the art bright at
+    // the top and lets it dissolve into the page colour behind the content.
+    let fade = egui::Rect::from_min_max(
+        egui::pos2(band.left(), band.top() + band.height() * 0.35),
+        band.right_bottom(),
+    );
+    let mut scrim = egui::Mesh::default();
+    scrim.colored_vertex(fade.left_top(), egui::Color32::TRANSPARENT);
+    scrim.colored_vertex(fade.right_top(), egui::Color32::TRANSPARENT);
+    scrim.colored_vertex(fade.right_bottom(), BG_DEEP);
+    scrim.colored_vertex(fade.left_bottom(), BG_DEEP);
+    scrim.add_triangle(0, 1, 2);
+    scrim.add_triangle(0, 2, 3);
+    ui.painter().add(egui::Shape::mesh(scrim));
+
+    false
+}
+
 fn radial_glow(painter: &egui::Painter, center: egui::Pos2, radius: f32, color: egui::Color32) {
     const SEGMENTS: u32 = 28;
     let mut mesh = egui::Mesh::default();
@@ -113,6 +206,7 @@ pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
             app.lang,
             app.install.as_ref().map(|j| &j.progress),
             app.self_update.as_ref(),
+            app.loading_start_time,
         ),
         AppState::Catalog(catalog) => catalog_screen(
             ctx,
@@ -124,12 +218,13 @@ pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
             &catalog.search_query,
             catalog.search_requested,
             catalog.category_filter,
+            catalog.platform_filter,
             catalog.sort_order,
             catalog.selection_active.then_some(catalog.selected),
             catalog.scroll_to_selected,
             app.self_update.as_ref(),
         ),
-        AppState::Detail { app: entry, scroll_offset, .. } => {
+        AppState::Detail { app: entry, scroll_offset, comments, comments_loaded, comment_entry_requested, .. } => {
             let progress = app
                 .install
                 .as_ref()
@@ -144,6 +239,9 @@ pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
                 progress,
                 app.install_busy(),
                 *scroll_offset,
+                comments,
+                *comments_loaded,
+                *comment_entry_requested,
             )
         }
     }
@@ -154,7 +252,12 @@ fn loading_screen(
     lang: Language,
     install_progress: Option<&crate::install::Progress>,
     self_update: Option<&super::SelfUpdateInfo>,
+    loading_start_time: std::time::Instant,
 ) -> Vec<AppCommand> {
+    let elapsed = loading_start_time.elapsed().as_secs_f32();
+    let progress_val = (elapsed / 4.0).min(0.98);
+    let remaining_val = (4.0 - elapsed).max(0.1);
+
     egui::CentralPanel::default()
         .frame(egui::Frame::NONE.fill(BG_DEEP))
         .show(ctx, |ui| {
@@ -164,7 +267,7 @@ fn loading_screen(
                 ui.with_layout(
                     egui::Layout::top_down(egui::Align::Center).with_cross_align(egui::Align::Center),
                     |ui| {
-                        let total_content_height = 260.0;
+                        let total_content_height = 290.0;
                         let pad_y = ((rect.height() - total_content_height) / 2.0).max(0.0);
                         ui.add_space(pad_y);
 
@@ -180,30 +283,44 @@ fn loading_screen(
                             icon_rect.center(),
                             egui::Align2::CENTER_CENTER,
                             "V",
-                            egui::FontId::proportional(44.0),
+                            font(FONT_DISPLAY),
                             TEXT_WHITE,
                         );
 
                         ui.add_space(18.0);
-                        ui.label(egui::RichText::new("VitaForge").size(28.0).strong().color(TEXT_WHITE));
+                        ui.label(egui::RichText::new("VitaForge").size(FONT_HEADLINE).strong().color(TEXT_WHITE));
                         ui.add_space(8.0);
 
                         if let Some(progress) = install_progress {
                             let tag = self_update.map_or("", |u| u.tag.as_str());
                             ui.label(
-                                egui::RichText::new(format!("🚀 Actualizando VitaForge {}...", tag))
+                                egui::RichText::new(format!("Updating VitaForge {}...", tag))
                                     .color(STAR_GOLD)
-                                    .size(15.0)
+                                    .size(FONT_LARGE)
                                     .strong(),
                             );
                             ui.add_space(8.0);
-                            ui.label(egui::RichText::new(progress.label()).color(TEXT_DIM).size(13.5));
+                            ui.label(egui::RichText::new(progress.label()).color(TEXT_DIM).size(FONT_BODY));
                         } else {
-                            ui.label(egui::RichText::new(lang.loading_msg()).color(TEXT_DIM).size(13.5));
+                            ui.label(egui::RichText::new("Bringing catalog information from databases...").color(TEXT_DIM).size(FONT_BODY));
+                            
+                            ui.add_space(12.0);
+                            let progress_bar = egui::ProgressBar::new(progress_val)
+                                .text(format!("{:.0}%", progress_val * 100.0))
+                                .animate(true);
+                            ui.add_sized([220.0, 16.0], progress_bar);
+
+                            ui.add_space(8.0);
+                            let est_text = if elapsed < 4.0 {
+                                format!("Estimated: {:.1}s remaining", remaining_val)
+                            } else {
+                                "Downloading last items...".to_owned()
+                            };
+                            ui.label(egui::RichText::new(est_text).color(TEXT_DIM).size(FONT_SMALL));
                         }
 
-                        ui.add_space(24.0);
-                        ui.add(egui::Spinner::new().size(32.0).color(ACCENT_STEAM));
+                        ui.add_space(16.0);
+                        ui.add(egui::Spinner::new().size(24.0).color(ACCENT_STEAM));
                     },
                 );
             });
@@ -222,6 +339,7 @@ fn catalog_screen(
     search_query: &str,
     search_active: bool,
     category_filter: Option<Category>,
+    platform_filter: Option<Platform>,
     sort_order: SortOrder,
     selected: Option<usize>,
     scroll_to_selected: bool,
@@ -247,17 +365,17 @@ fn catalog_screen(
             paint_background(ui.painter(), ui.ctx().screen_rect());
 
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("VitaForge").size(23.0).strong().color(TEXT_WHITE));
-                ui.label(egui::RichText::new(format!("v{}", env!("CARGO_PKG_VERSION"))).size(11.0).color(TEXT_DIM));
+                ui.label(egui::RichText::new("VitaForge").size(FONT_TITLE).strong().color(TEXT_WHITE));
+                ui.label(egui::RichText::new(format!("v{}", env!("CARGO_PKG_VERSION"))).size(FONT_SMALL).color(TEXT_DIM));
                 ui.add_space(8.0);
-                ui.label(egui::RichText::new(lang.apps_count(filtered_indices.len())).color(TEXT_FAINT).size(11.0));
+                ui.label(egui::RichText::new(lang.apps_count(filtered_indices.len())).color(TEXT_FAINT).size(FONT_SMALL));
 
                 if let Some(info) = self_update {
                     ui.add_space(12.0);
                     let btn = ui.add(
                         egui::Button::new(
-                            egui::RichText::new(format!("🚀 UPDATE {}", info.tag))
-                                .size(11.0)
+                            egui::RichText::new(format!("UPDATE {}", info.tag))
+                                .size(FONT_SMALL)
                                 .strong()
                                 .color(STAR_GOLD),
                         )
@@ -291,6 +409,10 @@ fn catalog_screen(
                     if let Some(picked) = category_dropdown(ui, lang, apps, category_filter) {
                         commands.push(AppCommand::SetCategoryFilter(picked));
                     }
+                    ui.add_space(8.0);
+                    if let Some(picked) = platform_dropdown(ui, lang, apps, platform_filter) {
+                        commands.push(AppCommand::SetPlatformFilter(picked));
+                    }
                 });
             });
             ui.add_space(12.0);
@@ -298,9 +420,9 @@ fn catalog_screen(
             if filtered_indices.is_empty() {
                 ui.vertical_centered(|ui| {
                     ui.add_space(40.0);
-                    ui.label(egui::RichText::new(lang.no_results()).size(18.0).color(TEXT_DIM));
+                    ui.label(egui::RichText::new(lang.no_results()).size(FONT_LARGE).color(TEXT_DIM));
                     ui.add_space(8.0);
-                    ui.label(egui::RichText::new(lang.no_results_sub()).size(13.0).color(TEXT_FAINT));
+                    ui.label(egui::RichText::new(lang.no_results_sub()).size(FONT_BODY).color(TEXT_FAINT));
                 });
                 return;
             }
@@ -318,12 +440,34 @@ fn catalog_screen(
             }
 
             scroll_area.show_rows(ui, row_height, total_rows, |ui, row_range| {
+                // Warm the next row's art before it scrolls into view. One row,
+                // not two: the server rate-limits image requests, and a burst
+                // large enough to trip it used to blank the grid out entirely.
+                let prefetch_start = row_range.end;
+                let prefetch_end = (prefetch_start + 1).min(total_rows);
+                for prefetch_row in prefetch_start..prefetch_end {
+                    for column in 0..GRID_COLUMNS {
+                        let item_index = prefetch_row * GRID_COLUMNS + column;
+                        if let Some(&real_index) = filtered_indices.get(item_index) {
+                            if let Some(entry) = apps.get(real_index) {
+                                if let Some(url) = tile_art_url(entry) {
+                                    let _ = icons.get(ui.ctx(), url);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                let mut art_pending = false;
                 for grid_row in row_range {
                     ui.horizontal(|ui| {
                         for column in 0..GRID_COLUMNS {
                             let item_index = grid_row * GRID_COLUMNS + column;
                             let Some(&real_index) = filtered_indices.get(item_index) else { break };
                             let Some(entry) = apps.get(real_index) else { continue };
+
+                            art_pending |= tile_art_url(entry)
+                                .is_some_and(|url| icons.is_loading(url, super::icons::MAX_ICON_SIDE));
 
                             let card = ui
                                 .push_id((entry.platform.label(), entry.id.as_str()), |ui| {
@@ -343,6 +487,11 @@ fn catalog_screen(
                         }
                     });
                     ui.add_space(GRID_SPACING);
+                }
+                // One repaint request for the whole grid rather than one per
+                // tile per frame, which is what this used to do.
+                if art_pending {
+                    ui.ctx().request_repaint();
                 }
             });
         });
@@ -381,7 +530,7 @@ fn sort_icon(ui: &mut egui::Ui, rect: egui::Rect, hovered: bool) {
 fn sort_dropdown(ui: &mut egui::Ui, lang: Language, sort_order: SortOrder) -> Option<SortOrder> {
     let popup_id = ui.make_persistent_id("sort_dropdown");
     let label = format!("{} {}", lang.sort_by_prefix(), lang.sort_label(sort_order));
-    let galley = ui.fonts(|f| f.layout_no_wrap(label, egui::FontId::proportional(13.0), TEXT_DIM));
+    let galley = ui.fonts(|f| f.layout_no_wrap(label, font(FONT_BODY), TEXT_DIM));
 
     let icon_size = 30.0;
     let gap = 8.0;
@@ -404,8 +553,68 @@ fn sort_dropdown(ui: &mut egui::Ui, lang: Language, sort_order: SortOrder) -> Op
         ui.set_min_width(190.0);
         ui.spacing_mut().item_spacing.y = 2.0;
         for sort in SortOrder::ALL {
-            if dropdown_row(ui, lang.sort_label(sort), None, sort == sort_order) {
+            if dropdown_row(ui, lang.sort_label(sort), sort == sort_order) {
                 picked = Some(sort);
+            }
+        }
+    });
+
+    picked
+}
+
+fn platform_dropdown(
+    ui: &mut egui::Ui,
+    lang: Language,
+    apps: &[crate::data::AppEntry],
+    platform_filter: Option<Platform>,
+) -> Option<Option<Platform>> {
+    let popup_id = ui.make_persistent_id("platform_dropdown");
+    let label = lang.platform_label(platform_filter);
+    let galley = ui.fonts(|f| f.layout_no_wrap(label.to_owned(), font(FONT_SMALL), ACCENT_CYAN));
+    let size = egui::vec2((galley.size().x + 34.0).max(96.0), 26.0);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    let hover_t = ui.ctx().animate_bool_with_time(response.id.with("hover"), response.hovered(), HOVER_ANIM_SECS);
+    let open = ui.memory(|mem| mem.is_popup_open(popup_id));
+
+    let border = if open || platform_filter.is_some() { ACCENT_CYAN } else { SEPARATOR };
+    ui.painter().rect_filled(rect, rect.height() / 2.0, BG_CARD.lerp_to_gamma(BG_CARD_HOVER, hover_t));
+    ui.painter().rect_stroke(rect, rect.height() / 2.0, egui::Stroke::new(1.0_f32, border), egui::StrokeKind::Inside);
+    ui.painter().galley(
+        egui::pos2(rect.left() + 12.0, rect.center().y - galley.size().y / 2.0),
+        galley,
+        ACCENT_CYAN,
+    );
+    chevron(ui.painter(), egui::pos2(rect.right() - 12.0, rect.center().y), open);
+
+    if response.clicked() {
+        ui.memory_mut(|mem| mem.toggle_popup(popup_id));
+    }
+
+    let mut picked = None;
+    egui::popup_below_widget(ui, popup_id, &response, egui::PopupCloseBehavior::CloseOnClick, |ui| {
+        ui.set_min_width(180.0);
+        ui.spacing_mut().item_spacing.y = 2.0;
+        let all_label = format!("All consoles ({})", apps.len());
+        if dropdown_row(ui, &all_label, platform_filter.is_none()) {
+            picked = Some(None);
+        }
+        for plat in Platform::ALL {
+            let count = apps.iter().filter(|app| {
+                match plat {
+                    Platform::Vita => app.platform == Platform::Vita,
+                    Platform::Psp => matches!(app.platform, Platform::Psp | Platform::NpsPsp),
+                    Platform::NpsPsx => app.platform == Platform::NpsPsx,
+                    Platform::NpsVita => app.platform == Platform::NpsVita,
+                    Platform::Plugin => app.platform == Platform::Plugin,
+                    _ => false,
+                }
+            }).count();
+            if count == 0 {
+                continue;
+            }
+            let row_label = format!("{} ({})", lang.platform_label(Some(plat)), count);
+            if dropdown_row(ui, &row_label, platform_filter == Some(plat)) {
+                picked = Some(Some(plat));
             }
         }
     });
@@ -421,7 +630,7 @@ fn category_dropdown(
 ) -> Option<Option<Category>> {
     let popup_id = ui.make_persistent_id("category_dropdown");
     let label = lang.category_label(category_filter);
-    let galley = ui.fonts(|f| f.layout_no_wrap(label.to_owned(), egui::FontId::proportional(11.0), ACCENT_CYAN));
+    let galley = ui.fonts(|f| f.layout_no_wrap(label.to_owned(), font(FONT_SMALL), ACCENT_CYAN));
     let size = egui::vec2((galley.size().x + 34.0).max(96.0), 26.0);
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
     let hover_t = ui.ctx().animate_bool_with_time(response.id.with("hover"), response.hovered(), HOVER_ANIM_SECS);
@@ -445,7 +654,8 @@ fn category_dropdown(
     egui::popup_below_widget(ui, popup_id, &response, egui::PopupCloseBehavior::CloseOnClick, |ui| {
         ui.set_min_width(180.0);
         ui.spacing_mut().item_spacing.y = 2.0;
-        if dropdown_row(ui, lang.category_label(None), Some(apps.len()), category_filter.is_none()) {
+        let all_label = format!("All categories ({})", apps.len());
+        if dropdown_row(ui, &all_label, category_filter.is_none()) {
             picked = Some(None);
         }
         for category in Category::ALL {
@@ -453,7 +663,8 @@ fn category_dropdown(
             if count == 0 {
                 continue;
             }
-            if dropdown_row(ui, lang.category_label(Some(category)), Some(count), category_filter == Some(category)) {
+            let row_label = format!("{} ({})", lang.category_label(Some(category)), count);
+            if dropdown_row(ui, &row_label, category_filter == Some(category)) {
                 picked = Some(Some(category));
             }
         }
@@ -462,7 +673,7 @@ fn category_dropdown(
     picked
 }
 
-fn dropdown_row(ui: &mut egui::Ui, label: &str, count: Option<usize>, active: bool) -> bool {
+fn dropdown_row(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
     let width = ui.available_width();
     let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 30.0), egui::Sense::click());
     let hover_t = ui.ctx().animate_bool_with_time(response.id.with("hover"), response.hovered(), HOVER_ANIM_SECS);
@@ -477,19 +688,9 @@ fn dropdown_row(ui: &mut egui::Ui, label: &str, count: Option<usize>, active: bo
         egui::pos2(rect.left() + 10.0, rect.center().y),
         egui::Align2::LEFT_CENTER,
         label,
-        egui::FontId::proportional(13.0),
+        font(FONT_BODY),
         text_color,
     );
-    if let Some(count) = count {
-        ui.painter().text(
-            egui::pos2(rect.right() - 10.0, rect.center().y),
-            egui::Align2::RIGHT_CENTER,
-            count.to_string(),
-            egui::FontId::proportional(11.5),
-            TEXT_FAINT,
-        );
-    }
-
     response.clicked()
 }
 
@@ -517,7 +718,6 @@ fn cover_card(
     let press_t = ctx.animate_bool_with_time(response.id.with("press"), response.is_pointer_button_down_on(), PRESS_ANIM_SECS);
     let focus_t = ctx.animate_bool_with_time(response.id.with("focus"), focused, HOVER_ANIM_SECS);
     let zoom = hover_t.max(focus_t);
-
     let inset = 6.0 - zoom * 4.5 + press_t * PRESS_SHRINK;
     let rect = full_rect.shrink(inset);
 
@@ -538,23 +738,48 @@ fn cover_card(
     CardResponse { clicked: response.clicked(), rect: full_rect }
 }
 
+/// The one image a tile draws: the icon when there is one, the cover art
+/// otherwise. The grid used to request *both* for every tile even though only
+/// the icon is ever shown, doubling traffic against a rate-limited server.
+fn tile_art_url(entry: &crate::data::AppEntry) -> Option<&str> {
+    entry.icon_url.as_deref().or(entry.cover_url.as_deref())
+}
+
 fn draw_cover(ui: &mut egui::Ui, icons: &IconCache, rect: egui::Rect, entry: &crate::data::AppEntry) {
     let color = category_color(entry.category);
 
     ui.painter().rect_filled(rect, CARD_RADIUS, BG_DEEP);
     ui.painter().rect_stroke(rect, CARD_RADIUS, egui::Stroke::new(1.0_f32, color.gamma_multiply(0.5)), egui::StrokeKind::Inside);
 
-    if let Some(url) = entry.icon_url.as_deref() {
+    let art = tile_art_url(entry);
+    if let Some(url) = art {
         if let Some(texture) = icons.get(ui.ctx(), url) {
-            let mut mesh = egui::Mesh::with_texture(texture.id());
-            mesh.add_rect_with_uv(
-                rect,
-                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                TEXT_WHITE,
+            ui.painter().add(
+                egui::epaint::RectShape::filled(rect, CARD_RADIUS, TEXT_WHITE).with_texture(
+                    texture.id(),
+                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                ),
             );
-            ui.painter().add(egui::Shape::mesh(mesh));
             return;
         }
+    }
+
+    if art.is_some_and(|url| icons.is_loading(url, super::icons::MAX_ICON_SIDE)) {
+        let time = ui.input(|i| i.time);
+        let angle = time * 4.0;
+        let center = rect.center();
+        let radius = rect.width() * 0.18;
+
+        let n_dots = 8;
+        for i in 0..n_dots {
+            let dot_angle = angle + (i as f64 * std::f64::consts::TAU / n_dots as f64);
+            let pos = center + egui::vec2(dot_angle.cos() as f32, dot_angle.sin() as f32) * radius;
+            let alpha = (i as f32 / n_dots as f32).powf(1.5);
+            ui.painter().circle_filled(pos, 2.0, color.gamma_multiply(0.2 + 0.8 * alpha));
+        }
+        // No repaint request here: the grid loop already asks for one on behalf
+        // of every tile whose art is still in flight.
+        return;
     }
 
     let letter = entry.name.chars().next().unwrap_or('?').to_uppercase().to_string();
@@ -562,7 +787,9 @@ fn draw_cover(ui: &mut egui::Ui, icons: &IconCache, rect: egui::Rect, entry: &cr
         rect.center(),
         egui::Align2::CENTER_CENTER,
         letter,
-        egui::FontId::proportional(rect.width() * 0.42),
+        // Rounded so a handful of tile widths can't spawn a handful of
+        // near-identical atlas entries.
+        font((rect.width() * 0.42).round()),
         TEXT_WHITE,
     );
 }
@@ -573,22 +800,43 @@ fn tile_label(ui: &mut egui::Ui, rect: egui::Rect, name: &str) {
         egui::pos2(rect.left(), rect.bottom() - scrim_height),
         rect.right_bottom(),
     );
-    let mut mesh = egui::Mesh::default();
+    // The scrim has to stop short of the tile's rounded bottom corners: a plain
+    // gradient quad has square corners and used to poke out past the card edge.
+    // So the gradient covers everything above the corner arc, and a rounded
+    // rect caps the last `CARD_RADIUS` pixels at full strength.
     let transparent = egui::Color32::from_black_alpha(0);
     let dark = egui::Color32::from_black_alpha(200);
+    let gradient_bottom = scrim.bottom() - CARD_RADIUS;
+
+    let mut mesh = egui::Mesh::default();
     mesh.colored_vertex(scrim.left_top(), transparent);
     mesh.colored_vertex(scrim.right_top(), transparent);
-    mesh.colored_vertex(scrim.right_bottom(), dark);
-    mesh.colored_vertex(scrim.left_bottom(), dark);
+    mesh.colored_vertex(egui::pos2(scrim.right(), gradient_bottom), dark);
+    mesh.colored_vertex(egui::pos2(scrim.left(), gradient_bottom), dark);
     mesh.add_triangle(0, 1, 2);
     mesh.add_triangle(0, 2, 3);
     ui.painter().add(egui::Shape::mesh(mesh));
+
+    let cap = egui::Rect::from_min_max(
+        egui::pos2(scrim.left(), gradient_bottom),
+        scrim.right_bottom(),
+    );
+    ui.painter().add(egui::epaint::RectShape::filled(
+        cap,
+        egui::CornerRadius {
+            nw: 0,
+            ne: 0,
+            sw: CARD_RADIUS as u8,
+            se: CARD_RADIUS as u8,
+        },
+        dark,
+    ));
 
     let side_margin = 9.0;
     let available_width = (rect.width() - side_margin * 2.0).max(0.0);
     let mut job = egui::text::LayoutJob::simple(
         name.to_owned(),
-        egui::FontId::proportional(12.0),
+        font(FONT_SMALL),
         TEXT_WHITE,
         available_width,
     );
@@ -601,10 +849,16 @@ fn tile_label(ui: &mut egui::Ui, rect: egui::Rect, name: &str) {
 }
 
 fn tile_platform_badge(ui: &mut egui::Ui, rect: egui::Rect, platform: Platform) {
-    let galley = ui.fonts(|f| f.layout_no_wrap(platform.label().to_owned(), egui::FontId::proportional(8.0), TEXT_WHITE));
+    let text = platform.label_short();
+    let galley = ui.fonts(|f| f.layout_no_wrap(text.to_owned(), font(FONT_MICRO), TEXT_WHITE));
     let size = egui::vec2(galley.size().x + 10.0, 14.0);
     let badge = egui::Rect::from_min_size(rect.left_top() + egui::vec2(7.0, 7.0), size);
-    ui.painter().rect_filled(badge, 4.0, egui::Color32::from_black_alpha(170));
+    let bg_color = if platform.is_nps() {
+        egui::Color32::from_rgb(0xf5, 0x9e, 0x0b).gamma_multiply(0.85) // NPS gets amber color
+    } else {
+        egui::Color32::from_black_alpha(170)
+    };
+    ui.painter().rect_filled(badge, 4.0, bg_color);
     ui.painter().galley(badge.center() - galley.size() / 2.0, galley, TEXT_WHITE);
 }
 
@@ -643,7 +897,7 @@ fn install_marker(painter: &egui::Painter, rect: egui::Rect, state: InstallState
 fn category_badge(ui: &mut egui::Ui, category: Category) {
     let color = category_color(category);
     let galley = ui.fonts(|f| {
-        f.layout_no_wrap(category.label_upper().to_owned(), egui::FontId::proportional(8.5), TEXT_WHITE)
+        f.layout_no_wrap(category.label_upper().to_owned(), font(FONT_MICRO), TEXT_WHITE)
     });
     let size = egui::vec2(galley.size().x + 10.0, 14.0);
     let rect = ui.allocate_exact_size(size, egui::Sense::hover()).0;
@@ -685,7 +939,7 @@ enum Glyph {
 fn button_hints(ctx: &egui::Context, hints: &[(Glyph, &str)], note: Option<String>) {
     egui::TopBottomPanel::bottom("hints")
         .exact_height(HINT_BAR_HEIGHT)
-        .frame(egui::Frame::NONE.fill(BG_HEADER).inner_margin(egui::vec2(SCREEN_MARGIN, 0.0)))
+        .frame(egui::Frame::NONE.fill(glass(BG_HEADER)).inner_margin(egui::vec2(SCREEN_MARGIN, 0.0)))
         .show(ctx, |ui| {
             if let Some(note) = note {
                 let rect = ui.max_rect();
@@ -693,13 +947,13 @@ fn button_hints(ctx: &egui::Context, hints: &[(Glyph, &str)], note: Option<Strin
                     rect.left_center(),
                     egui::Align2::LEFT_CENTER,
                     note,
-                    egui::FontId::proportional(10.0),
+                    font(FONT_MICRO),
                     TEXT_DIM,
                 );
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 for (glyph, label) in hints {
-                    ui.label(egui::RichText::new(*label).color(TEXT_DIM).size(12.0));
+                    ui.label(egui::RichText::new(*label).color(TEXT_DIM).size(FONT_SMALL));
                     ui.add_space(4.0);
                     match glyph {
                         Glyph::Shoulders => {
@@ -710,7 +964,7 @@ fn button_hints(ctx: &egui::Context, hints: &[(Glyph, &str)], note: Option<Strin
                                 rect.center(),
                                 egui::Align2::CENTER_CENTER,
                                 "L1 R1",
-                                egui::FontId::proportional(9.5),
+                                font(FONT_MICRO),
                                 TEXT_DIM,
                             );
                         }
@@ -741,7 +995,7 @@ fn rating_stars(ui: &mut egui::Ui, rating: f32) {
     const EMPTY: [&str; 6] = ["★★★★★", "★★★★", "★★★", "★★", "★", ""];
 
     let filled = ((rating + 0.5).floor().max(0.0) as usize).min(5);
-    let font = egui::FontId::proportional(11.0);
+    let font = font(FONT_SMALL);
     let gold = ui.fonts(|f| f.layout_no_wrap(FILLED[filled].to_owned(), font.clone(), STAR_GOLD));
     let faint = ui.fonts(|f| f.layout_no_wrap(EMPTY[filled].to_owned(), font, TEXT_FAINT));
 
@@ -753,9 +1007,40 @@ fn rating_stars(ui: &mut egui::Ui, rating: f32) {
     ui.painter().galley(rect.left_top() + egui::vec2(gold_width, 0.0), faint, TEXT_FAINT);
 }
 
+/// Tappable 1-5 star row for submitting a rating; returns the score if a star was clicked.
+fn tappable_stars(ui: &mut egui::Ui, current: Option<u8>) -> Option<u8> {
+    let mut chosen = None;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 2.0;
+        for star in 1..=5u8 {
+            let filled = current.is_some_and(|c| star <= c);
+            let color = if filled { STAR_GOLD } else { TEXT_FAINT };
+            let response = ui.add(
+                egui::Button::new(egui::RichText::new("★").size(FONT_LARGE).color(color)).frame(false),
+            );
+            if response.clicked() {
+                chosen = Some(star);
+            }
+        }
+    });
+    chosen
+}
+
+fn like_button(ui: &mut egui::Ui, liked: bool, likes_count: u32) -> bool {
+    let color = if liked { egui::Color32::from_rgb(0xf4, 0x5d, 0x5d) } else { TEXT_DIM };
+    let glyph = if liked { "♥" } else { "♡" };
+    let response = ui.add(
+        egui::Button::new(
+            egui::RichText::new(format!("{glyph} {likes_count}")).size(FONT_BODY).color(color),
+        )
+        .frame(false),
+    );
+    response.clicked()
+}
+
 fn platform_badge(ui: &mut egui::Ui, platform: Platform) {
     let galley = ui.fonts(|f| {
-        f.layout_no_wrap(platform.label().to_owned(), egui::FontId::proportional(8.5), ACCENT_CYAN)
+        f.layout_no_wrap(platform.label().to_owned(), font(FONT_MICRO), ACCENT_CYAN)
     });
     let size = egui::vec2(galley.size().x + 10.0, 14.0);
     let rect = ui.allocate_exact_size(size, egui::Sense::hover()).0;
@@ -763,12 +1048,81 @@ fn platform_badge(ui: &mut egui::Ui, platform: Platform) {
     ui.painter().galley(rect.center() - galley.size() / 2.0, galley, ACCENT_CYAN);
 }
 
+fn region_badge(ui: &mut egui::Ui, region: &str) {
+    let galley = ui.fonts(|f| {
+        f.layout_no_wrap(region.to_owned(), font(FONT_MICRO), TEXT_WHITE)
+    });
+    let size = egui::vec2(galley.size().x + 10.0, 14.0);
+    let rect = ui.allocate_exact_size(size, egui::Sense::hover()).0;
+    ui.painter().rect_filled(rect, 4.0, egui::Color32::from_rgb(0xea, 0x58, 0x0c).gamma_multiply(0.8)); // region badge gets a distinct orange
+    ui.painter().galley(rect.center() - galley.size() / 2.0, galley, TEXT_WHITE);
+}
+
+fn source_badge(ui: &mut egui::Ui, label: &str) {
+    let galley = ui.fonts(|f| {
+        f.layout_no_wrap(label.to_uppercase(), font(FONT_MICRO), TEXT_WHITE)
+    });
+    let size = egui::vec2(galley.size().x + 10.0, 14.0);
+    let rect = ui.allocate_exact_size(size, egui::Sense::hover()).0;
+    ui.painter().rect_filled(rect, 4.0, egui::Color32::from_rgb(0x6d, 0x28, 0xd9).gamma_multiply(0.35)); // Purple backdrop
+    ui.painter().rect_stroke(rect, 4.0, egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(0xa7, 0x8b, 0xfa).gamma_multiply(0.8)), egui::StrokeKind::Inside);
+    ui.painter().galley(rect.center() - galley.size() / 2.0, galley, TEXT_WHITE);
+}
+
+/// Warning sign, drawn rather than typed. The "⚠️" this replaces is
+/// `U+26A0 U+FE0F`, and the bundled fonts have no glyph for that trailing
+/// variation selector — it rendered as a stray empty box.
+fn warning_glyph(painter: &egui::Painter, center: egui::Pos2, radius: f32, color: egui::Color32) {
+    let stroke = egui::Stroke::new(1.4_f32, color);
+    let top = center + egui::vec2(0.0, -radius);
+    let left = center + egui::vec2(-radius * 0.95, radius * 0.75);
+    let right = center + egui::vec2(radius * 0.95, radius * 0.75);
+    painter.line_segment([top, left], stroke);
+    painter.line_segment([left, right], stroke);
+    painter.line_segment([right, top], stroke);
+    // The exclamation mark inside.
+    painter.line_segment(
+        [center + egui::vec2(0.0, -radius * 0.28), center + egui::vec2(0.0, radius * 0.28)],
+        stroke,
+    );
+    painter.circle_filled(center + egui::vec2(0.0, radius * 0.55), 0.9, color);
+}
+
+/// A warning pill that grows to fit. `requirements` routinely arrives as a
+/// multi-line list ("- libshacccg.suprx\n- kubridge.skprx\n- ..."), which the
+/// old fixed 16px-tall, no-wrap pill spilled straight out of.
 fn warning_pill(ui: &mut egui::Ui, label: &str) {
-    let galley = ui.fonts(|f| f.layout_no_wrap(label.to_owned(), egui::FontId::proportional(9.5), STAR_GOLD));
-    let size = egui::vec2(galley.size().x + 14.0, 16.0);
+    const ICON_BOX: f32 = 16.0;
+    const PADDING: f32 = 7.0;
+
+    let text_width = (ui.available_width() - ICON_BOX - PADDING * 3.0).max(60.0);
+    let mut job = egui::text::LayoutJob::simple(
+        label.to_owned(),
+        font(FONT_MICRO),
+        STAR_GOLD,
+        text_width,
+    );
+    job.wrap.max_rows = 4;
+    job.wrap.overflow_character = Some('…');
+    let galley = ui.fonts(|f| f.layout_job(job));
+
+    let size = egui::vec2(
+        galley.size().x + ICON_BOX + PADDING * 3.0,
+        (galley.size().y + PADDING).max(ICON_BOX),
+    );
     let rect = ui.allocate_exact_size(size, egui::Sense::hover()).0;
     ui.painter().rect_filled(rect, 4.0, STAR_GOLD.gamma_multiply(0.2));
-    ui.painter().galley(rect.center() - galley.size() / 2.0, galley, STAR_GOLD);
+    warning_glyph(
+        ui.painter(),
+        egui::pos2(rect.left() + PADDING + ICON_BOX / 2.0, rect.top() + ICON_BOX / 2.0 + 1.0),
+        5.0,
+        STAR_GOLD,
+    );
+    ui.painter().galley(
+        egui::pos2(rect.left() + PADDING * 2.0 + ICON_BOX, rect.top() + PADDING / 2.0),
+        galley,
+        STAR_GOLD,
+    );
 }
 
 fn install_pill(ui: &mut egui::Ui, lang: Language, state: InstallState) {
@@ -777,7 +1131,7 @@ fn install_pill(ui: &mut egui::Ui, lang: Language, state: InstallState) {
         InstallState::Installed => (lang.installed(), GREEN_PLAY),
         InstallState::Outdated => (lang.update_available(), STAR_GOLD),
     };
-    let galley = ui.fonts(|f| f.layout_no_wrap(label.to_owned(), egui::FontId::proportional(9.5), color));
+    let galley = ui.fonts(|f| f.layout_no_wrap(label.to_owned(), font(FONT_MICRO), color));
     let size = egui::vec2(galley.size().x + 14.0, 16.0);
     let rect = ui.allocate_exact_size(size, egui::Sense::hover()).0;
     ui.painter().rect_filled(rect, 4.0, color.gamma_multiply(0.25));
@@ -793,18 +1147,21 @@ fn detail_screen(
     install: Option<&crate::install::Progress>,
     busy: bool,
     scroll_offset: f32,
+    comments: &[crate::data::api::Comment],
+    comments_loaded: bool,
+    comment_entry_requested: bool,
 ) -> Vec<AppCommand> {
     let mut commands = Vec::new();
     let state = installed.state(entry);
 
     egui::TopBottomPanel::top("detail_header")
-        .frame(egui::Frame::NONE.fill(BG_HEADER).inner_margin(egui::vec2(SCREEN_MARGIN, 8.0)))
+        .frame(egui::Frame::NONE.fill(glass(BG_HEADER)).inner_margin(egui::vec2(SCREEN_MARGIN, 8.0)))
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
 
                 if busy {
                     ui.label(
-                        egui::RichText::new(lang.install_in_progress()).size(12.5).color(STAR_GOLD),
+                        egui::RichText::new(lang.install_in_progress()).size(FONT_BODY).color(STAR_GOLD),
                     );
                 } else if back_button(ui, lang.back()) {
                     commands.push(AppCommand::BackToCatalog);
@@ -826,15 +1183,17 @@ fn detail_screen(
         .frame(egui::Frame::NONE.fill(BG_DEEP).inner_margin(SCREEN_MARGIN))
         .show(ctx, |ui| {
 
-            paint_background(ui.painter(), ui.ctx().screen_rect());
+            if paint_hero(ui, icons, entry) {
+                ui.ctx().request_repaint();
+            }
             egui::ScrollArea::vertical()
                 .id_salt(&entry.id)
                 .vertical_scroll_offset(scroll_offset)
                 .show(ui, |ui| {
                 egui::Frame::NONE
-                    .fill(BG_CARD)
-                    .corner_radius(12.0)
-                    .stroke(egui::Stroke::new(1.0_f32, SEPARATOR))
+                    .fill(glass(BG_CARD))
+                    .corner_radius(CARD_RADIUS)
+                    .stroke(egui::Stroke::new(1.0_f32, GLASS_EDGE))
                     .inner_margin(16.0)
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
@@ -843,7 +1202,7 @@ fn detail_screen(
                             ui.add_space(14.0);
                             ui.vertical(|ui| {
                                 ui.add_space(2.0);
-                                ui.label(egui::RichText::new(&entry.name).size(22.0).strong().color(TEXT_WHITE));
+                                ui.label(egui::RichText::new(&entry.name).size(FONT_TITLE).strong().color(TEXT_WHITE));
                                 ui.add_space(2.0);
                                 ui.horizontal(|ui| {
                                     let author_label = lang.by_author(&entry.author);
@@ -851,7 +1210,7 @@ fn detail_screen(
                                         egui::Button::new(
                                             egui::RichText::new(author_label)
                                                 .color(ACCENT_CYAN)
-                                                .size(13.0),
+                                                .size(FONT_BODY),
                                         )
                                         .frame(false),
                                     );
@@ -865,22 +1224,40 @@ fn detail_screen(
                                         ui.add_space(4.0);
                                         platform_badge(ui, entry.platform);
                                     }
+                                    if let Some(ref region) = entry.region {
+                                        ui.add_space(4.0);
+                                        region_badge(ui, region);
+                                    }
+                                    for label in &entry.source_labels {
+                                        ui.add_space(4.0);
+                                        source_badge(ui, label);
+                                    }
                                 });
                                 ui.add_space(4.0);
-                                rating_stars(ui, entry.rating);
+                                ui.horizontal(|ui| {
+                                    rating_stars(ui, entry.rating);
+                                    ui.add_space(8.0);
+                                    if like_button(ui, entry.user_liked, entry.likes_count) {
+                                        commands.push(AppCommand::ToggleLike);
+                                    }
+                                });
                                 if state != InstallState::Absent {
                                     ui.add_space(5.0);
                                     install_pill(ui, lang, state);
                                 }
-                                 if entry.data_url.is_some() || !entry.requirements.is_empty() {
-                                     ui.add_space(5.0);
-                                     let text = if !entry.requirements.is_empty() {
-                                         format!("⚠️ {}", entry.requirements)
-                                     } else {
-                                         lang.needs_game_data().to_owned()
-                                     };
-                                     warning_pill(ui, &text);
-                                 }
+                                if entry.platform.is_nps() {
+                                    ui.add_space(5.0);
+                                    warning_pill(ui, lang.needs_nonpdrm());
+                                }
+                                if entry.data_url.is_some() || !entry.requirements.is_empty() {
+                                    ui.add_space(5.0);
+                                    let text = if entry.requirements.is_empty() {
+                                        lang.needs_game_data()
+                                    } else {
+                                        entry.requirements.as_str()
+                                    };
+                                    warning_pill(ui, text);
+                                }
                             });
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 match install {
@@ -937,6 +1314,16 @@ fn detail_screen(
                     ui.add_space(22.0);
                 }
 
+                // Publisher / developer / system, when the catalog scraped them.
+                if !entry.overview.is_empty() {
+                    section_label(ui, lang.overview());
+                    ui.add_space(8.0);
+                    for (key, value) in &entry.overview {
+                        info_row(ui, key, value);
+                    }
+                    ui.add_space(22.0);
+                }
+
                 section_label(ui, lang.technical_info());
                 ui.add_space(8.0);
                 info_row(
@@ -962,6 +1349,67 @@ fn detail_screen(
                 if let Some(page) = &entry.release_page {
                     info_row(ui, lang.release_page(), page);
                 }
+                ui.add_space(22.0);
+
+                section_label(ui, lang.community());
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(lang.your_rating()).size(FONT_BODY).color(TEXT_DIM));
+                    ui.add_space(8.0);
+                    if let Some(score) = tappable_stars(ui, entry.user_rating) {
+                        commands.push(AppCommand::RateCurrent(score));
+                    }
+                });
+                info_row(ui, lang.ratings_count(), &entry.ratings_count.to_string());
+                ui.add_space(16.0);
+
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(format!("{} ({})", lang.comments(), entry.comments_count))
+                            .size(FONT_BODY)
+                            .strong()
+                            .color(TEXT_WHITE),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if !comment_entry_requested
+                            && ui
+                                .add(egui::Button::new(
+                                    egui::RichText::new(lang.add_comment()).size(FONT_SMALL).color(ACCENT_CYAN),
+                                ).frame(false))
+                                .clicked()
+                        {
+                            commands.push(AppCommand::RequestCommentEntry);
+                        }
+                    });
+                });
+                ui.add_space(8.0);
+
+                if !comments_loaded {
+                    ui.label(egui::RichText::new(lang.loading_comments()).size(FONT_SMALL).color(TEXT_FAINT));
+                } else if comments.is_empty() {
+                    ui.label(egui::RichText::new(lang.no_comments_yet()).size(FONT_SMALL).color(TEXT_FAINT));
+                } else {
+                    for comment in comments {
+                        egui::Frame::NONE
+                            .fill(glass(BG_HEADER))
+                            .corner_radius(8.0)
+                            .stroke(egui::Stroke::new(1.0_f32, GLASS_EDGE))
+                            .inner_margin(10.0)
+                            .show(ui, |ui| {
+                                ui.vertical(|ui| {
+                                    ui.label(
+                                        egui::RichText::new(&comment.author_name)
+                                            .size(FONT_SMALL)
+                                            .strong()
+                                            .color(ACCENT_CYAN),
+                                    );
+                                    ui.add_space(2.0);
+                                    ui.label(egui::RichText::new(&comment.content).size(FONT_BODY).color(TEXT_WHITE));
+                                });
+                            });
+                        ui.add_space(6.0);
+                    }
+                }
                 ui.add_space(20.0);
             });
         });
@@ -971,9 +1419,9 @@ fn detail_screen(
 
 fn info_row(ui: &mut egui::Ui, label: &str, value: &str) {
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(label).color(TEXT_DIM).size(13.0));
+        ui.label(egui::RichText::new(label).color(TEXT_DIM).size(FONT_BODY));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(egui::RichText::new(value).size(13.0).strong().color(TEXT_WHITE));
+            ui.label(egui::RichText::new(value).size(FONT_BODY).strong().color(TEXT_WHITE));
         });
     });
     ui.add_space(6.0);
@@ -983,16 +1431,17 @@ fn info_row(ui: &mut egui::Ui, label: &str, value: &str) {
 
 fn text_panel(ui: &mut egui::Ui, text: &str, color: egui::Color32) {
     egui::Frame::NONE
-        .fill(BG_CARD.gamma_multiply(0.7))
+        .fill(glass(BG_CARD))
         .corner_radius(8.0)
+        .stroke(egui::Stroke::new(1.0_f32, GLASS_EDGE))
         .inner_margin(12.0)
         .show(ui, |ui| {
-            ui.label(egui::RichText::new(text).size(14.0).color(color));
+            ui.label(egui::RichText::new(text).size(FONT_LARGE).color(color));
         });
 }
 
 fn section_label(ui: &mut egui::Ui, text: &str) {
-    ui.label(egui::RichText::new(text.to_uppercase()).color(ACCENT_CYAN).size(11.5).strong());
+    ui.label(egui::RichText::new(text.to_uppercase()).color(ACCENT_CYAN).size(FONT_SMALL).strong());
     ui.add_space(4.0);
 }
 
@@ -1030,7 +1479,7 @@ fn search_field(ui: &mut egui::Ui, query: &str, placeholder: &str, active: bool)
             egui::pos2(rect.left() + 10.0, rect.center().y),
             egui::Align2::LEFT_CENTER,
             text,
-            egui::FontId::proportional(12.5),
+            font(FONT_BODY),
             color,
         );
 
@@ -1080,7 +1529,7 @@ fn back_button(ui: &mut egui::Ui, label: &str) -> bool {
         egui::pos2(chevron_x + 12.0, mid_y),
         egui::Align2::LEFT_CENTER,
         label,
-        egui::FontId::proportional(13.5),
+        font(FONT_BODY),
         TEXT_WHITE,
     );
 
@@ -1092,7 +1541,7 @@ fn install_status(ui: &mut egui::Ui, progress: &crate::install::Progress) -> boo
 
     let finished = progress.is_finished();
     let text = progress.label();
-    let galley = ui.fonts(|f| f.layout_no_wrap(text.clone(), egui::FontId::proportional(12.0), TEXT_WHITE));
+    let galley = ui.fonts(|f| f.layout_no_wrap(text.clone(), font(FONT_SMALL), TEXT_WHITE));
     let width = (galley.size().x + 28.0).min(240.0);
     let sense = if finished { egui::Sense::click() } else { egui::Sense::hover() };
     let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 36.0), sense);
@@ -1108,7 +1557,7 @@ fn install_status(ui: &mut egui::Ui, progress: &crate::install::Progress) -> boo
         rect.center(),
         egui::Align2::CENTER_CENTER,
         &text,
-        egui::FontId::proportional(13.0),
+        font(FONT_BODY),
         text_color,
     );
     if !finished {
@@ -1132,7 +1581,7 @@ fn play_install_button(ui: &mut egui::Ui, label: &str) -> bool {
         rect.center(),
         egui::Align2::CENTER_CENTER,
         label,
-        egui::FontId::proportional(14.0),
+        font(FONT_LARGE),
         TEXT_WHITE,
     );
 
@@ -1149,7 +1598,12 @@ fn screenshots_row(ui: &mut egui::Ui, icons: &IconCache, entry: &crate::data::Ap
         ui.horizontal(|ui| {
             for url in &entry.screenshot_urls {
                 let (rect, _response) = ui.allocate_exact_size(SCREENSHOT_SIZE, egui::Sense::hover());
-                draw_screenshot(ui, icons, rect, url, entry.category);
+                // Only ask the server for shots at or near the viewport. A game
+                // with eight screenshots would otherwise fire eight requests the
+                // moment its page opened, which is enough to hit the rate limit
+                // on its own.
+                let nearby = rect.left() < ui.clip_rect().right() + SCREENSHOT_SIZE.x;
+                draw_screenshot(ui, icons, rect, url, entry.category, nearby);
                 ui.add_space(10.0);
             }
         });
@@ -1157,9 +1611,20 @@ fn screenshots_row(ui: &mut egui::Ui, icons: &IconCache, entry: &crate::data::Ap
     ui.add_space(20.0);
 }
 
-fn draw_screenshot(ui: &mut egui::Ui, icons: &IconCache, rect: egui::Rect, url: &str, category: Category) {
+fn draw_screenshot(
+    ui: &mut egui::Ui,
+    icons: &IconCache,
+    rect: egui::Rect,
+    url: &str,
+    category: Category,
+    fetch: bool,
+) {
     ui.painter().rect_filled(rect, 8.0, BG_DEEP);
     ui.painter().rect_stroke(rect, 8.0, egui::Stroke::new(1.0_f32, SEPARATOR), egui::StrokeKind::Inside);
+
+    if !fetch {
+        return;
+    }
 
     if let Some(texture) = icons.get_sized(ui.ctx(), url, super::icons::MAX_SCREENSHOT_SIDE) {
         let mut mesh = egui::Mesh::with_texture(texture.id());
@@ -1173,7 +1638,7 @@ fn draw_screenshot(ui: &mut egui::Ui, icons: &IconCache, rect: egui::Rect, url: 
         return;
     }
 
-    if icons.is_loading(url) {
+    if icons.is_loading(url, super::icons::MAX_SCREENSHOT_SIDE) {
         let time = ui.input(|i| i.time);
         let angle = time * 4.0;
         let center = rect.center();
@@ -1193,7 +1658,7 @@ fn draw_screenshot(ui: &mut egui::Ui, icons: &IconCache, rect: egui::Rect, url: 
             rect.center(),
             egui::Align2::CENTER_CENTER,
             "No Image",
-            egui::FontId::proportional(12.0),
+            font(FONT_SMALL),
             TEXT_DIM,
         );
     }
@@ -1219,17 +1684,34 @@ fn draw_icon(ui: &mut egui::Ui, icons: &IconCache, rect: egui::Rect, entry: &cra
     ui.painter().rect_filled(rect, corner_r, BG_DEEP);
     ui.painter().rect_stroke(rect, corner_r, egui::Stroke::new(1.5_f32, color), egui::StrokeKind::Inside);
 
-    if let Some(url) = entry.icon_url.as_deref() {
+    let art = tile_art_url(entry);
+    if let Some(url) = art {
         if let Some(texture) = icons.get(ui.ctx(), url) {
-            let mut mesh = egui::Mesh::with_texture(texture.id());
-            mesh.add_rect_with_uv(
-                rect,
-                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                TEXT_WHITE,
+            ui.painter().add(
+                egui::epaint::RectShape::filled(rect, corner_r, TEXT_WHITE).with_texture(
+                    texture.id(),
+                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                ),
             );
-            ui.painter().add(egui::Shape::mesh(mesh));
             return;
         }
+    }
+
+    if art.is_some_and(|url| icons.is_loading(url, super::icons::MAX_ICON_SIDE)) {
+        let time = ui.input(|i| i.time);
+        let angle = time * 4.0;
+        let center = rect.center();
+        let radius = rect.width() * 0.18;
+
+        let n_dots = 8;
+        for i in 0..n_dots {
+            let dot_angle = angle + (i as f64 * std::f64::consts::TAU / n_dots as f64);
+            let pos = center + egui::vec2(dot_angle.cos() as f32, dot_angle.sin() as f32) * radius;
+            let alpha = (i as f32 / n_dots as f32).powf(1.5);
+            ui.painter().circle_filled(pos, 2.0, color.gamma_multiply(0.2 + 0.8 * alpha));
+        }
+        ui.ctx().request_repaint();
+        return;
     }
 
     let letter = entry.name.chars().next().unwrap_or('?').to_uppercase().to_string();
@@ -1237,7 +1719,9 @@ fn draw_icon(ui: &mut egui::Ui, icons: &IconCache, rect: egui::Rect, entry: &cra
         rect.center(),
         egui::Align2::CENTER_CENTER,
         letter,
-        egui::FontId::proportional(rect.width() * 0.42),
+        // Rounded so a handful of tile widths can't spawn a handful of
+        // near-identical atlas entries.
+        font((rect.width() * 0.42).round()),
         TEXT_WHITE,
     );
 }

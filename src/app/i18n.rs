@@ -38,43 +38,30 @@ impl Language {
 
     pub fn category_label(self, cat: Option<crate::data::Category>) -> &'static str {
         match cat {
-            None => match self {
-                Language::Spanish => "TODOS",
-                Language::English => "ALL",
-            },
+            None => "ALL",
             Some(c) => match c {
-                crate::data::Category::Game => match self {
-                    Language::Spanish => "Juegos",
-                    Language::English => "Games",
-                },
-                crate::data::Category::Emulator => match self {
-                    Language::Spanish => "Emuladores",
-                    Language::English => "Emulators",
-                },
-                crate::data::Category::Utility => match self {
-                    Language::Spanish => "Utilidades",
-                    Language::English => "Utilities",
-                },
-                crate::data::Category::Port => match self {
-                    Language::Spanish => "Ports",
-                    Language::English => "Ports",
-                },
-                crate::data::Category::Plugin => match self {
-                    Language::Spanish => "Plugins",
-                    Language::English => "Plugins",
-                },
-                crate::data::Category::Media => match self {
-                    Language::Spanish => "Multimedia",
-                    Language::English => "Media",
-                },
-                crate::data::Category::Theme => match self {
-                    Language::Spanish => "Temas",
-                    Language::English => "Themes",
-                },
-                crate::data::Category::Other => match self {
-                    Language::Spanish => "Otros",
-                    Language::English => "Other",
-                },
+                crate::data::Category::Game => "Games",
+                crate::data::Category::Emulator => "Emulators",
+                crate::data::Category::Utility => "Utilities",
+                crate::data::Category::Port => "Ports",
+                crate::data::Category::Plugin => "Plugins",
+                crate::data::Category::Media => "Media",
+                crate::data::Category::Theme => "Themes",
+                crate::data::Category::Other => "Other",
+            },
+        }
+    }
+
+    pub fn platform_label(self, plat: Option<crate::data::Platform>) -> &'static str {
+        match plat {
+            None => "CONSOLE: ALL",
+            Some(p) => match p {
+                crate::data::Platform::Vita => "PS Vita (Homebrew)",
+                crate::data::Platform::Psp => "PSP",
+                crate::data::Platform::Plugin => "Plugins",
+                crate::data::Platform::NpsVita => "PS Vita (NPS)",
+                crate::data::Platform::NpsPsp => "PSP (NPS)",
+                crate::data::Platform::NpsPsx => "PS1 (NPS)",
             },
         }
     }
@@ -227,6 +214,20 @@ impl Language {
         }
     }
 
+    pub fn overview(self) -> &'static str {
+        match self {
+            Language::Spanish => "Resumen",
+            Language::English => "Overview",
+        }
+    }
+
+    pub fn needs_nonpdrm(self) -> &'static str {
+        match self {
+            Language::Spanish => "Requiere NoNpDrm / fake license",
+            Language::English => "Requires NoNpDrm / fake license",
+        }
+    }
+
     pub fn description(self) -> &'static str {
         match self {
             Language::Spanish => "Descripción",
@@ -273,6 +274,55 @@ impl Language {
         match self {
             Language::Spanish => "Actualizado",
             Language::English => "Updated",
+        }
+    }
+
+    pub fn community(self) -> &'static str {
+        match self {
+            Language::Spanish => "Comunidad",
+            Language::English => "Community",
+        }
+    }
+
+    pub fn your_rating(self) -> &'static str {
+        match self {
+            Language::Spanish => "Tu valoración",
+            Language::English => "Your rating",
+        }
+    }
+
+    pub fn ratings_count(self) -> &'static str {
+        match self {
+            Language::Spanish => "Valoraciones",
+            Language::English => "Ratings",
+        }
+    }
+
+    pub fn comments(self) -> &'static str {
+        match self {
+            Language::Spanish => "Comentarios",
+            Language::English => "Comments",
+        }
+    }
+
+    pub fn add_comment(self) -> &'static str {
+        match self {
+            Language::Spanish => "+ Añadir comentario",
+            Language::English => "+ Add comment",
+        }
+    }
+
+    pub fn loading_comments(self) -> &'static str {
+        match self {
+            Language::Spanish => "Cargando comentarios…",
+            Language::English => "Loading comments…",
+        }
+    }
+
+    pub fn no_comments_yet(self) -> &'static str {
+        match self {
+            Language::Spanish => "Aún no hay comentarios. ¡Sé el primero!",
+            Language::English => "No comments yet. Be the first!",
         }
     }
 

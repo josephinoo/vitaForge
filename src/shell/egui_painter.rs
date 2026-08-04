@@ -1,9 +1,20 @@
 use anyhow::Result;
 use std::collections::HashMap;
 
+/// How many failed uploads to retry per frame. Retrying all of them at once
+/// would just fail all of them again while video memory is still tight.
+const RETRIES_PER_FRAME: usize = 2;
+
 #[derive(Default)]
 pub struct SdlEguiPainter {
     textures: HashMap<egui::TextureId, SdlEguiTexture>,
+    /// Uploads that could not be allocated, kept so they can be retried.
+    ///
+    /// egui hands out each texture delta exactly once, and a mesh whose texture
+    /// is missing is skipped entirely. Without this, a single failed allocation
+    /// — which the console does hit when a lot of artwork is live at once —
+    /// left that image blank for the rest of the session.
+    pending: HashMap<egui::TextureId, PendingUpload>,
     vertices: Vec<sdl2::render::Vertex>,
     indices: Vec<i32>,
 }
@@ -13,7 +24,20 @@ struct SdlEguiTexture {
     uv_scale: egui::Vec2,
 }
 
+struct PendingUpload {
+    size: [usize; 2],
+    pos: Option<[usize; 2]>,
+    pixels: Vec<u8>,
+}
+
 impl SdlEguiPainter {
+    /// Whether any upload is still waiting for video memory. The frame loop
+    /// keeps redrawing while this holds, since retries only happen while
+    /// painting — going idle with something pending would strand it.
+    pub fn has_pending_uploads(&self) -> bool {
+        !self.pending.is_empty()
+    }
+
     pub fn paint(
         &mut self,
         canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
@@ -65,6 +89,7 @@ impl SdlEguiPainter {
         canvas.set_clip_rect(None);
         for texture_id in &textures_delta.free {
             self.textures.remove(texture_id);
+            self.pending.remove(texture_id);
         }
 
         Ok(())
@@ -75,51 +100,76 @@ impl SdlEguiPainter {
         canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
         textures_delta: &egui::TexturesDelta,
     ) {
+        // Give the images that ran out of video memory another go first —
+        // eviction may have freed room since.
+        if !self.pending.is_empty() {
+            let retry: Vec<egui::TextureId> =
+                self.pending.keys().copied().take(RETRIES_PER_FRAME).collect();
+            for texture_id in retry {
+                let upload = self.pending.remove(&texture_id).expect("key came from the map");
+                self.upload(canvas, texture_id, upload);
+            }
+        }
+
         for (texture_id, delta) in &textures_delta.set {
-            Self::upload_texture(canvas, &mut self.textures, *texture_id, delta);
+            let upload = PendingUpload {
+                size: delta.image.size(),
+                pos: delta.pos,
+                pixels: Self::image_to_sdl_rgba(&delta.image),
+            };
+            self.upload(canvas, *texture_id, upload);
         }
     }
 
-    fn upload_texture(
+    /// Uploads one image, parking it in `pending` if video memory says no.
+    fn upload(
+        &mut self,
         canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
-        textures: &mut HashMap<egui::TextureId, SdlEguiTexture>,
         texture_id: egui::TextureId,
-        delta: &egui::epaint::ImageDelta,
+        upload: PendingUpload,
     ) {
         use sdl2::pixels::PixelFormatEnum;
         use sdl2::rect::Rect;
         use sdl2::render::BlendMode;
 
-        let [width, height] = delta.image.size();
-        let pixels = Self::image_to_sdl_rgba(&delta.image);
+        let [width, height] = upload.size;
 
-        if delta.pos.is_none() || !textures.contains_key(&texture_id) {
-            let texture = canvas.create_texture_streaming(PixelFormatEnum::RGBA32, width as u32, height as u32);
+        if upload.pos.is_none() || !self.textures.contains_key(&texture_id) {
+            let texture =
+                canvas.create_texture_streaming(PixelFormatEnum::RGBA32, width as u32, height as u32);
             let mut texture = match texture {
                 Ok(texture) => texture,
                 Err(err) => {
-                    eprintln!("couldn't allocate a texture ({width}x{height}): {err}");
+                    eprintln!("no room for a {width}x{height} texture, will retry: {err}");
+                    self.pending.insert(texture_id, upload);
                     return;
                 }
             };
             texture.set_blend_mode(BlendMode::Blend);
-            if let Err(err) = texture.update(Rect::new(0, 0, width as u32, height as u32), &pixels, width * 4) {
-                eprintln!("couldn't upload a texture: {err}");
+            if let Err(err) =
+                texture.update(Rect::new(0, 0, width as u32, height as u32), &upload.pixels, width * 4)
+            {
+                eprintln!("couldn't upload a texture, will retry: {err}");
+                self.pending.insert(texture_id, upload);
                 return;
             }
-            textures.insert(texture_id, SdlEguiTexture { texture, uv_scale: egui::vec2(1.0, 1.0) });
+            self.textures.insert(texture_id, SdlEguiTexture { texture, uv_scale: egui::vec2(1.0, 1.0) });
             return;
         }
 
-        let Some(&[x, y]) = delta.pos.as_ref() else {
+        let Some([x, y]) = upload.pos else {
             eprintln!("partial texture update with no position, skipped");
             return;
         };
-        let Some(existing) = textures.get_mut(&texture_id) else {
+        let Some(existing) = self.textures.get_mut(&texture_id) else {
             eprintln!("partial update for a texture that no longer exists, skipped");
             return;
         };
-        if let Err(err) = existing.texture.update(Rect::new(x as i32, y as i32, width as u32, height as u32), &pixels, width * 4) {
+        if let Err(err) = existing.texture.update(
+            Rect::new(x as i32, y as i32, width as u32, height as u32),
+            &upload.pixels,
+            width * 4,
+        ) {
             eprintln!("couldn't patch a texture: {err}");
         }
     }
@@ -153,8 +203,27 @@ impl SdlEguiPainter {
                 vertex.pos.y * pixels_per_point,
             ),
             color: sdl2::pixels::Color::RGBA(r, g, b, a),
-            tex_coord: sdl2::rect::FPoint::new(vertex.uv.x * uv_scale.x, vertex.uv.y * uv_scale.y),
+            // Clamped because SDL validates texture coordinates and throws out
+            // the *entire* draw call if any one of them lands outside [0, 1].
+            // egui's own arithmetic — remapping a rounded rect's arc points into
+            // the brush's UV range, or a computed crop — routinely lands on
+            // -0.0000001, which was enough to drop every image on the screen.
+            tex_coord: sdl2::rect::FPoint::new(
+                (vertex.uv.x * uv_scale.x).clamp(0.0, 1.0),
+                (vertex.uv.y * uv_scale.y).clamp(0.0, 1.0),
+            ),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn uv_for_test(uv: egui::Vec2, uv_scale: egui::Vec2) -> (f32, f32) {
+        let vertex = egui::epaint::Vertex {
+            pos: egui::Pos2::ZERO,
+            uv: uv.to_pos2(),
+            color: egui::Color32::WHITE,
+        };
+        let v = Self::sdl_vertex(&vertex, 1.0, uv_scale);
+        (v.tex_coord.x(), v.tex_coord.y())
     }
 
     fn sdl_clip_rect(
@@ -181,5 +250,24 @@ impl SdlEguiPainter {
         } else {
             Some(sdl2::rect::Rect::new(min_x, min_y, width, height))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn texture_coordinates_stay_inside_the_range_sdl_accepts() {
+        // The console's SDL rejects a whole draw call when any uv falls outside
+        // [0, 1], and egui's arithmetic lands just outside it all the time —
+        // this is what blanked every image on the detail screen.
+        let (x, y) = SdlEguiPainter::uv_for_test(egui::vec2(-1e-7, 1.0000002), egui::vec2(1.0, 1.0));
+        assert_eq!((x, y), (0.0, 1.0));
+        assert!(x.is_sign_positive(), "a negative zero is still out of bounds for SDL");
+
+        // Values already in range are passed through untouched.
+        let (x, y) = SdlEguiPainter::uv_for_test(egui::vec2(0.25, 0.78), egui::vec2(1.0, 1.0));
+        assert_eq!((x, y), (0.25, 0.78));
     }
 }
