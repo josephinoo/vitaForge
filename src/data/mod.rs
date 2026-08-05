@@ -4,57 +4,71 @@ pub mod source;
 
 use serde::Deserialize;
 
+/// Mirrors the raw `category` values the API itself hands out (same set the
+/// vitaforge-core web catalog filters on) rather than a client-invented
+/// bucket — so "categories" here always lines up 1:1 with what the server's
+/// `/api/v1/categories` endpoint reports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Category {
-    Game,
     Emulator,
-    Utility,
-    Port,
+    Original,
+    PsVitaGame,
+    Ps1Game,
+    PspGame,
     Plugin,
-    Media,
-    Theme,
+    Port,
+    Tool,
+    Utility,
     Other,
 }
 
 impl Category {
-    pub const ALL: [Category; 8] = [
-        Category::Game,
+    pub const ALL: [Category; 10] = [
         Category::Emulator,
-        Category::Utility,
-        Category::Port,
+        Category::Original,
+        Category::PsVitaGame,
+        Category::Ps1Game,
+        Category::PspGame,
         Category::Plugin,
-        Category::Media,
-        Category::Theme,
+        Category::Port,
+        Category::Tool,
+        Category::Utility,
         Category::Other,
     ];
 
     pub fn label_upper(self) -> &'static str {
         match self {
-            Category::Game => "GAMES",
-            Category::Emulator => "EMULATORS",
-            Category::Utility => "UTILITIES",
-            Category::Port => "PORTS",
-            Category::Plugin => "PLUGINS",
-            Category::Media => "MEDIA",
-            Category::Theme => "THEMES",
+            Category::Emulator => "EMULATOR",
+            Category::Original => "ORIGINAL",
+            Category::PsVitaGame => "PS VITA GAME",
+            Category::Ps1Game => "PS1 GAME",
+            Category::PspGame => "PSP GAME",
+            Category::Plugin => "PLUGIN",
+            Category::Port => "PORT",
+            Category::Tool => "TOOL",
+            Category::Utility => "UTILITY",
             Category::Other => "OTHER",
         }
     }
 
-    /// Maps the API's free-form `category`/`type` strings onto our fixed filter set.
+    /// Maps the API's `category`/`type` strings onto this set. Kept in sync
+    /// with vitaforge-core's own category list rather than re-bucketed —
+    /// see the type doc comment above.
     pub fn from_api(category: &str, kind: &str) -> Category {
         if kind.eq_ignore_ascii_case("plugin") {
             return Category::Plugin;
         }
         match category.trim().to_lowercase().as_str() {
-            "game" | "games" => Category::Game,
             "emulator" | "emulators" => Category::Emulator,
-            "utility" | "utilities" | "tool" | "tools" => Category::Utility,
-            "port" | "ports" => Category::Port,
+            "original" => Category::Original,
+            "ps vita game" => Category::PsVitaGame,
+            "ps1 game" => Category::Ps1Game,
+            "psp game" => Category::PspGame,
             "plugin" | "plugins" => Category::Plugin,
-            "media" => Category::Media,
-            "theme" | "themes" => Category::Theme,
+            "port" | "ports" => Category::Port,
+            "tool" | "tools" => Category::Tool,
+            "utility" | "utilities" => Category::Utility,
             _ => Category::Other,
         }
     }
@@ -73,14 +87,6 @@ pub enum Platform {
 }
 
 impl Platform {
-    pub const ALL: [Platform; 5] = [
-        Platform::Vita,
-        Platform::Psp,
-        Platform::NpsPsx,
-        Platform::NpsVita, // we will display this or map to PSV/PS1/PSP console menu
-        Platform::Plugin,
-    ];
-
     pub fn label(self) -> &'static str {
         match self {
             Platform::Vita => "VITA",
@@ -116,6 +122,40 @@ impl Platform {
 
     pub fn is_nps(self) -> bool {
         matches!(self, Platform::NpsVita | Platform::NpsPsp | Platform::NpsPsx)
+    }
+
+    /// Whether this platform's catalog art is physical-box cover art (2:3)
+    /// rather than a square homebrew icon. Only PKGj/NPS entries get the
+    /// rectangular box-art treatment — homebrew (including PSP homebrew)
+    /// always stays in square icon mode.
+    pub fn is_commercial(self) -> bool {
+        self.is_nps()
+    }
+}
+
+/// The two catalogs vitaforge-core aggregates — same split as its `source`
+/// filter (`VitaDBtoo-db` homebrew vs. `NoPayStation`/PKGj commercial dumps).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceCatalog {
+    VitaDbToo,
+    Nps,
+}
+
+impl SourceCatalog {
+    pub const ALL: [SourceCatalog; 2] = [SourceCatalog::VitaDbToo, SourceCatalog::Nps];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            SourceCatalog::VitaDbToo => "VitaDBtoo",
+            SourceCatalog::Nps => "PKGj",
+        }
+    }
+
+    pub fn matches(self, source_catalog: &str) -> bool {
+        match self {
+            SourceCatalog::Nps => source_catalog.eq_ignore_ascii_case("nps"),
+            SourceCatalog::VitaDbToo => !source_catalog.eq_ignore_ascii_case("nps"),
+        }
     }
 }
 
@@ -178,6 +218,12 @@ pub struct AppEntry {
     pub category: Category,
     #[serde(default)]
     pub platform: Platform,
+    /// Raw API `type` value (e.g. `psp_app`, `psv_game`) — kept alongside
+    /// `platform` (which groups by install mechanism) so the catalog's type
+    /// filter can match the exact same values vitaforge-core's own filter
+    /// does, rather than the coarser install-oriented grouping.
+    #[serde(default)]
+    pub kind: String,
     pub icon_url: Option<String>,
     #[serde(default)]
     pub cover_url: Option<String>,

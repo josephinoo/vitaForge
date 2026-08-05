@@ -17,6 +17,12 @@ pub struct SdlEguiPainter {
     pending: HashMap<egui::TextureId, PendingUpload>,
     vertices: Vec<sdl2::render::Vertex>,
     indices: Vec<i32>,
+    /// Reused across every texture delta on the fast (non-retry) path — a
+    /// fresh `Vec` + full pixel-by-pixel copy on every icon/font-atlas upload
+    /// was a real per-frame cost during scroll bursts. Only the rare
+    /// OOM-retry path (`PendingUpload::pixels`) still needs its own owned
+    /// clone, since that one has to outlive this buffer being reused next call.
+    scratch: Vec<u8>,
 }
 
 struct SdlEguiTexture {
@@ -101,63 +107,69 @@ impl SdlEguiPainter {
         textures_delta: &egui::TexturesDelta,
     ) {
         // Give the images that ran out of video memory another go first —
-        // eviction may have freed room since.
+        // eviction may have freed room since. These already own their pixel
+        // buffer from a previous failed attempt, so no conversion needed.
         if !self.pending.is_empty() {
             let retry: Vec<egui::TextureId> =
                 self.pending.keys().copied().take(RETRIES_PER_FRAME).collect();
             for texture_id in retry {
                 let upload = self.pending.remove(&texture_id).expect("key came from the map");
-                self.upload(canvas, texture_id, upload);
+                self.upload(canvas, texture_id, upload.size, upload.pos, &upload.pixels);
             }
         }
 
+        // `scratch` is reused across every delta here instead of a fresh
+        // `Vec` per image — a real cost during icon/cover-art bursts. Taken
+        // out for the duration of the loop so `self.upload` (which needs
+        // `&mut self` for `textures`/`pending`) doesn't alias it; given back
+        // at the end so its allocation survives to the next frame.
+        let mut scratch = std::mem::take(&mut self.scratch);
         for (texture_id, delta) in &textures_delta.set {
-            let upload = PendingUpload {
-                size: delta.image.size(),
-                pos: delta.pos,
-                pixels: Self::image_to_sdl_rgba(&delta.image),
-            };
-            self.upload(canvas, *texture_id, upload);
+            scratch.clear();
+            Self::fill_sdl_rgba(&delta.image, &mut scratch);
+            self.upload(canvas, *texture_id, delta.image.size(), delta.pos, &scratch);
         }
+        self.scratch = scratch;
     }
 
-    /// Uploads one image, parking it in `pending` if video memory says no.
+    /// Uploads one image, parking a copy of `pixels` in `pending` if video
+    /// memory says no.
     fn upload(
         &mut self,
         canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
         texture_id: egui::TextureId,
-        upload: PendingUpload,
+        size: [usize; 2],
+        pos: Option<[usize; 2]>,
+        pixels: &[u8],
     ) {
         use sdl2::pixels::PixelFormatEnum;
         use sdl2::rect::Rect;
         use sdl2::render::BlendMode;
 
-        let [width, height] = upload.size;
+        let [width, height] = size;
 
-        if upload.pos.is_none() || !self.textures.contains_key(&texture_id) {
+        if pos.is_none() || !self.textures.contains_key(&texture_id) {
             let texture =
                 canvas.create_texture_streaming(PixelFormatEnum::RGBA32, width as u32, height as u32);
             let mut texture = match texture {
                 Ok(texture) => texture,
                 Err(err) => {
                     eprintln!("no room for a {width}x{height} texture, will retry: {err}");
-                    self.pending.insert(texture_id, upload);
+                    self.pending.insert(texture_id, PendingUpload { size, pos, pixels: pixels.to_vec() });
                     return;
                 }
             };
             texture.set_blend_mode(BlendMode::Blend);
-            if let Err(err) =
-                texture.update(Rect::new(0, 0, width as u32, height as u32), &upload.pixels, width * 4)
-            {
+            if let Err(err) = texture.update(Rect::new(0, 0, width as u32, height as u32), pixels, width * 4) {
                 eprintln!("couldn't upload a texture, will retry: {err}");
-                self.pending.insert(texture_id, upload);
+                self.pending.insert(texture_id, PendingUpload { size, pos, pixels: pixels.to_vec() });
                 return;
             }
             self.textures.insert(texture_id, SdlEguiTexture { texture, uv_scale: egui::vec2(1.0, 1.0) });
             return;
         }
 
-        let Some([x, y]) = upload.pos else {
+        let Some([x, y]) = pos else {
             eprintln!("partial texture update with no position, skipped");
             return;
         };
@@ -165,30 +177,29 @@ impl SdlEguiPainter {
             eprintln!("partial update for a texture that no longer exists, skipped");
             return;
         };
-        if let Err(err) = existing.texture.update(
-            Rect::new(x as i32, y as i32, width as u32, height as u32),
-            &upload.pixels,
-            width * 4,
-        ) {
+        if let Err(err) =
+            existing.texture.update(Rect::new(x as i32, y as i32, width as u32, height as u32), pixels, width * 4)
+        {
             eprintln!("couldn't patch a texture: {err}");
         }
     }
 
-    fn image_to_sdl_rgba(image: &egui::ImageData) -> Vec<u8> {
-        let mut pixels = Vec::with_capacity(image.width() * image.height() * 4);
+    /// Writes `image` into `out` as RGBA8, clearing it first. Takes an
+    /// out-param rather than returning a fresh `Vec` so callers can reuse one
+    /// allocation across many images instead of paying for one per delta.
+    fn fill_sdl_rgba(image: &egui::ImageData, out: &mut Vec<u8>) {
         match image {
             egui::ImageData::Color(image) => {
                 for pixel in &image.pixels {
-                    pixels.extend_from_slice(&pixel.to_srgba_unmultiplied());
+                    out.extend_from_slice(&pixel.to_srgba_unmultiplied());
                 }
             }
             egui::ImageData::Font(image) => {
                 for pixel in image.srgba_pixels(None) {
-                    pixels.extend_from_slice(&pixel.to_srgba_unmultiplied());
+                    out.extend_from_slice(&pixel.to_srgba_unmultiplied());
                 }
             }
         }
-        pixels
     }
 
     fn sdl_vertex(

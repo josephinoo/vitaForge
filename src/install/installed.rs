@@ -18,7 +18,11 @@ const HASH_CACHE_DIR: &str = "ux0:data/vitaforge/hashes";
 const SCAN_LOG: &str = "ux0:data/vitaforge/scan.log";
 const HASH_LEN: usize = 32;
 
-const RESCAN_INTERVAL: Duration = Duration::from_millis(750);
+// Each rescan spawns an OS thread that walks every app root and MD5s
+// installed executables — cheap once, but `back_to_catalog` requests one on
+// every single navigation, which used to keep the eMMC busy far more often
+// than installs actually change.
+const RESCAN_INTERVAL: Duration = Duration::from_secs(5);
 const HASH_CHUNK: usize = 64 * 1024;
 
 const HASH_BATCH: usize = 8;

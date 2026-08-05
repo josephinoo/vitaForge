@@ -40,28 +40,16 @@ impl Language {
         match cat {
             None => "ALL",
             Some(c) => match c {
-                crate::data::Category::Game => "Games",
-                crate::data::Category::Emulator => "Emulators",
-                crate::data::Category::Utility => "Utilities",
-                crate::data::Category::Port => "Ports",
-                crate::data::Category::Plugin => "Plugins",
-                crate::data::Category::Media => "Media",
-                crate::data::Category::Theme => "Themes",
+                crate::data::Category::Emulator => "Emulator",
+                crate::data::Category::Original => "Original",
+                crate::data::Category::PsVitaGame => "PS Vita Game",
+                crate::data::Category::Ps1Game => "PS1 Game",
+                crate::data::Category::PspGame => "PSP Game",
+                crate::data::Category::Plugin => "Plugin",
+                crate::data::Category::Port => "Port",
+                crate::data::Category::Tool => "Tool",
+                crate::data::Category::Utility => "Utility",
                 crate::data::Category::Other => "Other",
-            },
-        }
-    }
-
-    pub fn platform_label(self, plat: Option<crate::data::Platform>) -> &'static str {
-        match plat {
-            None => "CONSOLE: ALL",
-            Some(p) => match p {
-                crate::data::Platform::Vita => "PS Vita (Homebrew)",
-                crate::data::Platform::Psp => "PSP",
-                crate::data::Platform::Plugin => "Plugins",
-                crate::data::Platform::NpsVita => "PS Vita (NPS)",
-                crate::data::Platform::NpsPsp => "PSP (NPS)",
-                crate::data::Platform::NpsPsx => "PS1 (NPS)",
             },
         }
     }

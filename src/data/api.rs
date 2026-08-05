@@ -183,6 +183,7 @@ impl RawApp {
             release_page,
             category,
             platform,
+            kind: self.kind.clone(),
             icon_url,
             cover_url: self.cover_url.as_ref().map(|u| absolute(u)).or_else(|| self.screenshot_urls.first().map(|u| absolute(u))),
             background_url: self.background_url.as_ref().map(|u| absolute(u)),
@@ -238,22 +239,13 @@ struct AppsPage {
 }
 
 /// Fetches the full catalog by paging through `GET /apps` until a short page.
-/// Returns `None` when the server reports the catalog is unchanged (304 on page 1).
-pub async fn fetch_catalog(etag: Option<&str>) -> anyhow::Result<CatalogFetch> {
-    let mut first_request = request(reqwest::Method::GET, "/apps")
-        .query(&[("page", "1"), ("limit", &PAGE_LIMIT.to_string())]);
-    if let Some(etag) = etag {
-        first_request = first_request.header("If-None-Match", etag);
-    }
-    let first_response = first_request.send().await?;
-    if first_response.status() == reqwest::StatusCode::NOT_MODIFIED {
-        return Ok(CatalogFetch::NotModified);
-    }
-    let new_etag = first_response
-        .headers()
-        .get(reqwest::header::ETAG)
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_owned);
+/// Always a full, unconditional fetch — nothing is cached client-side to
+/// compare an ETag against, so there is no `If-None-Match` to send.
+pub async fn fetch_catalog() -> anyhow::Result<Vec<AppEntry>> {
+    let first_response = request(reqwest::Method::GET, "/apps")
+        .query(&[("page", "1"), ("limit", &PAGE_LIMIT.to_string())])
+        .send()
+        .await?;
     let first_page: AppsPage = first_response.json().await?;
     let mut last_page_len = first_page.data.len();
     let mut entries: Vec<AppEntry> =
@@ -271,12 +263,7 @@ pub async fn fetch_catalog(etag: Option<&str>) -> anyhow::Result<CatalogFetch> {
         entries.extend(raw.data.into_iter().filter_map(RawApp::into_app_entry));
         page += 1;
     }
-    Ok(CatalogFetch::Fresh { entries, etag: new_etag })
-}
-
-pub enum CatalogFetch {
-    Fresh { entries: Vec<AppEntry>, etag: Option<String> },
-    NotModified,
+    Ok(entries)
 }
 
 /// The parts of an app that change through other people's activity and this

@@ -3,7 +3,7 @@ pub mod icons;
 pub mod text;
 pub mod ui;
 
-use crate::data::{self, AppEntry, Category, SortOrder, Platform};
+use crate::data::{self, AppEntry, Category, SortOrder, SourceCatalog};
 use crate::input::{AppCommand, InputCommand};
 use anyhow::Result;
 use i18n::Language;
@@ -17,13 +17,19 @@ pub struct CatalogState {
     pub filtered_indices: Vec<usize>,
     pub search_query: String,
     pub search_requested: bool,
+    /// Scoped to `source_filter`: only categories present in the selected
+    /// catalog are ever offered, same as vitaforge-core's own filter form.
     pub category_filter: Option<Category>,
-    pub platform_filter: Option<Platform>,
+    pub source_filter: Option<SourceCatalog>,
     pub sort_order: SortOrder,
     pub selected: usize,
 
     pub selection_active: bool,
     pub scroll_to_selected: bool,
+    /// Whether any currently-filtered entry uses commercial (box-art) cover
+    /// art rather than a homebrew icon — decides the grid's aspect ratio.
+    /// Computed once per filter change instead of scanned every frame.
+    pub is_commercial_view: bool,
 }
 
 impl CatalogState {
@@ -35,11 +41,12 @@ impl CatalogState {
             search_query: String::new(),
             search_requested: false,
             category_filter: None,
-            platform_filter: None,
+            source_filter: None,
             sort_order: SortOrder::Downloads,
             selected: 0,
             selection_active: false,
             scroll_to_selected: false,
+            is_commercial_view: false,
         };
         state.resort();
         state
@@ -53,12 +60,23 @@ impl CatalogState {
             search_query: String::new(),
             search_requested: false,
             category_filter: None,
-            platform_filter: None,
+            source_filter: None,
             sort_order: SortOrder::Downloads,
             selected: 0,
             selection_active: false,
             scroll_to_selected: false,
+            is_commercial_view: false,
         }
+    }
+
+    /// Swaps in a freshly-fetched catalog while keeping the user's current
+    /// sort/filter/search picks and scroll position — used when the live
+    /// fetch lands after the catalog was already showing (e.g. restored
+    /// from `cache.json`), instead of building a whole new `CatalogState`
+    /// and silently resetting everything the user had set up.
+    fn replace_apps(&mut self, apps: Vec<AppEntry>) {
+        self.apps = apps;
+        self.resort();
     }
 
     fn resort(&mut self) {
@@ -79,7 +97,7 @@ impl CatalogState {
         let query = self.search_query.trim().to_lowercase();
         let apps = &self.apps;
         let category_filter = self.category_filter;
-        let platform_filter = self.platform_filter;
+        let source_filter = self.source_filter;
 
         self.filtered_indices = self
             .sorted_indices
@@ -88,17 +106,9 @@ impl CatalogState {
             .filter(|&index| {
                 let app = &apps[index];
                 let matches_cat = category_filter.is_none_or(|c| c as u8 == app.category as u8);
-                let matches_plat = platform_filter.is_none_or(|p| {
-                    match p {
-                        Platform::Vita => app.platform == Platform::Vita,
-                        Platform::Psp | Platform::NpsPsp => matches!(app.platform, Platform::Psp | Platform::NpsPsp),
-                        Platform::NpsPsx => app.platform == Platform::NpsPsx,
-                        Platform::NpsVita => app.platform == Platform::NpsVita,
-                        Platform::Plugin => app.platform == Platform::Plugin,
-                    }
-                });
+                let matches_source = source_filter.is_none_or(|s| s.matches(&app.source_catalog));
                 matches_cat
-                    && matches_plat
+                    && matches_source
                     && (query.is_empty()
                         || app.name_lower.contains(&query)
                         || app.author.to_lowercase().contains(&query)
@@ -114,6 +124,14 @@ impl CatalogState {
             self.selection_active = true;
             self.scroll_to_selected = true;
         }
+
+        // Recomputed here (once per filter change) instead of every frame: a
+        // "mixed" view still gets 2:3 box-art cards as soon as any commercial
+        // entry is present; an all-homebrew view stays square.
+        self.is_commercial_view = self
+            .filtered_indices
+            .iter()
+            .any(|&index| self.apps.get(index).is_some_and(|e| e.platform.is_commercial()));
     }
 
     fn move_selection(&mut self, delta: isize) {
@@ -180,6 +198,8 @@ pub struct InstallJob {
     pub app_id: String,
 
     pub app_id_title: String,
+    /// Human-readable name, used for the system notification on completion.
+    pub title: String,
     pub progress: crate::install::Progress,
     rx: watch::Receiver<crate::install::Progress>,
 }
@@ -189,24 +209,12 @@ impl App {
         let (tx, rx) = oneshot::channel();
         tokio::spawn(async move {
             let result = match data::source::fetch_live().await {
-                Ok(Some(apps)) if !apps.is_empty() => {
-
-                    let apps = tokio::task::spawn_blocking(move || {
-                        data::source::save_cache(&apps);
-                        apps
-                    })
-                    .await
-                    .unwrap_or_else(|err| {
-                        eprintln!("catalog cache worker crashed: {err}");
-                        Vec::new()
-                    });
-                    if apps.is_empty() { CatalogSource::Failed } else { CatalogSource::Live(apps) }
-                }
+                Ok(apps) if !apps.is_empty() => CatalogSource::Live(apps),
                 Ok(_) => CatalogSource::Failed,
-            Err(err) => {
-                eprintln!("live catalog fetch failed: {err:#}");
-                CatalogSource::Failed
-            }
+                Err(err) => {
+                    eprintln!("live catalog fetch failed: {err:#}");
+                    CatalogSource::Failed
+                }
             };
             let _ = tx.send(result);
         });
@@ -225,15 +233,8 @@ impl App {
             }
         });
 
-        let cached = data::source::initial_catalog();
-        let state = if cached.is_empty() {
-            AppState::Loading
-        } else {
-            AppState::Catalog(CatalogState::new(cached))
-        };
-
         Ok(Self {
-            state,
+            state: AppState::Loading,
             icons: IconCache::new(),
             installed: crate::install::installed::InstalledIndex::new(),
             lang: Language::detect(),
@@ -269,12 +270,17 @@ impl App {
 
             if previous != job.progress && job.progress == crate::install::Progress::Done {
                 self.installed.mark_installed(&job.app_id_title);
+                crate::install::notify::install_finished(&job.title);
                 let app_id = job.app_id.clone();
                 tokio::spawn(async move {
                     if let Err(err) = data::api::notify_install(&app_id).await {
                         eprintln!("install counter notify failed: {err:#}");
                     }
                 });
+            } else if let crate::install::Progress::Failed(reason) = &job.progress
+                && previous != job.progress
+            {
+                crate::install::notify::install_failed(&job.title, reason);
             }
         }
 
@@ -323,18 +329,37 @@ impl App {
 
             Ok(CatalogSource::Live(apps)) => {
                 self.load_rx = None;
-                if matches!(self.state, AppState::Loading) && !self.install_busy() {
-                    let catalog = CatalogState::new(apps);
-                    self.installed.force_refresh(ctx, &catalog.apps);
-                    self.state = AppState::Catalog(catalog);
+                if !self.install_busy() {
+                    match &mut self.state {
+                        AppState::Loading => {
+                            let catalog = CatalogState::new(apps);
+                            self.installed.force_refresh(ctx, &catalog.apps);
+                            self.state = AppState::Catalog(catalog);
+                        }
+                        // A cache already populated the catalog before this
+                        // fetch landed — update it in place instead of
+                        // discarding the fresh data, which is what silently
+                        // left stale entries on screen forever once a
+                        // `cache.json` existed.
+                        AppState::Catalog(catalog) => {
+                            catalog.replace_apps(apps);
+                            self.installed.force_refresh(ctx, &catalog.apps);
+                        }
+                        AppState::Detail { previous, .. } => {
+                            previous.replace_apps(apps);
+                            self.installed.force_refresh(ctx, &previous.apps);
+                        }
+                    }
                     ctx.request_repaint();
                 }
             }
             Ok(CatalogSource::Failed) => {
                 self.load_rx = None;
+                // No on-disk fallback anymore — a failed fetch means an
+                // empty catalog (the "no homebrews found" screen) rather
+                // than silently reusing stale data.
                 if matches!(self.state, AppState::Loading) && !self.install_busy() {
-                    let catalog = CatalogState::new(data::source::initial_catalog());
-                    self.installed.force_refresh(ctx, &catalog.apps);
+                    let catalog = CatalogState::new(Vec::new());
                     self.state = AppState::Catalog(catalog);
                     ctx.request_repaint();
                 }
@@ -373,9 +398,13 @@ impl App {
                     catalog.refresh_filter();
                 }
             }
-            AppCommand::SetPlatformFilter(platform) => {
+            AppCommand::SetSourceFilter(source) => {
                 if let AppState::Catalog(catalog) = &mut self.state {
-                    catalog.platform_filter = platform;
+                    catalog.source_filter = source;
+                    // Changing the catalog can invalidate the current category
+                    // pick (e.g. "PS Vita Game" only exists under PKGj) — clear
+                    // it rather than leave a filter that now matches nothing.
+                    catalog.category_filter = None;
                     catalog.refresh_filter();
                 }
             }
@@ -466,9 +495,10 @@ impl App {
                     let entry = app.clone();
                     let app_id = entry.id.clone();
                     let app_id_title = crate::install::installed::index_key(&entry);
+                    let title = entry.name.clone();
                     let rx = crate::install::start(entry);
                     let progress = rx.borrow().clone();
-                    self.install = Some(InstallJob { app_id, app_id_title, progress, rx });
+                    self.install = Some(InstallJob { app_id, app_id_title, title, progress, rx });
                 }
             }
             AppCommand::DismissInstall => self.install = None,
@@ -493,6 +523,7 @@ impl App {
                         release_page: Some("https://github.com/josephinoo/vitaForge/releases".to_owned()),
                         category: Category::Utility,
                         platform: crate::data::Platform::Vita,
+                        kind: "app".to_owned(),
                         icon_url: None,
                         cover_url: None,
                         background_url: None,
@@ -519,9 +550,10 @@ impl App {
                     };
                     let app_id = entry.id.clone();
                     let app_id_title = entry.titleid.clone();
+                    let title = entry.name.clone();
                     let rx = crate::install::start(entry);
                     let progress = rx.borrow().clone();
-                    self.install = Some(InstallJob { app_id, app_id_title, progress, rx });
+                    self.install = Some(InstallJob { app_id, app_id_title, title, progress, rx });
                 }
             }
             AppCommand::ToggleLike => {

@@ -28,7 +28,7 @@ pub enum AppCommand {
     RequestSearch,
     CloseSearch,
     SetCategoryFilter(Option<crate::data::Category>),
-    SetPlatformFilter(Option<crate::data::Platform>),
+    SetSourceFilter(Option<crate::data::SourceCatalog>),
     SetSortOrder(crate::data::SortOrder),
     SelectApp { index: usize, origin: Option<egui::Rect> },
     BackToCatalog,

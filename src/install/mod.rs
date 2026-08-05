@@ -1,6 +1,9 @@
+pub mod download;
 pub mod github;
 mod head;
 pub mod installed;
+pub mod notify;
+pub mod pkg;
 mod promoter;
 mod sfo;
 mod bgdl;
@@ -15,6 +18,8 @@ const WORK_DIR: &str = "ux0:data/vitaforge";
 const TEMP_VPK: &str = "ux0:data/vitaforge/tmp.vpk";
 const EXTRACT_DIR: &str = "ux0:data/vitaforge/vpk_install";
 const TEMP_DATA: &str = "ux0:data/vitaforge/tmp_data.zip";
+const TEMP_PKG: &str = "ux0:data/vitaforge/tmp.pkg";
+const PKG_STAGE_DIR: &str = "ux0:data/vitaforge/pkg_stage";
 
 const DATA_STAGE_DIR: &str = "ux0:data/vitaforge/data_stage";
 const DATA_ROOT: &str = "ux0:data";
@@ -27,6 +32,8 @@ pub enum Progress {
     Resolving,
     DownloadingData { received: u64, total: Option<u64> },
     Downloading { received: u64, total: Option<u64> },
+    /// In-app PKG decryption/extraction, as opposed to `Extracting` (VPK/ZIP).
+    Decrypting,
     Extracting,
     Installing,
     /// Handed off to the system's native background downloader (BGDL) —
@@ -52,6 +59,7 @@ impl Progress {
                 }
                 _ => format!("[1/3] Game data {:.1} MB", *received as f64 / (1024.0 * 1024.0)),
             },
+            Progress::Decrypting => "[3/3] Decrypting…".to_owned(),
             Progress::Extracting => "[3/3] Extracting…".to_owned(),
             Progress::Installing => "[3/3] Installing…".to_owned(),
             Progress::Queued => "Queued — check Notifications".to_owned(),
@@ -101,13 +109,111 @@ async fn run_nps_vita(entry: &AppEntry, tx: &watch::Sender<Progress>) -> Result<
         bail!("no download link for this NPS game");
     }
 
-    let _ = tx.send(Progress::Installing);
+    std::fs::create_dir_all(WORK_DIR).context("couldn't create the work folder")?;
+    let pkg_path = Path::new(TEMP_PKG);
+    download(&entry.download_url, pkg_path, tx).await?;
 
+    match install_vita_pkg(entry, tx, pkg_path).await {
+        Ok(state) => Ok(state),
+        Err(err) => {
+            eprintln!("in-app pkg install failed for {}, falling back to BGDL: {err:#}", entry.name);
+            let _ = std::fs::remove_file(pkg_path);
+            queue_bgdl_vita(entry, tx).await
+        }
+    }
+}
+
+/// Decrypts and extracts a downloaded `.pkg` in-app and promotes it directly
+/// — no BGDL handoff, no leaving the app. Falls through to an `Err` (handled
+/// by the caller, which retries via BGDL) for anything this extractor
+/// doesn't support: PSM content, an unrecognized key type, or a malformed pkg.
+async fn install_vita_pkg(entry: &AppEntry, tx: &watch::Sender<Progress>, pkg_path: &Path) -> Result<Progress> {
+    let _ = tx.send(Progress::Decrypting);
+
+    let content_id = licensing::resolve_content_id(entry).unwrap_or_default();
+    let fake_license = licensing::create_fake_license(&content_id);
+
+    let stage_dir = format!("{PKG_STAGE_DIR}/{}", entry.titleid.trim().to_uppercase());
+    let _ = std::fs::remove_dir_all(&stage_dir);
+
+    let pkg_path_owned = pkg_path.to_path_buf();
+    let stage_dir_worker = stage_dir.clone();
+    let header = tokio::task::spawn_blocking(move || {
+        pkg::extract_vita(&pkg_path_owned, Path::new(&stage_dir_worker), &fake_license)
+    })
+    .await
+    .context("the pkg extract worker crashed")??;
+    let _ = std::fs::remove_file(pkg_path);
+
+    // Cheap sanity check: if the catalog's content_id disagrees with what was
+    // actually inside the pkg, the fake license above was built for the wrong
+    // title and the promoter will very likely reject the package.
+    if !content_id.is_empty() && content_id != header.content_id {
+        eprintln!(
+            "warning: catalog content_id '{content_id}' doesn't match the pkg's own '{}' for {}",
+            header.content_id, entry.name
+        );
+    }
+
+    let titleid = header.title_id.clone();
+    if !titleid.is_empty() {
+        for root in &["ux0:app", "ur0:app", "uma0:app"] {
+            let path = format!("{root}/{titleid}");
+            if installed::vita_fs::exists(&path) || Path::new(&path).exists() {
+                if let Err(err) = std::fs::remove_dir_all(&path) {
+                    eprintln!("couldn't clear the previous install at {path}: {err}");
+                }
+            }
+        }
+    }
+
+    let _ = tx.send(Progress::Installing);
+    let stage_dir_promote = stage_dir.clone();
+    tokio::task::spawn_blocking(move || promoter::promote_package(&stage_dir_promote))
+        .await
+        .context("the install worker crashed")??;
+
+    if Path::new(&stage_dir).exists() {
+        let _ = std::fs::remove_dir_all(&stage_dir);
+        bail!("the system didn't accept the package");
+    }
+
+    installed::stamp_pending_install(&installed::index_key(entry), &entry.hash, None);
+    Ok(Progress::Done)
+}
+
+/// Decrypts and extracts a downloaded PS1 `.pkg` in-app straight into
+/// `ux0:pspemu/PSP/GAME/{title_id}` — no ISO conversion needed for PSX
+/// content, just `EBOOT.PBP` + `DOCUMENT.DAT`. Falls through to `Err` (the
+/// caller retries via BGDL) on anything unsupported.
+async fn install_psx_pkg(entry: &AppEntry, tx: &watch::Sender<Progress>, pkg_path: &Path) -> Result<Progress> {
+    let _ = tx.send(Progress::Decrypting);
+
+    let dest = PathBuf::from(PSP_GAME_DIR).join(entry.titleid.trim());
+    let pkg_path_owned = pkg_path.to_path_buf();
+    let dest_worker = dest.clone();
+    tokio::task::spawn_blocking(move || pkg::extract_psx(&pkg_path_owned, &dest_worker))
+        .await
+        .context("the pkg extract worker crashed")??;
+    let _ = std::fs::remove_file(pkg_path);
+
+    let content_id = licensing::resolve_content_id(entry)?;
+    let psp_license = licensing::create_fake_license(&content_id);
+    std::fs::create_dir_all("ux0:pspemu/PSP/LICENSE").context("couldn't create the PSP license folder")?;
+    std::fs::write(format!("ux0:pspemu/PSP/LICENSE/{content_id}.rif"), &psp_license)
+        .context("couldn't write the PSP license file")?;
+
+    installed::stamp_pending_install(&installed::index_key(entry), &entry.hash, None);
+    Ok(Progress::Done)
+}
+
+/// Best-effort fallback for content this extractor doesn't (yet) support in
+/// app: hands the download URL to the system's native background downloader,
+/// same as before this feature existed. The install then finishes outside
+/// VitaForge, visible in Notifications/LiveArea.
+async fn queue_bgdl_vita(entry: &AppEntry, _tx: &watch::Sender<Progress>) -> Result<Progress> {
     stage_bgdl_icon(entry).await;
 
-    // NoNpDrm-style fake license, same trick as the PSP/PS1 path — best
-    // effort: if we can't resolve a content ID, queue without one rather
-    // than failing the whole install (some titles may already be licensed).
     let license = match licensing::resolve_content_id(entry) {
         Ok(content_id) => Some(licensing::create_fake_license(&content_id)),
         Err(err) => {
@@ -116,7 +222,6 @@ async fn run_nps_vita(entry: &AppEntry, tx: &watch::Sender<Progress>) -> Result<
         }
     };
 
-    // Hand off to the Vita's native background downloader
     bgdl::start_bgdl(&entry.name, &entry.download_url, license.as_deref(), bgdl::BGDL_TYPE_GAME)
         .context("Failed to queue background download (BGDL)")?;
 
@@ -138,6 +243,24 @@ async fn run_psp(entry: &AppEntry, tx: &watch::Sender<Progress>) -> Result<Progr
                 "This PSP/PS1 game needs the NoPspEmuDrm_kern plugin. Install it from the \
                  Plugins tab and restart the console before trying again."
             );
+        }
+
+        // PS1 packages can be decrypted and extracted in-app (EBOOT.PBP +
+        // DOCUMENT.DAT are a direct pull, no ISO conversion needed). PSP
+        // packages need a KIRK-based EBOOT→ISO conversion this extractor
+        // doesn't implement yet, so they always go through BGDL.
+        if entry.platform == crate::data::Platform::NpsPsx {
+            std::fs::create_dir_all(WORK_DIR).context("couldn't create the work folder")?;
+            let pkg_path = Path::new(TEMP_PKG);
+            download(&entry.download_url, pkg_path, tx).await?;
+
+            match install_psx_pkg(entry, tx, pkg_path).await {
+                Ok(state) => return Ok(state),
+                Err(err) => {
+                    eprintln!("in-app pkg install failed for {}, falling back to BGDL: {err:#}", entry.name);
+                    let _ = std::fs::remove_file(pkg_path);
+                }
+            }
         }
 
         let _ = tx.send(Progress::Installing);
@@ -313,54 +436,11 @@ async fn download_with(
     url: &str,
     dest: &Path,
     tx: &watch::Sender<Progress>,
-    progress: impl Fn(u64, Option<u64>) -> Progress + Copy,
+    progress: fn(u64, Option<u64>) -> Progress,
 ) -> Result<()> {
-    let mut last_err = anyhow::anyhow!("download not attempted");
-    for attempt in 0u32..3 {
-        if attempt > 0 {
-            tokio::time::sleep(std::time::Duration::from_secs(2u64.pow(attempt))).await;
-            eprintln!("retrying download (attempt {}): {url}", attempt + 1);
-        }
-        match download_attempt(url, dest, tx, progress).await {
-            Ok(()) => return Ok(()),
-            Err(e) => {
-                last_err = e;
-            }
-        }
-    }
-    Err(last_err)
-}
-
-async fn download_attempt(
-    url: &str,
-    dest: &Path,
-    tx: &watch::Sender<Progress>,
-    progress: impl Fn(u64, Option<u64>) -> Progress,
-) -> Result<()> {
-    use futures_util::StreamExt;
-
-    let response = crate::net::client()
-        .get(url)
-        .header("User-Agent", "VitaForge")
-        .send()
-        .await
-        .context("couldn't reach the download server")?;
-    if !response.status().is_success() {
-        bail!("download server returned {}", response.status());
-    }
-
-    let total = response.content_length();
-    let mut received = 0u64;
-    let mut file = std::fs::File::create(dest).context("couldn't open the temp file")?;
-    let mut stream = response.bytes_stream();
-
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.context("the download was interrupted")?;
-        std::io::Write::write_all(&mut file, &chunk).context("couldn't write the download")?;
-        received += chunk.len() as u64;
-        let _ = tx.send(progress(received, total));
-    }
-    Ok(())
+    let mut sink = download::FileSink::open(dest)?;
+    let mut reporter = download::ProgressReporter::new(tx, progress);
+    download::fetch_to(url, &mut sink, &mut reporter).await
 }
 
 fn extract(archive: &Path, dest: &Path) -> Result<()> {

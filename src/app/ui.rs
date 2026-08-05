@@ -218,11 +218,12 @@ pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
             &catalog.search_query,
             catalog.search_requested,
             catalog.category_filter,
-            catalog.platform_filter,
+            catalog.source_filter,
             catalog.sort_order,
             catalog.selection_active.then_some(catalog.selected),
             catalog.scroll_to_selected,
             app.self_update.as_ref(),
+            catalog.is_commercial_view,
         ),
         AppState::Detail { app: entry, scroll_offset, comments, comments_loaded, comment_entry_requested, .. } => {
             let progress = app
@@ -308,9 +309,13 @@ fn loading_screen(
                             ui.label(egui::RichText::new("Bringing catalog information from databases...").color(TEXT_DIM).size(FONT_BODY));
                             
                             ui.add_space(12.0);
+                            // No `.animate(true)`: that shimmer calls
+                            // `ctx.request_repaint()` (no delay) on its own,
+                            // which overrides the 10fps throttle this screen
+                            // asks for below — the determinate fraction
+                            // already conveys progress without it.
                             let progress_bar = egui::ProgressBar::new(progress_val)
-                                .text(format!("{:.0}%", progress_val * 100.0))
-                                .animate(true);
+                                .text(format!("{:.0}%", progress_val * 100.0));
                             ui.add_sized([220.0, 16.0], progress_bar);
 
                             ui.add_space(8.0);
@@ -323,12 +328,31 @@ fn loading_screen(
                         }
 
                         ui.add_space(16.0);
-                        ui.add(egui::Spinner::new().size(24.0).color(ACCENT_STEAM));
+                        // Hand-drawn instead of `egui::Spinner`: the built-in
+                        // widget calls `ctx.request_repaint()` (no delay,
+                        // i.e. "next frame please") every time it's visible,
+                        // which silently overrides the 10fps throttle this
+                        // screen asks for below and pins it back to 60fps.
+                        let (spinner_rect, _) =
+                            ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover());
+                        let time = ui.input(|i| i.time);
+                        let angle = time * 4.0;
+                        let center = spinner_rect.center();
+                        let radius = spinner_rect.width() * 0.4;
+                        let n_dots = 8;
+                        for i in 0..n_dots {
+                            let dot_angle = angle + (i as f64 * std::f64::consts::TAU / n_dots as f64);
+                            let pos = center + egui::vec2(dot_angle.cos() as f32, dot_angle.sin() as f32) * radius;
+                            let alpha = (i as f32 / n_dots as f32).powf(1.5);
+                            ui.painter().circle_filled(pos, 2.2, ACCENT_STEAM.gamma_multiply(0.2 + 0.8 * alpha));
+                        }
                     },
                 );
             });
         });
-    ctx.request_repaint();
+    // 10 fps still reads as motion for the spinner/progress bar, and this
+    // screen is the app's boot/catalog-fetch wait — no reason to pin 60 fps.
+    ctx.request_repaint_after(std::time::Duration::from_millis(100));
     Vec::new()
 }
 
@@ -342,11 +366,12 @@ fn catalog_screen(
     search_query: &str,
     search_active: bool,
     category_filter: Option<Category>,
-    platform_filter: Option<Platform>,
+    source_filter: Option<crate::data::SourceCatalog>,
     sort_order: SortOrder,
     selected: Option<usize>,
     scroll_to_selected: bool,
     self_update: Option<&super::SelfUpdateInfo>,
+    is_commercial_view: bool,
 ) -> Vec<AppCommand> {
     let mut commands = Vec::new();
 
@@ -410,16 +435,20 @@ fn catalog_screen(
                 if let Some(picked) = sort_dropdown(ui, lang, sort_order) {
                     commands.push(AppCommand::SetSortOrder(picked));
                 }
+            });
 
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if let Some(picked) = category_dropdown(ui, lang, apps, category_filter) {
-                        commands.push(AppCommand::SetCategoryFilter(picked));
-                    }
-                    ui.add_space(8.0);
-                    if let Some(picked) = platform_dropdown(ui, lang, apps, platform_filter) {
-                        commands.push(AppCommand::SetPlatformFilter(picked));
-                    }
-                });
+            ui.add_space(8.0);
+            // Exactly two filters: catalog first, then category — picking a
+            // catalog here narrows which categories show up next (e.g. PKGj
+            // only ever offers "PS Vita Game"/"PS1 Game"/"PSP Game").
+            ui.horizontal(|ui| {
+                if let Some(picked) = source_dropdown(ui, apps, source_filter) {
+                    commands.push(AppCommand::SetSourceFilter(picked));
+                }
+                ui.add_space(8.0);
+                if let Some(picked) = category_dropdown(ui, lang, apps, source_filter, category_filter) {
+                    commands.push(AppCommand::SetCategoryFilter(picked));
+                }
             });
             ui.add_space(12.0);
 
@@ -439,9 +468,8 @@ fn catalog_screen(
             // track each entry's platform individually — but it can track what's
             // actually visible instead of the global filter. A "mixed" view (filter
             // off) still gets 2:3 cards as soon as any commercial entry is present;
-            // a view that's entirely homebrew stays square.
-            let is_commercial_view =
-                filtered_indices.iter().any(|&i| apps.get(i).is_some_and(|e| is_commercial_platform(e.platform)));
+            // a view that's entirely homebrew stays square. Computed once in
+            // `CatalogState::refresh_filter` rather than scanned here every frame.
             let aspect_ratio = if is_commercial_view { 1.5 } else { 1.0 };
 
             let card_width = (available - GRID_SPACING * (GRID_COLUMNS as f32 - 1.0)) / GRID_COLUMNS as f32;
@@ -587,21 +615,22 @@ fn sort_dropdown(ui: &mut egui::Ui, lang: Language, sort_order: SortOrder) -> Op
     picked
 }
 
-fn platform_dropdown(
+/// The `source` filter — mirrors vitaforge-core's `<select name="source">`:
+/// "All catalogs", then VitaDBtoo, then PKGj.
+fn source_dropdown(
     ui: &mut egui::Ui,
-    lang: Language,
     apps: &[crate::data::AppEntry],
-    platform_filter: Option<Platform>,
-) -> Option<Option<Platform>> {
-    let popup_id = ui.make_persistent_id("platform_dropdown");
-    let label = lang.platform_label(platform_filter);
+    source_filter: Option<crate::data::SourceCatalog>,
+) -> Option<Option<crate::data::SourceCatalog>> {
+    let popup_id = ui.make_persistent_id("source_dropdown");
+    let label = source_filter.map_or("All catalogs", crate::data::SourceCatalog::label);
     let galley = ui.fonts(|f| f.layout_no_wrap(label.to_owned(), font(FONT_SMALL), ACCENT_CYAN));
     let size = egui::vec2((galley.size().x + 34.0).max(96.0), 26.0);
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
     let hover_t = ui.ctx().animate_bool_with_time(response.id.with("hover"), response.hovered(), HOVER_ANIM_SECS);
     let open = ui.memory(|mem| mem.is_popup_open(popup_id));
 
-    let border = if open || platform_filter.is_some() { ACCENT_CYAN } else { SEPARATOR };
+    let border = if open || source_filter.is_some() { ACCENT_CYAN } else { SEPARATOR };
     ui.painter().rect_filled(rect, rect.height() / 2.0, BG_CARD.lerp_to_gamma(BG_CARD_HOVER, hover_t));
     ui.painter().rect_stroke(rect, rect.height() / 2.0, egui::Stroke::new(1.0_f32, border), egui::StrokeKind::Inside);
     ui.painter().galley(
@@ -619,27 +648,18 @@ fn platform_dropdown(
     egui::popup_below_widget(ui, popup_id, &response, egui::PopupCloseBehavior::CloseOnClick, |ui| {
         ui.set_min_width(180.0);
         ui.spacing_mut().item_spacing.y = 2.0;
-        let all_label = format!("All consoles ({})", apps.len());
-        if dropdown_row(ui, &all_label, platform_filter.is_none()) {
+        let all_label = format!("All catalogs ({})", apps.len());
+        if dropdown_row(ui, &all_label, source_filter.is_none()) {
             picked = Some(None);
         }
-        for plat in Platform::ALL {
-            let count = apps.iter().filter(|app| {
-                match plat {
-                    Platform::Vita => app.platform == Platform::Vita,
-                    Platform::Psp => matches!(app.platform, Platform::Psp | Platform::NpsPsp),
-                    Platform::NpsPsx => app.platform == Platform::NpsPsx,
-                    Platform::NpsVita => app.platform == Platform::NpsVita,
-                    Platform::Plugin => app.platform == Platform::Plugin,
-                    _ => false,
-                }
-            }).count();
+        for source in crate::data::SourceCatalog::ALL {
+            let count = apps.iter().filter(|app| source.matches(&app.source_catalog)).count();
             if count == 0 {
                 continue;
             }
-            let row_label = format!("{} ({})", lang.platform_label(Some(plat)), count);
-            if dropdown_row(ui, &row_label, platform_filter == Some(plat)) {
-                picked = Some(Some(plat));
+            let row_label = format!("{} ({count})", source.label());
+            if dropdown_row(ui, &row_label, source_filter == Some(source)) {
+                picked = Some(Some(source));
             }
         }
     });
@@ -647,12 +667,19 @@ fn platform_dropdown(
     picked
 }
 
+/// The `category` filter — mirrors vitaforge-core's `<select name="category">`,
+/// but scoped to `source_filter`: picking a catalog first narrows which
+/// categories are offered next (PKGj only ever has "PS Vita Game"/"PS1
+/// Game"/"PSP Game"; VitaDBtoo has Emulator/Original/Plugin/Port/Tool/Utility).
 fn category_dropdown(
     ui: &mut egui::Ui,
     lang: Language,
     apps: &[crate::data::AppEntry],
+    source_filter: Option<crate::data::SourceCatalog>,
     category_filter: Option<Category>,
 ) -> Option<Option<Category>> {
+    let scoped = || apps.iter().filter(move |app| source_filter.is_none_or(|s| s.matches(&app.source_catalog)));
+
     let popup_id = ui.make_persistent_id("category_dropdown");
     let label = lang.category_label(category_filter);
     let galley = ui.fonts(|f| f.layout_no_wrap(label.to_owned(), font(FONT_SMALL), ACCENT_CYAN));
@@ -679,12 +706,12 @@ fn category_dropdown(
     egui::popup_below_widget(ui, popup_id, &response, egui::PopupCloseBehavior::CloseOnClick, |ui| {
         ui.set_min_width(180.0);
         ui.spacing_mut().item_spacing.y = 2.0;
-        let all_label = format!("All categories ({})", apps.len());
+        let all_label = format!("All categories ({})", scoped().count());
         if dropdown_row(ui, &all_label, category_filter.is_none()) {
             picked = Some(None);
         }
         for category in Category::ALL {
-            let count = apps.iter().filter(|app| app.category == category).count();
+            let count = scoped().filter(|app| app.category == category).count();
             if count == 0 {
                 continue;
             }
@@ -770,17 +797,11 @@ fn cover_card(
 /// Commercial (NPS/PSP) entries flip the preference: their box-art cover is
 /// the recognizable asset, the icon is a generic platform glyph.
 fn tile_art_url(entry: &crate::data::AppEntry) -> Option<&str> {
-    if is_commercial_platform(entry.platform) {
+    if entry.platform.is_commercial() {
         entry.cover_url.as_deref().or(entry.icon_url.as_deref())
     } else {
         entry.icon_url.as_deref().or(entry.cover_url.as_deref())
     }
-}
-
-/// Platforms whose catalog art is physical-box cover art (2:3) rather than a
-/// square homebrew icon.
-fn is_commercial_platform(platform: Platform) -> bool {
-    platform.is_nps() || matches!(platform, Platform::Psp)
 }
 
 /// Computes the UV rect that crops `texture_size` to `rect`'s aspect ratio
@@ -1251,7 +1272,7 @@ fn detail_screen(
         .show(ctx, |ui| {
 
             if paint_hero(ui, icons, entry) {
-                ui.ctx().request_repaint();
+                ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
             }
             egui::ScrollArea::vertical()
                 .id_salt(&entry.id)
@@ -1629,7 +1650,10 @@ fn install_status(ui: &mut egui::Ui, progress: &crate::install::Progress) -> boo
         text_color,
     );
     if !finished {
-        ui.ctx().request_repaint();
+        // Progress text only needs to refresh a few times a second, not at
+        // full frame rate — this pill used to pin 60 fps for the whole
+        // duration of every install.
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
     }
 
     response.clicked()
@@ -1720,7 +1744,7 @@ fn draw_screenshot(
             let alpha = (i as f32 / n_dots as f32).powf(1.5);
             ui.painter().circle_filled(pos, 2.5, color.gamma_multiply(0.2 + 0.8 * alpha));
         }
-        ui.ctx().request_repaint();
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
     } else {
         ui.painter().text(
             rect.center(),
@@ -1734,13 +1758,15 @@ fn draw_screenshot(
 
 fn category_color(category: Category) -> egui::Color32 {
     match category {
-        Category::Game => egui::Color32::from_rgb(0x3b, 0x82, 0xf6),
         Category::Emulator => egui::Color32::from_rgb(0xf5, 0x9e, 0x0b),
+        Category::Original => egui::Color32::from_rgb(0x3b, 0x82, 0xf6),
+        Category::PsVitaGame => egui::Color32::from_rgb(0xec, 0x48, 0x99),
+        Category::Ps1Game => egui::Color32::from_rgb(0xea, 0xb3, 0x08),
+        Category::PspGame => egui::Color32::from_rgb(0x8b, 0x5c, 0xf6),
         Category::Utility => egui::Color32::from_rgb(0x10, 0xb9, 0x81),
         Category::Port => egui::Color32::from_rgb(0xa8, 0x55, 0xf7),
+        Category::Tool => egui::Color32::from_rgb(0x22, 0xd3, 0xee),
         Category::Plugin => egui::Color32::from_rgb(0x06, 0xb6, 0xd4),
-        Category::Media => egui::Color32::from_rgb(0xec, 0x48, 0x99),
-        Category::Theme => egui::Color32::from_rgb(0xea, 0xb3, 0x08),
         Category::Other => egui::Color32::from_rgb(0x64, 0x74, 0x8b),
     }
 }
@@ -1780,7 +1806,7 @@ fn draw_icon(ui: &mut egui::Ui, icons: &IconCache, rect: egui::Rect, entry: &cra
             let alpha = (i as f32 / n_dots as f32).powf(1.5);
             ui.painter().circle_filled(pos, 2.0, color.gamma_multiply(0.2 + 0.8 * alpha));
         }
-        ui.ctx().request_repaint();
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
         return;
     }
 

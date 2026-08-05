@@ -6,7 +6,9 @@ license = "GPL-3.0-only"
 description = "Homebrew catalog browser for games/apps/ports on the PS Vita"
 
 [dependencies]
+aes = { version = "0.8", default-features = false }
 anyhow = "1"
+ctr = { version = "0.9", default-features = false }
 egui = "0.31"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
@@ -25,7 +27,7 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 # and run with plain `cargo test` on a dev machine.
 [target.'cfg(target_os = "vita")'.dependencies]
 vita-newlib-shims = "0.3"
-vitasdk-sys = { version = "0.3", features = ["SceAppUtil_stub", "SceSysmem_stub", "SceSysmodule_stub", "ScePromoterUtil_stub", "SceKernelThreadMgr_stub", "SceIme_stub", "SceCommonDialog_stub", "SceLibKernel_stub", "SceIofilemgr_stub"] }
+vitasdk-sys = { version = "0.3", features = ["SceAppUtil_stub", "SceSysmem_stub", "SceSysmodule_stub", "ScePromoterUtil_stub", "SceKernelThreadMgr_stub", "SceIme_stub", "SceCommonDialog_stub", "SceLibKernel_stub", "SceIofilemgr_stub", "SceNotificationUtil_stub"] }
 
 [patch.crates-io]
 # vanilla `ring` doesn't build for this target: it finds no libc RNG source it

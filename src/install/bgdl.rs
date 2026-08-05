@@ -158,7 +158,7 @@ static DOWNLOAD_CLASS_SINGLETON: OnceLock<Result<SceDownloadClass, String>> = On
 fn get_download_class() -> Result<&'static SceDownloadClass> {
     let res = DOWNLOAD_CLASS_SINGLETON.get_or_init(|| unsafe {
         let lib_path = CString::new("vs0:sys/external/libshellsvc.suprx").unwrap();
-        sceKernelLoadStartModule(
+        let load_res = sceKernelLoadStartModule(
             lib_path.as_ptr(),
             0,
             std::ptr::null_mut(),
@@ -166,19 +166,27 @@ fn get_download_class() -> Result<&'static SceDownloadClass> {
             std::ptr::null_mut(),
             std::ptr::null_mut(),
         );
+        // `load_res` is a module ID (>= 0) on success, or a negative SCE
+        // error code. It was previously discarded, which meant a failure
+        // here was indistinguishable from the export lookup below failing
+        // for its own separate reason (missing taiHEN, wrong firmware NIDs,
+        // etc.) — logging it narrows down which of the two actually failed.
+        if load_res < 0 {
+            eprintln!("sceKernelLoadStartModule(libshellsvc.suprx) returned {load_res:#010x}");
+        }
 
         let mut func_4e255c31_addr: usize = 0;
         let mut func_b282b430_addr: usize = 0;
         let mod_name = CString::new("SceShellSvc").unwrap();
 
-        taiGetModuleExportFunc(
+        let tai_res_1 = taiGetModuleExportFunc(
             mod_name.as_ptr(),
             0xF4E34EDB,
             0x4E255C31,
             &mut func_4e255c31_addr,
         );
 
-        taiGetModuleExportFunc(
+        let tai_res_2 = taiGetModuleExportFunc(
             mod_name.as_ptr(),
             0xF4E34EDB,
             0xB282B430,
@@ -186,7 +194,14 @@ fn get_download_class() -> Result<&'static SceDownloadClass> {
         );
 
         if func_4e255c31_addr == 0 || func_b282b430_addr == 0 {
-            return Err("Failed to resolve SceShellSvc exports".to_string());
+            return Err(format!(
+                "Failed to resolve SceShellSvc exports (module load: {load_res:#010x}, \
+                 export 0x4E255C31: {} [tai rc {tai_res_1:#010x}], \
+                 export 0xB282B430: {} [tai rc {tai_res_2:#010x}]) — \
+                 check that taiHEN is installed and up to date for this firmware",
+                if func_4e255c31_addr == 0 { "not found" } else { "found" },
+                if func_b282b430_addr == 0 { "not found" } else { "found" },
+            ));
         }
 
         let sce_ipmi_4e255c31: extern "C" fn(*const u8, i32) -> i32 =
