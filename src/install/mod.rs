@@ -4,6 +4,7 @@ pub mod installed;
 mod promoter;
 mod sfo;
 mod bgdl;
+mod licensing;
 
 use crate::data::AppEntry;
 use anyhow::{Context, Result, bail};
@@ -28,6 +29,9 @@ pub enum Progress {
     Downloading { received: u64, total: Option<u64> },
     Extracting,
     Installing,
+    /// Handed off to the system's native background downloader (BGDL) —
+    /// visible in Notifications/LiveArea, but not finished installing yet.
+    Queued,
     Done,
     Failed(String),
 }
@@ -50,13 +54,14 @@ impl Progress {
             },
             Progress::Extracting => "[3/3] Extracting…".to_owned(),
             Progress::Installing => "[3/3] Installing…".to_owned(),
+            Progress::Queued => "Queued — check Notifications".to_owned(),
             Progress::Done => "Installed".to_owned(),
             Progress::Failed(err) => format!("Failed: {err}"),
         }
     }
 
     pub fn is_finished(&self) -> bool {
-        matches!(self, Progress::Done | Progress::Failed(_))
+        matches!(self, Progress::Queued | Progress::Done | Progress::Failed(_))
     }
 }
 
@@ -65,7 +70,7 @@ pub fn start(entry: AppEntry) -> watch::Receiver<Progress> {
     tokio::spawn(async move {
         let result = run(&entry, &tx).await;
         let final_state = match result {
-            Ok(()) => Progress::Done,
+            Ok(state) => state,
             Err(err) => {
                 eprintln!("install failed: {err:#}");
                 let _ = std::fs::remove_dir_all(EXTRACT_DIR);
@@ -80,7 +85,7 @@ pub fn start(entry: AppEntry) -> watch::Receiver<Progress> {
     rx
 }
 
-async fn run(entry: &AppEntry, tx: &watch::Sender<Progress>) -> Result<()> {
+async fn run(entry: &AppEntry, tx: &watch::Sender<Progress>) -> Result<Progress> {
     match entry.platform {
         crate::data::Platform::Vita => run_vita(entry, tx).await,
         crate::data::Platform::Psp => run_psp(entry, tx).await,
@@ -90,38 +95,62 @@ async fn run(entry: &AppEntry, tx: &watch::Sender<Progress>) -> Result<()> {
     }
 }
 
-async fn run_nps_vita(entry: &AppEntry, tx: &watch::Sender<Progress>) -> Result<()> {
+async fn run_nps_vita(entry: &AppEntry, tx: &watch::Sender<Progress>) -> Result<Progress> {
     let _ = tx.send(Progress::Resolving);
     if entry.download_url.is_empty() {
         bail!("no download link for this NPS game");
     }
 
     let _ = tx.send(Progress::Installing);
-    
-    // Attempt to queue the download via the Vita's native background downloader
-    bgdl::start_bgdl(&entry.name, &entry.download_url, None, bgdl::BGDL_TYPE_GAME)
+
+    stage_bgdl_icon(entry).await;
+
+    // NoNpDrm-style fake license, same trick as the PSP/PS1 path — best
+    // effort: if we can't resolve a content ID, queue without one rather
+    // than failing the whole install (some titles may already be licensed).
+    let license = match licensing::resolve_content_id(entry) {
+        Ok(content_id) => Some(licensing::create_fake_license(&content_id)),
+        Err(err) => {
+            eprintln!("no license generated for {}: {err:#}", entry.name);
+            None
+        }
+    };
+
+    // Hand off to the Vita's native background downloader
+    bgdl::start_bgdl(&entry.name, &entry.download_url, license.as_deref(), bgdl::BGDL_TYPE_GAME)
         .context("Failed to queue background download (BGDL)")?;
 
     installed::stamp_pending_install(&installed::index_key(entry), &entry.hash, None);
-    let _ = tx.send(Progress::Done);
-    
-    Ok(())
+    Ok(Progress::Queued)
 }
 
-async fn run_psp(entry: &AppEntry, tx: &watch::Sender<Progress>) -> Result<()> {
+async fn run_psp(entry: &AppEntry, tx: &watch::Sender<Progress>) -> Result<Progress> {
     let _ = tx.send(Progress::Resolving);
     if entry.download_url.is_empty() {
         bail!("no download link for this app");
     }
 
     if entry.platform.is_nps() {
+        let has_nopspemudrm = licensing::is_module_present("NoPspEmuDrm_kern");
+
+        if !has_nopspemudrm {
+            bail!(
+                "This PSP/PS1 game needs the NoPspEmuDrm_kern plugin. Install it from the \
+                 Plugins tab and restart the console before trying again."
+            );
+        }
+
         let _ = tx.send(Progress::Installing);
-        bgdl::start_bgdl(&entry.name, &entry.download_url, None, bgdl::BGDL_TYPE_PSP)
-            .context("Failed to queue background download (BGDL)")?;
+
+        stage_bgdl_icon(entry).await;
+
+        let content_id = licensing::resolve_content_id(entry)?;
+        let psp_license = licensing::create_fake_license(&content_id);
+        bgdl::start_bgdl(&entry.name, &entry.download_url, Some(&psp_license), bgdl::BGDL_TYPE_PSP)
+            .context("Failed to queue PSP/PS1 background download (BGDL)")?;
 
         installed::stamp_pending_install(&installed::index_key(entry), &entry.hash, None);
-        let _ = tx.send(Progress::Done);
-        return Ok(());
+        return Ok(Progress::Queued);
     }
 
     std::fs::create_dir_all(WORK_DIR).context("couldn't create the work folder")?;
@@ -135,10 +164,23 @@ async fn run_psp(entry: &AppEntry, tx: &watch::Sender<Progress>) -> Result<()> {
     let _ = std::fs::remove_file(TEMP_VPK);
 
     installed::stamp_pending_install(&installed::index_key(entry), &entry.hash, None);
-    Ok(())
+    Ok(Progress::Done)
 }
 
-async fn run_plugin(entry: &AppEntry, tx: &watch::Sender<Progress>) -> Result<()> {
+/// Best-effort: writes the entry's artwork to `ux0:bgdl/icon0.png` so the
+/// LiveArea bubble BGDL creates isn't blank. Failure here must never block
+/// the install — the icon is cosmetic.
+async fn stage_bgdl_icon(entry: &AppEntry) {
+    let Some(url) = entry.icon_url.as_deref().or(entry.cover_url.as_deref()) else { return };
+    let request = crate::net::client().get(url).header("User-Agent", "VitaForge").send();
+    let Ok(response) = request.await else { return };
+    let Ok(bytes) = response.bytes().await else { return };
+    if std::fs::create_dir_all("ux0:bgdl").is_ok() {
+        let _ = std::fs::write("ux0:bgdl/icon0.png", &bytes);
+    }
+}
+
+async fn run_plugin(entry: &AppEntry, tx: &watch::Sender<Progress>) -> Result<Progress> {
     let _ = tx.send(Progress::Resolving);
     if entry.download_url.is_empty() {
         bail!("no download link for this plugin");
@@ -153,10 +195,10 @@ async fn run_plugin(entry: &AppEntry, tx: &watch::Sender<Progress>) -> Result<()
     std::fs::create_dir_all(PLUGIN_DIR).context("couldn't create the plugins folder")?;
     let dest = PathBuf::from(PLUGIN_DIR).join(name);
     download(&entry.download_url, &dest, tx).await?;
-    Ok(())
+    Ok(Progress::Done)
 }
 
-async fn run_vita(entry: &AppEntry, tx: &watch::Sender<Progress>) -> Result<()> {
+async fn run_vita(entry: &AppEntry, tx: &watch::Sender<Progress>) -> Result<Progress> {
     let _ = tx.send(Progress::Resolving);
 
     let url = match entry.source.as_deref() {
@@ -222,7 +264,7 @@ async fn run_vita(entry: &AppEntry, tx: &watch::Sender<Progress>) -> Result<()> 
             .context("the data worker crashed")??;
         let _ = std::fs::remove_dir_all(DATA_STAGE_DIR);
     }
-    Ok(())
+    Ok(Progress::Done)
 }
 
 async fn stage_data(url: &str, tx: &watch::Sender<Progress>) -> Result<()> {

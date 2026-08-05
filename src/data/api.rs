@@ -59,6 +59,8 @@ struct RawApp {
     id: i64,
     #[serde(default)]
     title_id: Option<String>,
+    #[serde(default)]
+    content_id: Option<String>,
     name: String,
     #[serde(default)]
     original_name: Option<String>,
@@ -168,6 +170,7 @@ impl RawApp {
         let mut entry = AppEntry {
             id: self.id.to_string(),
             titleid,
+            content_id: self.content_id.and_then(non_empty),
             name_lower: String::new(), // filled in by `rebuild_derived` below
             name: self.name,
             original_name: self.original_name,

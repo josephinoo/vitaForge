@@ -148,6 +148,12 @@ impl SortOrder {
 pub struct AppEntry {
     pub id: String,
     pub titleid: String,
+
+    /// PSN content ID (e.g. `UP0001-NPXS10001_00-...`), used to build the fake
+    /// NoNpDrm/NoPspEmuDrm license. Falls back to a value derived from
+    /// `titleid` + `region` when the catalog doesn't provide one.
+    #[serde(default)]
+    pub content_id: Option<String>,
     pub name: String,
 
     /// Untranslated title, when the catalog carries one. Only used as a fallback

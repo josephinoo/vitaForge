@@ -480,6 +480,7 @@ impl App {
                     let entry = AppEntry {
                         id: "vitaforge_self_update".to_owned(),
                         titleid: "VITAFORGE".to_owned(),
+                        content_id: None,
                         name: format!("VitaForge {}", info.tag),
                         original_name: None,
                         overview: Vec::new(),

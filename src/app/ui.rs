@@ -249,7 +249,7 @@ pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
 
 fn loading_screen(
     ctx: &egui::Context,
-    lang: Language,
+    _lang: Language,
     install_progress: Option<&crate::install::Progress>,
     self_update: Option<&super::SelfUpdateInfo>,
     loading_start_time: std::time::Instant,
@@ -434,14 +434,26 @@ fn catalog_screen(
             }
 
             let available = ui.available_width() - SCROLLBAR_RESERVE;
-            let card_size = (available - GRID_SPACING * (GRID_COLUMNS as f32 - 1.0)) / GRID_COLUMNS as f32;
-            let row_height = card_size + GRID_SPACING;
+
+            // Aspect ratio is a per-row layout constant, not per-tile, so it can't
+            // track each entry's platform individually — but it can track what's
+            // actually visible instead of the global filter. A "mixed" view (filter
+            // off) still gets 2:3 cards as soon as any commercial entry is present;
+            // a view that's entirely homebrew stays square.
+            let is_commercial_view =
+                filtered_indices.iter().any(|&i| apps.get(i).is_some_and(|e| is_commercial_platform(e.platform)));
+            let aspect_ratio = if is_commercial_view { 1.5 } else { 1.0 };
+
+            let card_width = (available - GRID_SPACING * (GRID_COLUMNS as f32 - 1.0)) / GRID_COLUMNS as f32;
+            let card_height = card_width * aspect_ratio;
+            let row_height = card_height + GRID_SPACING;
+            
             let total_rows = filtered_indices.len().div_ceil(GRID_COLUMNS);
             let viewport_height = ui.available_height();
 
             let mut scroll_area = egui::ScrollArea::vertical().id_salt("catalog_grid");
             if scroll_to_selected && let Some(cursor) = selected {
-                let item_center = (cursor / GRID_COLUMNS) as f32 * row_height + card_size / 2.0;
+                let item_center = (cursor / GRID_COLUMNS) as f32 * row_height + card_height / 2.0;
                 scroll_area = scroll_area.vertical_scroll_offset((item_center - viewport_height / 2.0).max(0.0));
             }
 
@@ -482,7 +494,7 @@ fn catalog_screen(
 
                             let card = ui
                                 .push_id((entry.platform.label(), entry.id.as_str()), |ui| {
-                                    cover_card(ui, icons, installed, entry, card_size, selected == Some(item_index))
+                                    cover_card(ui, icons, installed, entry, card_width, card_height, selected == Some(item_index))
                                 })
                                 .inner;
 
@@ -722,10 +734,11 @@ fn cover_card(
     icons: &IconCache,
     installed: &InstalledIndex,
     entry: &crate::data::AppEntry,
-    size: f32,
+    card_width: f32,
+    card_height: f32,
     focused: bool,
 ) -> CardResponse {
-    let (full_rect, response) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
+    let (full_rect, response) = ui.allocate_exact_size(egui::vec2(card_width, card_height), egui::Sense::click());
     let ctx = ui.ctx();
     let hover_t = ctx.animate_bool_with_time(response.id.with("hover"), response.hovered(), HOVER_ANIM_SECS);
     let press_t = ctx.animate_bool_with_time(response.id.with("press"), response.is_pointer_button_down_on(), PRESS_ANIM_SECS);
@@ -754,8 +767,44 @@ fn cover_card(
 /// The one image a tile draws: the icon when there is one, the cover art
 /// otherwise. The grid used to request *both* for every tile even though only
 /// the icon is ever shown, doubling traffic against a rate-limited server.
+/// Commercial (NPS/PSP) entries flip the preference: their box-art cover is
+/// the recognizable asset, the icon is a generic platform glyph.
 fn tile_art_url(entry: &crate::data::AppEntry) -> Option<&str> {
-    entry.icon_url.as_deref().or(entry.cover_url.as_deref())
+    if is_commercial_platform(entry.platform) {
+        entry.cover_url.as_deref().or(entry.icon_url.as_deref())
+    } else {
+        entry.icon_url.as_deref().or(entry.cover_url.as_deref())
+    }
+}
+
+/// Platforms whose catalog art is physical-box cover art (2:3) rather than a
+/// square homebrew icon.
+fn is_commercial_platform(platform: Platform) -> bool {
+    platform.is_nps() || matches!(platform, Platform::Psp)
+}
+
+/// Computes the UV rect that crops `texture_size` to `rect`'s aspect ratio
+/// instead of stretching it — the same "cover" behavior as CSS
+/// `object-fit: cover`. Without this, square icons and 2:3 box art both
+/// get stretched to whatever aspect ratio the tile happens to have.
+fn cover_fit_uv(texture_size: egui::Vec2, rect: egui::Rect) -> egui::Rect {
+    if texture_size.x <= 0.0 || texture_size.y <= 0.0 {
+        return egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+    }
+    let texture_ratio = texture_size.x / texture_size.y;
+    let rect_ratio = rect.width() / rect.height();
+
+    if texture_ratio > rect_ratio {
+        // Texture is relatively wider than the tile — crop its sides.
+        let visible_fraction = rect_ratio / texture_ratio;
+        let margin = (1.0 - visible_fraction) / 2.0;
+        egui::Rect::from_min_max(egui::pos2(margin, 0.0), egui::pos2(1.0 - margin, 1.0))
+    } else {
+        // Texture is relatively taller than the tile — crop top/bottom.
+        let visible_fraction = texture_ratio / rect_ratio;
+        let margin = (1.0 - visible_fraction) / 2.0;
+        egui::Rect::from_min_max(egui::pos2(0.0, margin), egui::pos2(1.0, 1.0 - margin))
+    }
 }
 
 fn draw_cover(ui: &mut egui::Ui, icons: &IconCache, rect: egui::Rect, entry: &crate::data::AppEntry) {
@@ -769,10 +818,8 @@ fn draw_cover(ui: &mut egui::Ui, icons: &IconCache, rect: egui::Rect, entry: &cr
     if let Some(url) = art {
         if let Some(texture) = icons.get(ui.ctx(), url) {
             ui.painter().add(
-                egui::epaint::RectShape::filled(rect, CARD_RADIUS, TEXT_WHITE).with_texture(
-                    texture.id(),
-                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                ),
+                egui::epaint::RectShape::filled(rect, CARD_RADIUS, TEXT_WHITE)
+                    .with_texture(texture.id(), cover_fit_uv(texture.size_vec2(), rect)),
             );
             return;
         }
@@ -785,7 +832,7 @@ fn draw_cover(ui: &mut egui::Ui, icons: &IconCache, rect: egui::Rect, entry: &cr
         let time = ui.input(|i| i.time);
         let angle = time * 4.0;
         let center = rect.center();
-        let radius = rect.width() * 0.18;
+        let radius = rect.width().min(rect.height()) * 0.18;
 
         let n_dots = 8;
         for i in 0..n_dots {
@@ -806,7 +853,7 @@ fn draw_cover(ui: &mut egui::Ui, icons: &IconCache, rect: egui::Rect, entry: &cr
         letter,
         // Rounded so a handful of tile widths can't spawn a handful of
         // near-identical atlas entries.
-        font((rect.width() * 0.42).round()),
+        font((rect.width().min(rect.height()) * 0.42).round()),
         TEXT_WHITE,
     );
 }
@@ -1568,6 +1615,7 @@ fn install_status(ui: &mut egui::Ui, progress: &crate::install::Progress) -> boo
 
     let (fill, text_color) = match progress {
         Progress::Done => (GREEN_PLAY.gamma_multiply(0.25), GREEN_PLAY_HOVER),
+        Progress::Queued => (egui::Color32::from_rgb(0x3a, 0x30, 0x14), egui::Color32::from_rgb(0xf5, 0xb8, 0x42)),
         Progress::Failed(_) => (egui::Color32::from_rgb(0x3a, 0x1c, 0x1c), egui::Color32::from_rgb(0xff, 0x6b, 0x6b)),
         _ => (BG_CARD_HOVER, TEXT_DIM),
     };
