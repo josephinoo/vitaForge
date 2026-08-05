@@ -173,6 +173,7 @@ pub struct App {
     pub loading_start_time: std::time::Instant,
     self_update_rx: Option<oneshot::Receiver<SelfUpdateInfo>>,
     comments_rx: Option<oneshot::Receiver<(String, Vec<data::api::Comment>)>>,
+    social_rx: Option<oneshot::Receiver<(String, data::api::Social)>>,
 }
 
 pub struct InstallJob {
@@ -243,6 +244,7 @@ impl App {
             loading_start_time: std::time::Instant::now(),
             self_update_rx: Some(self_update_rx),
             comments_rx: None,
+            social_rx: None,
         })
     }
 
@@ -284,6 +286,22 @@ impl App {
 
             let _ = self.handle_command(AppCommand::SelfUpdate);
             ctx.request_repaint();
+        }
+
+        if let Some(rx) = &mut self.social_rx
+            && let Ok((app_id, social)) = rx.try_recv()
+        {
+            self.social_rx = None;
+            if let AppState::Detail { app, .. } = &mut self.state
+                && app.id == app_id
+            {
+                app.rating = social.average_rating;
+                app.ratings_count = social.ratings_count;
+                app.likes_count = social.likes_count;
+                app.user_liked = social.user_liked;
+                app.user_rating = social.user_rating;
+                ctx.request_repaint();
+            }
         }
 
         if let Some(rx) = &mut self.comments_rx
@@ -619,6 +637,20 @@ impl App {
         });
         self.comments_rx = Some(rx);
 
+        // Likes and ratings come back from the server rather than the cached
+        // catalog, which cannot know about them (see `api::fetch_social`).
+        let social_id = entry.id.clone();
+        let (social_tx, social_rx) = oneshot::channel();
+        tokio::spawn(async move {
+            match data::api::fetch_social(&social_id).await {
+                Ok(social) => {
+                    let _ = social_tx.send((social_id, social));
+                }
+                Err(err) => eprintln!("social state fetch failed: {err:#}"),
+            }
+        });
+        self.social_rx = Some(social_rx);
+
         self.state = AppState::Detail {
             app: entry,
             previous: Box::new(catalog),
@@ -641,7 +673,19 @@ impl App {
         if self.install_busy() {
             return;
         }
-        if let AppState::Detail { previous, .. } = &mut self.state {
+        if let AppState::Detail { app, previous, .. } = &mut self.state {
+            // The detail screen works on its own copy of the entry, so a like
+            // or a rating given here has to be carried back into the catalog —
+            // otherwise reopening the app showed the pre-click state again and
+            // the vote looked like it had been thrown away.
+            if let Some(original) = previous.apps.iter_mut().find(|other| other.id == app.id) {
+                original.user_liked = app.user_liked;
+                original.user_rating = app.user_rating;
+                original.likes_count = app.likes_count;
+                original.ratings_count = app.ratings_count;
+                original.comments_count = app.comments_count;
+                original.rating = app.rating;
+            }
             let previous = std::mem::replace(previous.as_mut(), CatalogState::empty());
             self.state = AppState::Catalog(previous);
             self.needs_installed_rescan = true;

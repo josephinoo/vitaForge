@@ -124,6 +124,24 @@ impl IconCache {
         }
     }
 
+    /// How long the UI may sleep before this image is worth another frame.
+    ///
+    /// `Some(ZERO)` means something is genuinely in flight and the spinner
+    /// should animate. A throttled image is only waiting for a clock to run
+    /// out, so the frame loop can idle until then instead of redrawing the
+    /// whole screen sixty times a second to show the exact same picture.
+    pub fn repaint_delay(&self, url: &str, max_side: u32) -> Option<Duration> {
+        let entries = self.entries.lock().unwrap();
+        match entries.get(&max_side).and_then(|bucket| bucket.get(url)) {
+            Some(IconState::Loading) => Some(Duration::ZERO),
+            Some(IconState::Throttled { until, .. }) => {
+                Some(until.saturating_duration_since(Instant::now()))
+            }
+            Some(state) if state.retriable() => Some(Duration::ZERO),
+            _ => None,
+        }
+    }
+
     pub fn get(&self, ctx: &egui::Context, url: &str) -> Option<egui::TextureHandle> {
         self.get_sized(ctx, url, MAX_ICON_SIDE)
     }

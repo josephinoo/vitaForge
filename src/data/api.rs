@@ -276,6 +276,31 @@ pub enum CatalogFetch {
     NotModified,
 }
 
+/// The parts of an app that change through other people's activity and this
+/// client's own likes and ratings.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Social {
+    #[serde(default)]
+    pub average_rating: f32,
+    #[serde(default)]
+    pub ratings_count: u32,
+    #[serde(default)]
+    pub likes_count: u32,
+    #[serde(default)]
+    pub user_liked: bool,
+    #[serde(default)]
+    pub user_rating: Option<u8>,
+}
+
+/// Re-reads one app's social state, which the cached catalog cannot be trusted
+/// for: the list endpoint's ETag only tracks catalog *content*, so liking or
+/// rating something never changes it and a 304 hands back a cache still holding
+/// the old values. This is keyed by `X-Client-ID`, so it is this console's own
+/// likes and ratings coming back.
+pub async fn fetch_social(app_id: &str) -> anyhow::Result<Social> {
+    Ok(request(reqwest::Method::GET, &format!("/apps/{app_id}")).send().await?.json().await?)
+}
+
 pub async fn fetch_comments(app_id: &str) -> anyhow::Result<Vec<Comment>> {
     let mut comments: Vec<Comment> =
         request(reqwest::Method::GET, &format!("/apps/{app_id}/comments")).send().await?.json().await?;

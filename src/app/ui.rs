@@ -259,7 +259,10 @@ fn loading_screen(
     let remaining_val = (4.0 - elapsed).max(0.1);
 
     egui::CentralPanel::default()
-        .frame(egui::Frame::NONE.fill(BG_DEEP))
+        // No fill: `paint_background` lays down an opaque gradient over the whole
+        // panel as its first act, so a panel fill underneath is a second
+        // full-screen write every frame that nobody ever sees.
+        .frame(egui::Frame::NONE)
         .show(ctx, |ui| {
             let rect = ui.available_rect_before_wrap();
             paint_background(ui.painter(), rect);
@@ -359,7 +362,10 @@ fn catalog_screen(
     );
 
     egui::CentralPanel::default()
-        .frame(egui::Frame::NONE.fill(BG_DEEP).inner_margin(egui::vec2(SCREEN_MARGIN, 10.0)))
+        // No fill: `paint_background` lays down an opaque gradient over the whole
+        // panel as its first act, so a panel fill underneath is a second
+        // full-screen write every frame that nobody ever sees.
+        .frame(egui::Frame::NONE.inner_margin(egui::vec2(SCREEN_MARGIN, 10.0)))
         .show(ctx, |ui| {
 
             paint_background(ui.painter(), ui.ctx().screen_rect());
@@ -458,7 +464,8 @@ fn catalog_screen(
                     }
                 }
 
-                let mut art_pending = false;
+                // Soonest moment any visible tile is worth redrawing for.
+                let mut art_wakeup: Option<std::time::Duration> = None;
                 for grid_row in row_range {
                     ui.horizontal(|ui| {
                         for column in 0..GRID_COLUMNS {
@@ -466,8 +473,12 @@ fn catalog_screen(
                             let Some(&real_index) = filtered_indices.get(item_index) else { break };
                             let Some(entry) = apps.get(real_index) else { continue };
 
-                            art_pending |= tile_art_url(entry)
-                                .is_some_and(|url| icons.is_loading(url, super::icons::MAX_ICON_SIDE));
+                            if let Some(delay) = tile_art_url(entry)
+                                .and_then(|url| icons.repaint_delay(url, super::icons::MAX_ICON_SIDE))
+                            {
+                                art_wakeup =
+                                    Some(art_wakeup.map_or(delay, |soonest| soonest.min(delay)));
+                            }
 
                             let card = ui
                                 .push_id((entry.platform.label(), entry.id.as_str()), |ui| {
@@ -488,10 +499,12 @@ fn catalog_screen(
                     });
                     ui.add_space(GRID_SPACING);
                 }
-                // One repaint request for the whole grid rather than one per
-                // tile per frame, which is what this used to do.
-                if art_pending {
-                    ui.ctx().request_repaint();
+                // One wake-up for the whole grid rather than one request per
+                // tile per frame, and only as soon as it is actually needed:
+                // a tile queued behind the rate limiter does not change for the
+                // next second, so there is nothing to redraw until then.
+                if let Some(delay) = art_wakeup {
+                    ui.ctx().request_repaint_after(delay);
                 }
             });
         });
@@ -748,9 +761,10 @@ fn tile_art_url(entry: &crate::data::AppEntry) -> Option<&str> {
 fn draw_cover(ui: &mut egui::Ui, icons: &IconCache, rect: egui::Rect, entry: &crate::data::AppEntry) {
     let color = category_color(entry.category);
 
-    ui.painter().rect_filled(rect, CARD_RADIUS, BG_DEEP);
-    ui.painter().rect_stroke(rect, CARD_RADIUS, egui::Stroke::new(1.0_f32, color.gamma_multiply(0.5)), egui::StrokeKind::Inside);
-
+    // Look the artwork up *before* painting the backing plate: when it is
+    // ready it covers the tile edge to edge, so the plate and its border are
+    // pure overdraw. Skipping them drops two rounded rects per tile, and a
+    // rounded outline costs twice the geometry of a rounded fill.
     let art = tile_art_url(entry);
     if let Some(url) = art {
         if let Some(texture) = icons.get(ui.ctx(), url) {
@@ -763,6 +777,9 @@ fn draw_cover(ui: &mut egui::Ui, icons: &IconCache, rect: egui::Rect, entry: &cr
             return;
         }
     }
+
+    ui.painter().rect_filled(rect, CARD_RADIUS, BG_DEEP);
+    ui.painter().rect_stroke(rect, CARD_RADIUS, egui::Stroke::new(1.0_f32, color.gamma_multiply(0.5)), egui::StrokeKind::Inside);
 
     if art.is_some_and(|url| icons.is_loading(url, super::icons::MAX_ICON_SIDE)) {
         let time = ui.input(|i| i.time);
@@ -1180,7 +1197,10 @@ fn detail_screen(
     }
 
     egui::CentralPanel::default()
-        .frame(egui::Frame::NONE.fill(BG_DEEP).inner_margin(SCREEN_MARGIN))
+        // No fill: `paint_background` lays down an opaque gradient over the whole
+        // panel as its first act, so a panel fill underneath is a second
+        // full-screen write every frame that nobody ever sees.
+        .frame(egui::Frame::NONE.inner_margin(SCREEN_MARGIN))
         .show(ctx, |ui| {
 
             if paint_hero(ui, icons, entry) {
@@ -1681,9 +1701,8 @@ fn draw_icon(ui: &mut egui::Ui, icons: &IconCache, rect: egui::Rect, entry: &cra
     let color = category_color(entry.category);
     let corner_r = rect.width() * 0.22;
 
-    ui.painter().rect_filled(rect, corner_r, BG_DEEP);
-    ui.painter().rect_stroke(rect, corner_r, egui::Stroke::new(1.5_f32, color), egui::StrokeKind::Inside);
-
+    // Same as the grid tiles: the artwork covers the plate, so only pay for the
+    // plate when there is no artwork to draw.
     let art = tile_art_url(entry);
     if let Some(url) = art {
         if let Some(texture) = icons.get(ui.ctx(), url) {
@@ -1696,6 +1715,9 @@ fn draw_icon(ui: &mut egui::Ui, icons: &IconCache, rect: egui::Rect, entry: &cra
             return;
         }
     }
+
+    ui.painter().rect_filled(rect, corner_r, BG_DEEP);
+    ui.painter().rect_stroke(rect, corner_r, egui::Stroke::new(1.5_f32, color), egui::StrokeKind::Inside);
 
     if art.is_some_and(|url| icons.is_loading(url, super::icons::MAX_ICON_SIDE)) {
         let time = ui.input(|i| i.time);

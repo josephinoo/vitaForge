@@ -3,6 +3,7 @@ mod head;
 pub mod installed;
 mod promoter;
 mod sfo;
+mod bgdl;
 
 use crate::data::AppEntry;
 use anyhow::{Context, Result, bail};
@@ -94,35 +95,16 @@ async fn run_nps_vita(entry: &AppEntry, tx: &watch::Sender<Progress>) -> Result<
     if entry.download_url.is_empty() {
         bail!("no download link for this NPS game");
     }
-    std::fs::create_dir_all(WORK_DIR).context("couldn't create the work folder")?;
-    let _ = std::fs::remove_dir_all(EXTRACT_DIR);
 
-    download(&entry.download_url, Path::new(TEMP_VPK), tx).await?;
+    let _ = tx.send(Progress::Installing);
+    
+    // Attempt to queue the download via the Vita's native background downloader
+    bgdl::start_bgdl(&entry.name, &entry.download_url, None, bgdl::BGDL_TYPE_GAME)
+        .context("Failed to queue background download (BGDL)")?;
 
-    let _ = tx.send(Progress::Extracting);
-    let extracted = {
-        let src = Path::new(TEMP_VPK);
-        let dest = Path::new(EXTRACT_DIR);
-        tokio::task::spawn_blocking(move || extract(src, dest)).await
-    };
-
-    if extracted.is_ok_and(|r| r.is_ok()) {
-        installed::stamp_pending_install(&installed::index_key(entry), &entry.hash, Some(Path::new(EXTRACT_DIR)));
-        head::write(Path::new(EXTRACT_DIR))?;
-        let _ = tx.send(Progress::Installing);
-        tokio::task::spawn_blocking(|| promoter::promote_package(EXTRACT_DIR))
-            .await
-            .context("install worker crashed")??;
-    } else {
-        // Direct PKG download - copy to packages folder for user
-        let pkgs_dir = "ux0:data/vitaforge/pkgs";
-        std::fs::create_dir_all(pkgs_dir).ok();
-        let dest = format!("{}/{}.pkg", pkgs_dir, entry.titleid);
-        let _ = std::fs::rename(TEMP_VPK, &dest)
-            .or_else(|_| std::fs::copy(TEMP_VPK, &dest).map(|_| ()));
-        installed::stamp_pending_install(&installed::index_key(entry), &entry.hash, None);
-    }
-    let _ = std::fs::remove_file(TEMP_VPK);
+    installed::stamp_pending_install(&installed::index_key(entry), &entry.hash, None);
+    let _ = tx.send(Progress::Done);
+    
     Ok(())
 }
 
@@ -131,6 +113,17 @@ async fn run_psp(entry: &AppEntry, tx: &watch::Sender<Progress>) -> Result<()> {
     if entry.download_url.is_empty() {
         bail!("no download link for this app");
     }
+
+    if entry.platform.is_nps() {
+        let _ = tx.send(Progress::Installing);
+        bgdl::start_bgdl(&entry.name, &entry.download_url, None, bgdl::BGDL_TYPE_PSP)
+            .context("Failed to queue background download (BGDL)")?;
+
+        installed::stamp_pending_install(&installed::index_key(entry), &entry.hash, None);
+        let _ = tx.send(Progress::Done);
+        return Ok(());
+    }
+
     std::fs::create_dir_all(WORK_DIR).context("couldn't create the work folder")?;
     download(&entry.download_url, Path::new(TEMP_VPK), tx).await?;
 
