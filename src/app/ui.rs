@@ -91,27 +91,7 @@ pub fn apply_theme(ctx: &egui::Context) {
 }
 
 fn paint_background(painter: &egui::Painter, rect: egui::Rect) {
-    let mut mesh = egui::Mesh::default();
-    mesh.colored_vertex(rect.left_top(), BG_GRAD_TOP);
-    mesh.colored_vertex(rect.right_top(), BG_GRAD_TOP);
-    mesh.colored_vertex(rect.right_bottom(), BG_DEEP);
-    mesh.colored_vertex(rect.left_bottom(), BG_DEEP);
-    mesh.add_triangle(0, 1, 2);
-    mesh.add_triangle(0, 2, 3);
-    painter.add(egui::Shape::mesh(mesh));
-
-    radial_glow(
-        painter,
-        egui::pos2(rect.left() + rect.width() * 0.18, rect.top() + rect.height() * 0.22),
-        rect.width() * 0.33,
-        ACCENT_STEAM.linear_multiply(0.10),
-    );
-    radial_glow(
-        painter,
-        egui::pos2(rect.left() + rect.width() * 0.88, rect.top() + rect.height() * 0.55),
-        rect.width() * 0.38,
-        egui::Color32::from_rgb(0x8b, 0x5c, 0xf6).linear_multiply(0.08),
-    );
+    painter.rect_filled(rect, 0.0, BG_DEEP);
 }
 
 /// Height of the hero image on the detail screen, as a fraction of the screen.
@@ -220,10 +200,14 @@ pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
             catalog.category_filter,
             catalog.source_filter,
             catalog.sort_order,
+            &catalog.sort_label,
             catalog.selection_active.then_some(catalog.selected),
             catalog.scroll_to_selected,
             app.self_update.as_ref(),
             catalog.is_commercial_view,
+            &catalog.source_counts,
+            &catalog.category_counts,
+            catalog.source_scoped_count,
         ),
         AppState::Detail { app: entry, scroll_offset, comments, comments_loaded, comment_entry_requested, .. } => {
             let progress = app
@@ -368,10 +352,14 @@ fn catalog_screen(
     category_filter: Option<Category>,
     source_filter: Option<crate::data::SourceCatalog>,
     sort_order: SortOrder,
+    sort_label: &str,
     selected: Option<usize>,
     scroll_to_selected: bool,
     self_update: Option<&super::SelfUpdateInfo>,
     is_commercial_view: bool,
+    source_counts: &[(crate::data::SourceCatalog, usize)],
+    category_counts: &[(Category, usize)],
+    source_scoped_count: usize,
 ) -> Vec<AppCommand> {
     let mut commands = Vec::new();
 
@@ -397,7 +385,10 @@ fn catalog_screen(
 
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("VitaForge").size(FONT_TITLE).strong().color(TEXT_WHITE));
-                ui.label(egui::RichText::new(format!("v{}", env!("CARGO_PKG_VERSION"))).size(FONT_SMALL).color(TEXT_DIM));
+                // `concat!` bakes this into a `&'static str` at compile time —
+                // was a `format!` rebuilt (and allocated) every catalog frame
+                // for a value that can never change at runtime.
+                ui.label(egui::RichText::new(concat!("v", env!("CARGO_PKG_VERSION"))).size(FONT_SMALL).color(TEXT_DIM));
                 ui.add_space(8.0);
                 ui.label(egui::RichText::new(lang.apps_count(filtered_indices.len())).color(TEXT_FAINT).size(FONT_SMALL));
 
@@ -432,7 +423,7 @@ fn catalog_screen(
 
             ui.add_space(10.0);
             ui.horizontal(|ui| {
-                if let Some(picked) = sort_dropdown(ui, lang, sort_order) {
+                if let Some(picked) = sort_dropdown(ui, lang, sort_order, sort_label) {
                     commands.push(AppCommand::SetSortOrder(picked));
                 }
             });
@@ -442,11 +433,13 @@ fn catalog_screen(
             // catalog here narrows which categories show up next (e.g. PKGj
             // only ever offers "PS Vita Game"/"PS1 Game"/"PSP Game").
             ui.horizontal(|ui| {
-                if let Some(picked) = source_dropdown(ui, apps, source_filter) {
+                if let Some(picked) = source_dropdown(ui, apps.len(), source_counts, source_filter) {
                     commands.push(AppCommand::SetSourceFilter(picked));
                 }
                 ui.add_space(8.0);
-                if let Some(picked) = category_dropdown(ui, lang, apps, source_filter, category_filter) {
+                if let Some(picked) =
+                    category_dropdown(ui, lang, source_scoped_count, category_counts, category_filter)
+                {
                     commands.push(AppCommand::SetCategoryFilter(picked));
                 }
             });
@@ -558,7 +551,7 @@ pub struct CardResponse {
 }
 
 fn sort_icon(ui: &mut egui::Ui, rect: egui::Rect, hovered: bool) {
-    let hover_t = ui.ctx().animate_bool_with_time(ui.id().with("sort_icon_hover"), hovered, HOVER_ANIM_SECS);
+    let hover_t = if hovered { 1.0_f32 } else { 0.0_f32 };
 
     ui.painter().circle_filled(rect.center(), 15.0, BG_CARD.lerp_to_gamma(BG_CARD_HOVER, hover_t));
     ui.painter().circle_stroke(rect.center(), 15.0, egui::Stroke::new(1.0_f32, SEPARATOR));
@@ -580,10 +573,12 @@ fn sort_icon(ui: &mut egui::Ui, rect: egui::Rect, hovered: bool) {
     );
 }
 
-fn sort_dropdown(ui: &mut egui::Ui, lang: Language, sort_order: SortOrder) -> Option<SortOrder> {
+fn sort_dropdown(ui: &mut egui::Ui, lang: Language, sort_order: SortOrder, sort_label: &str) -> Option<SortOrder> {
     let popup_id = ui.make_persistent_id("sort_dropdown");
-    let label = format!("{} {}", lang.sort_by_prefix(), lang.sort_label(sort_order));
-    let galley = ui.fonts(|f| f.layout_no_wrap(label, font(FONT_BODY), TEXT_DIM));
+    // `sort_label` is precomputed in `CatalogState::resort` — only changes
+    // when `sort_order` does, instead of a `format!` + text-shape here every
+    // catalog frame regardless of whether the sort actually changed.
+    let galley = ui.fonts(|f| f.layout_no_wrap(sort_label.to_owned(), font(FONT_BODY), TEXT_DIM));
 
     let icon_size = 30.0;
     let gap = 8.0;
@@ -619,7 +614,8 @@ fn sort_dropdown(ui: &mut egui::Ui, lang: Language, sort_order: SortOrder) -> Op
 /// "All catalogs", then VitaDBtoo, then PKGj.
 fn source_dropdown(
     ui: &mut egui::Ui,
-    apps: &[crate::data::AppEntry],
+    total_apps: usize,
+    source_counts: &[(crate::data::SourceCatalog, usize)],
     source_filter: Option<crate::data::SourceCatalog>,
 ) -> Option<Option<crate::data::SourceCatalog>> {
     let popup_id = ui.make_persistent_id("source_dropdown");
@@ -627,7 +623,7 @@ fn source_dropdown(
     let galley = ui.fonts(|f| f.layout_no_wrap(label.to_owned(), font(FONT_SMALL), ACCENT_CYAN));
     let size = egui::vec2((galley.size().x + 34.0).max(96.0), 26.0);
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
-    let hover_t = ui.ctx().animate_bool_with_time(response.id.with("hover"), response.hovered(), HOVER_ANIM_SECS);
+    let hover_t = if response.hovered() { 1.0_f32 } else { 0.0_f32 };
     let open = ui.memory(|mem| mem.is_popup_open(popup_id));
 
     let border = if open || source_filter.is_some() { ACCENT_CYAN } else { SEPARATOR };
@@ -648,15 +644,11 @@ fn source_dropdown(
     egui::popup_below_widget(ui, popup_id, &response, egui::PopupCloseBehavior::CloseOnClick, |ui| {
         ui.set_min_width(180.0);
         ui.spacing_mut().item_spacing.y = 2.0;
-        let all_label = format!("All catalogs ({})", apps.len());
+        let all_label = format!("All catalogs ({total_apps})");
         if dropdown_row(ui, &all_label, source_filter.is_none()) {
             picked = Some(None);
         }
-        for source in crate::data::SourceCatalog::ALL {
-            let count = apps.iter().filter(|app| source.matches(&app.source_catalog)).count();
-            if count == 0 {
-                continue;
-            }
+        for &(source, count) in source_counts {
             let row_label = format!("{} ({count})", source.label());
             if dropdown_row(ui, &row_label, source_filter == Some(source)) {
                 picked = Some(Some(source));
@@ -674,18 +666,16 @@ fn source_dropdown(
 fn category_dropdown(
     ui: &mut egui::Ui,
     lang: Language,
-    apps: &[crate::data::AppEntry],
-    source_filter: Option<crate::data::SourceCatalog>,
+    source_scoped_count: usize,
+    category_counts: &[(Category, usize)],
     category_filter: Option<Category>,
 ) -> Option<Option<Category>> {
-    let scoped = || apps.iter().filter(move |app| source_filter.is_none_or(|s| s.matches(&app.source_catalog)));
-
     let popup_id = ui.make_persistent_id("category_dropdown");
     let label = lang.category_label(category_filter);
     let galley = ui.fonts(|f| f.layout_no_wrap(label.to_owned(), font(FONT_SMALL), ACCENT_CYAN));
     let size = egui::vec2((galley.size().x + 34.0).max(96.0), 26.0);
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
-    let hover_t = ui.ctx().animate_bool_with_time(response.id.with("hover"), response.hovered(), HOVER_ANIM_SECS);
+    let hover_t = if response.hovered() { 1.0_f32 } else { 0.0_f32 };
     let open = ui.memory(|mem| mem.is_popup_open(popup_id));
 
     let border = if open || category_filter.is_some() { ACCENT_CYAN } else { SEPARATOR };
@@ -706,16 +696,12 @@ fn category_dropdown(
     egui::popup_below_widget(ui, popup_id, &response, egui::PopupCloseBehavior::CloseOnClick, |ui| {
         ui.set_min_width(180.0);
         ui.spacing_mut().item_spacing.y = 2.0;
-        let all_label = format!("All categories ({})", scoped().count());
+        let all_label = format!("All categories ({source_scoped_count})");
         if dropdown_row(ui, &all_label, category_filter.is_none()) {
             picked = Some(None);
         }
-        for category in Category::ALL {
-            let count = scoped().filter(|app| app.category == category).count();
-            if count == 0 {
-                continue;
-            }
-            let row_label = format!("{} ({})", lang.category_label(Some(category)), count);
+        for &(category, count) in category_counts {
+            let row_label = format!("{} ({count})", lang.category_label(Some(category)));
             if dropdown_row(ui, &row_label, category_filter == Some(category)) {
                 picked = Some(Some(category));
             }
@@ -728,7 +714,7 @@ fn category_dropdown(
 fn dropdown_row(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
     let width = ui.available_width();
     let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 30.0), egui::Sense::click());
-    let hover_t = ui.ctx().animate_bool_with_time(response.id.with("hover"), response.hovered(), HOVER_ANIM_SECS);
+    let hover_t = if response.hovered() { 1.0_f32 } else { 0.0_f32 };
 
     if active {
         ui.painter().rect_filled(rect, 5.0, ACCENT_STEAM.gamma_multiply(0.22));
@@ -766,10 +752,9 @@ fn cover_card(
     focused: bool,
 ) -> CardResponse {
     let (full_rect, response) = ui.allocate_exact_size(egui::vec2(card_width, card_height), egui::Sense::click());
-    let ctx = ui.ctx();
-    let hover_t = ctx.animate_bool_with_time(response.id.with("hover"), response.hovered(), HOVER_ANIM_SECS);
-    let press_t = ctx.animate_bool_with_time(response.id.with("press"), response.is_pointer_button_down_on(), PRESS_ANIM_SECS);
-    let focus_t = ctx.animate_bool_with_time(response.id.with("focus"), focused, HOVER_ANIM_SECS);
+    let hover_t = if response.hovered() { 1.0_f32 } else { 0.0_f32 };
+    let press_t = if response.is_pointer_button_down_on() { 1.0_f32 } else { 0.0_f32 };
+    let focus_t = if focused { 1.0_f32 } else { 0.0_f32 };
     let zoom = hover_t.max(focus_t);
     let inset = 6.0 - zoom * 4.5 + press_t * PRESS_SHRINK;
     let rect = full_rect.shrink(inset);
@@ -1541,8 +1526,7 @@ pub struct SearchFieldResponse {
 fn search_field(ui: &mut egui::Ui, query: &str, placeholder: &str, active: bool) -> SearchFieldResponse {
     let (rect, response) =
         ui.allocate_exact_size(egui::vec2(SEARCH_FIELD_WIDTH, SEARCH_FIELD_HEIGHT), egui::Sense::click());
-    let ctx = ui.ctx();
-    let hover_t = ctx.animate_bool_with_time(response.id.with("hover"), response.hovered(), HOVER_ANIM_SECS);
+    let hover_t = if response.hovered() { 1.0_f32 } else { 0.0_f32 };
 
     let border = if active { ACCENT_CYAN } else { SEPARATOR };
     ui.painter().rect_filled(rect, 6.0, BG_CARD.lerp_to_gamma(BG_CARD_HOVER, hover_t));
@@ -1574,8 +1558,7 @@ fn search_field(ui: &mut egui::Ui, query: &str, placeholder: &str, active: bool)
     let mut cleared = false;
     if has_query {
         let clear = ui.interact(clear_rect, response.id.with("clear"), egui::Sense::click());
-        let clear_hover =
-            ctx.animate_bool_with_time(clear.id.with("hover"), clear.hovered(), HOVER_ANIM_SECS);
+        let clear_hover = if clear.hovered() { 1.0_f32 } else { 0.0_f32 };
         ui.painter().circle_filled(
             clear_rect.center(),
             SEARCH_CLEAR_SIZE / 2.0,
@@ -1594,9 +1577,8 @@ fn search_field(ui: &mut egui::Ui, query: &str, placeholder: &str, active: bool)
 
 fn back_button(ui: &mut egui::Ui, label: &str) -> bool {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(100.0, 38.0), egui::Sense::click());
-    let ctx = ui.ctx();
-    let press_t = ctx.animate_bool_with_time(response.id.with("press"), response.is_pointer_button_down_on(), PRESS_ANIM_SECS);
-    let hover_t = ctx.animate_bool_with_time(response.id.with("hover"), response.hovered(), HOVER_ANIM_SECS);
+    let press_t = if response.is_pointer_button_down_on() { 1.0_f32 } else { 0.0_f32 };
+    let hover_t = if response.hovered() { 1.0_f32 } else { 0.0_f32 };
     let rect = rect.shrink(press_t * (PRESS_SHRINK * 0.6));
 
     ui.painter().rect_filled(rect, 6.0, BG_CARD.lerp_to_gamma(BG_CARD_HOVER, hover_t));
@@ -1662,9 +1644,8 @@ fn install_status(ui: &mut egui::Ui, progress: &crate::install::Progress) -> boo
 fn play_install_button(ui: &mut egui::Ui, label: &str) -> bool {
     let desired = egui::vec2(130.0, 38.0);
     let (rect, response) = ui.allocate_exact_size(desired, egui::Sense::click());
-    let ctx = ui.ctx();
-    let press_t = ctx.animate_bool_with_time(response.id.with("press"), response.is_pointer_button_down_on(), PRESS_ANIM_SECS);
-    let hover_t = ctx.animate_bool_with_time(response.id.with("hover"), response.hovered(), HOVER_ANIM_SECS);
+    let press_t = if response.is_pointer_button_down_on() { 1.0_f32 } else { 0.0_f32 };
+    let hover_t = if response.hovered() { 1.0_f32 } else { 0.0_f32 };
     let rect = rect.shrink(press_t * (PRESS_SHRINK * 0.6));
 
     let bg = GREEN_PLAY.lerp_to_gamma(GREEN_PLAY_HOVER, hover_t);

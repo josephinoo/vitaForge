@@ -41,6 +41,71 @@ const IME_OPEN_GRACE: Duration = Duration::from_millis(500);
 /// it's throttled to this rate instead.
 const IME_PAINT_INTERVAL: Duration = Duration::from_millis(250);
 
+/// How often the per-frame timing breakdown below gets flushed to stderr.
+const FRAME_STATS_INTERVAL: Duration = Duration::from_secs(2);
+/// A single real (non-idle) frame taking longer than this gets logged
+/// immediately, on top of the periodic summary, so a one-off stall shows up
+/// even if it recovers before the next summary is due.
+const SLOW_FRAME_THRESHOLD: Duration = Duration::from_millis(33);
+
+/// Cheap running totals for "what is the render loop actually spending time
+/// on", flushed periodically via `eprintln!` — the same style as the
+/// `note()`/`eprintln!` logging already used in `install/installed.rs`. Only
+/// active (non-idle) frames are counted; idle frames are, by design, mostly
+/// asleep. Exists so a 0-FPS/100%-CPU report on real hardware has an actual
+/// breakdown (tick vs. build_ui vs. tessellate vs. paint) to point at instead
+/// of guessing.
+#[derive(Default)]
+struct FrameStats {
+    window_started_at: Option<Instant>,
+    frames: u32,
+    tick: Duration,
+    build_ui: Duration,
+    tessellate: Duration,
+    paint: Duration,
+}
+
+impl FrameStats {
+    fn record(&mut self, tick: Duration, build_ui: Duration, tessellate: Duration, paint: Duration) {
+        let now = Instant::now();
+        let window_started_at = *self.window_started_at.get_or_insert(now);
+
+        self.frames += 1;
+        self.tick += tick;
+        self.build_ui += build_ui;
+        self.tessellate += tessellate;
+        self.paint += paint;
+
+        let total = tick + build_ui + tessellate + paint;
+        if total > SLOW_FRAME_THRESHOLD {
+            eprintln!(
+                "slow frame: tick={:.1}ms build_ui={:.1}ms tessellate={:.1}ms paint={:.1}ms total={:.1}ms",
+                tick.as_secs_f64() * 1000.0,
+                build_ui.as_secs_f64() * 1000.0,
+                tessellate.as_secs_f64() * 1000.0,
+                paint.as_secs_f64() * 1000.0,
+                total.as_secs_f64() * 1000.0,
+            );
+        }
+
+        let elapsed = now.duration_since(window_started_at);
+        if elapsed >= FRAME_STATS_INTERVAL {
+            let fps = self.frames as f64 / elapsed.as_secs_f64();
+            eprintln!(
+                "frame stats ({} active frames in {:.1}s, {:.1} fps): avg tick={:.2}ms build_ui={:.2}ms tessellate={:.2}ms paint={:.2}ms",
+                self.frames,
+                elapsed.as_secs_f64(),
+                fps,
+                self.tick.as_secs_f64() * 1000.0 / self.frames as f64,
+                self.build_ui.as_secs_f64() * 1000.0 / self.frames as f64,
+                self.tessellate.as_secs_f64() * 1000.0 / self.frames as f64,
+                self.paint.as_secs_f64() * 1000.0 / self.frames as f64,
+            );
+            *self = FrameStats::default();
+        }
+    }
+}
+
 struct ImeSession<'a> {
     opened_at: Instant,
     seen_open: bool,
@@ -74,6 +139,7 @@ pub fn run(mut app: App) -> Result<()> {
     // iteration can skip straight past the layout/tick cost instead of only
     // skipping the paint (see the skip-check below).
     let mut next_run_at = Instant::now();
+    let mut frame_stats = FrameStats::default();
 
     loop {
         let loop_started_at = Instant::now();
@@ -261,7 +327,9 @@ pub fn run(mut app: App) -> Result<()> {
             continue;
         }
 
+        let tick_started_at = Instant::now();
         app.tick(&egui_ctx)?;
+        let tick_elapsed = tick_started_at.elapsed();
 
         let text_target = match &app.state {
             crate::app::AppState::Catalog(catalog) if catalog.search_requested => Some(TextTarget::Search),
@@ -288,10 +356,12 @@ pub fn run(mut app: App) -> Result<()> {
             ..Default::default()
         };
 
+        let build_ui_started_at = Instant::now();
         let mut ui_commands = Vec::new();
         let full_output = egui_ctx.run(raw_input, |ctx| {
             ui_commands = build_ui(ctx, &app);
         });
+        let build_ui_elapsed = build_ui_started_at.elapsed();
         app.clear_scroll_to_selected();
 
         for command in ui_commands {
@@ -308,9 +378,16 @@ pub fn run(mut app: App) -> Result<()> {
             && !surface.has_pending_uploads();
 
         if !idle || entering_ime {
+            let tessellate_started_at = Instant::now();
             let clipped_primitives = egui_ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
+            let tessellate_elapsed = tessellate_started_at.elapsed();
+
+            let paint_started_at = Instant::now();
             surface.draw_scene();
             surface.paint_egui(full_output.pixels_per_point, &clipped_primitives, &full_output.textures_delta)?;
+            let paint_elapsed = paint_started_at.elapsed();
+
+            frame_stats.record(tick_elapsed, build_ui_elapsed, tessellate_elapsed, paint_elapsed);
         }
 
         if let Some(target) = text_target {

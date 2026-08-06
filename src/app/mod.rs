@@ -30,10 +30,27 @@ pub struct CatalogState {
     /// art rather than a homebrew icon — decides the grid's aspect ratio.
     /// Computed once per filter change instead of scanned every frame.
     pub is_commercial_view: bool,
+
+    /// `(source, count)` over the whole catalog, one row per entry in
+    /// `SourceCatalog::ALL` that has at least one match. Feeds the "source"
+    /// filter dropdown's row labels. Computed once per filter change instead
+    /// of an `apps.iter().filter(...).count()` scan per row, per frame, for
+    /// as long as that dropdown's popup stays open.
+    pub source_counts: Vec<(SourceCatalog, usize)>,
+    /// `(category, count)` scoped to `source_filter`, same reasoning as
+    /// `source_counts` above — feeds the "category" dropdown.
+    pub category_counts: Vec<(Category, usize)>,
+    /// How many entries match `source_filter` alone (ignoring
+    /// `category_filter`) — the "All categories (N)" row's count.
+    pub source_scoped_count: usize,
+    /// The sort dropdown's always-visible label (e.g. "Sort by Downloads"),
+    /// recomputed only when `sort_order` changes instead of `format!`-ed and
+    /// text-shaped fresh on every catalog frame.
+    pub sort_label: String,
 }
 
 impl CatalogState {
-    fn new(apps: Vec<AppEntry>) -> Self {
+    fn new(apps: Vec<AppEntry>, lang: Language) -> Self {
         let mut state = Self {
             apps,
             sorted_indices: Vec::new(),
@@ -47,8 +64,12 @@ impl CatalogState {
             selection_active: false,
             scroll_to_selected: false,
             is_commercial_view: false,
+            source_counts: Vec::new(),
+            category_counts: Vec::new(),
+            source_scoped_count: 0,
+            sort_label: String::new(),
         };
-        state.resort();
+        state.resort(lang);
         state
     }
 
@@ -66,6 +87,10 @@ impl CatalogState {
             selection_active: false,
             scroll_to_selected: false,
             is_commercial_view: false,
+            source_counts: Vec::new(),
+            category_counts: Vec::new(),
+            source_scoped_count: 0,
+            sort_label: String::new(),
         }
     }
 
@@ -74,12 +99,12 @@ impl CatalogState {
     /// fetch lands after the catalog was already showing (e.g. restored
     /// from `cache.json`), instead of building a whole new `CatalogState`
     /// and silently resetting everything the user had set up.
-    fn replace_apps(&mut self, apps: Vec<AppEntry>) {
+    fn replace_apps(&mut self, apps: Vec<AppEntry>, lang: Language) {
         self.apps = apps;
-        self.resort();
+        self.resort(lang);
     }
 
-    fn resort(&mut self) {
+    fn resort(&mut self, lang: Language) {
         let mut order: Vec<usize> = (0..self.apps.len()).collect();
         let apps = &self.apps;
         match self.sort_order {
@@ -90,6 +115,7 @@ impl CatalogState {
             SortOrder::NameAsc => order.sort_by(|&a, &b| apps[a].name_lower.cmp(&apps[b].name_lower)),
         }
         self.sorted_indices = order;
+        self.sort_label = format!("{} {}", lang.sort_by_prefix(), lang.sort_label(self.sort_order));
         self.refresh_filter();
     }
 
@@ -124,6 +150,32 @@ impl CatalogState {
             self.selection_active = true;
             self.scroll_to_selected = true;
         }
+
+        // Dropdown row counts, recomputed here (once per filter change)
+        // instead of once per row per frame while a dropdown popup is open —
+        // that used to be an `apps.iter().filter(...).count()` scan over the
+        // whole catalog for every visible row, every frame, for as long as
+        // the popup stayed open.
+        self.source_counts = SourceCatalog::ALL
+            .into_iter()
+            .map(|source| (source, apps.iter().filter(|app| source.matches(&app.source_catalog)).count()))
+            .filter(|&(_, count)| count > 0)
+            .collect();
+        self.source_scoped_count =
+            apps.iter().filter(|app| source_filter.is_none_or(|s| s.matches(&app.source_catalog))).count();
+        self.category_counts = Category::ALL
+            .into_iter()
+            .map(|category| {
+                let count = apps
+                    .iter()
+                    .filter(|app| {
+                        app.category == category && source_filter.is_none_or(|s| s.matches(&app.source_catalog))
+                    })
+                    .count();
+                (category, count)
+            })
+            .filter(|&(_, count)| count > 0)
+            .collect();
 
         // Recomputed here (once per filter change) instead of every frame: a
         // "mixed" view still gets 2:3 box-art cards as soon as any commercial
@@ -332,7 +384,7 @@ impl App {
                 if !self.install_busy() {
                     match &mut self.state {
                         AppState::Loading => {
-                            let catalog = CatalogState::new(apps);
+                            let catalog = CatalogState::new(apps, self.lang);
                             self.installed.force_refresh(ctx, &catalog.apps);
                             self.state = AppState::Catalog(catalog);
                         }
@@ -342,11 +394,11 @@ impl App {
                         // left stale entries on screen forever once a
                         // `cache.json` existed.
                         AppState::Catalog(catalog) => {
-                            catalog.replace_apps(apps);
+                            catalog.replace_apps(apps, self.lang);
                             self.installed.force_refresh(ctx, &catalog.apps);
                         }
                         AppState::Detail { previous, .. } => {
-                            previous.replace_apps(apps);
+                            previous.replace_apps(apps, self.lang);
                             self.installed.force_refresh(ctx, &previous.apps);
                         }
                     }
@@ -359,7 +411,7 @@ impl App {
                 // empty catalog (the "no homebrews found" screen) rather
                 // than silently reusing stale data.
                 if matches!(self.state, AppState::Loading) && !self.install_busy() {
-                    let catalog = CatalogState::new(Vec::new());
+                    let catalog = CatalogState::new(Vec::new(), self.lang);
                     self.state = AppState::Catalog(catalog);
                     ctx.request_repaint();
                 }
@@ -409,11 +461,12 @@ impl App {
                 }
             }
             AppCommand::SetSortOrder(sort) => {
+                let lang = self.lang;
                 if let AppState::Catalog(catalog) = &mut self.state
                     && catalog.sort_order != sort
                 {
                     catalog.sort_order = sort;
-                    catalog.resort();
+                    catalog.resort(lang);
                 }
             }
             AppCommand::Input(InputCommand::Confirm) => {

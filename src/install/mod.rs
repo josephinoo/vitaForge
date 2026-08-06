@@ -109,16 +109,14 @@ async fn run_nps_vita(entry: &AppEntry, tx: &watch::Sender<Progress>) -> Result<
         bail!("no download link for this NPS game");
     }
 
-    std::fs::create_dir_all(WORK_DIR).context("couldn't create the work folder")?;
-    let pkg_path = Path::new(TEMP_PKG);
-    download(&entry.download_url, pkg_path, tx).await?;
-
-    match install_vita_pkg(entry, tx, pkg_path).await {
-        Ok(state) => Ok(state),
+    match queue_bgdl_vita(entry, tx).await {
+        Ok(progress) => Ok(progress),
         Err(err) => {
-            eprintln!("in-app pkg install failed for {}, falling back to BGDL: {err:#}", entry.name);
-            let _ = std::fs::remove_file(pkg_path);
-            queue_bgdl_vita(entry, tx).await
+            eprintln!("BGDL background queue failed for {}: {err:#}, falling back to in-app PKG install", entry.name);
+            std::fs::create_dir_all(WORK_DIR).context("couldn't create the work folder")?;
+            let pkg_path = Path::new(TEMP_PKG);
+            download(&entry.download_url, pkg_path, tx).await?;
+            install_vita_pkg(entry, tx, pkg_path).await
         }
     }
 }
@@ -245,35 +243,31 @@ async fn run_psp(entry: &AppEntry, tx: &watch::Sender<Progress>) -> Result<Progr
             );
         }
 
-        // PS1 packages can be decrypted and extracted in-app (EBOOT.PBP +
-        // DOCUMENT.DAT are a direct pull, no ISO conversion needed). PSP
-        // packages need a KIRK-based EBOOT→ISO conversion this extractor
-        // doesn't implement yet, so they always go through BGDL.
+        stage_bgdl_icon(entry).await;
+
+        let content_id = licensing::resolve_content_id(entry)?;
+        let psp_license = licensing::create_fake_license(&content_id);
+        let bgdl_result = bgdl::start_bgdl(&entry.name, &entry.download_url, Some(&psp_license), bgdl::BGDL_TYPE_PSP);
+
+        if bgdl_result.is_ok() {
+            installed::stamp_pending_install(&installed::index_key(entry), &entry.hash, None);
+            return Ok(Progress::Queued);
+        }
+
+        eprintln!("BGDL queueing failed for PSP/PS1 game {}, falling back to in-app install", entry.name);
+
         if entry.platform == crate::data::Platform::NpsPsx {
             std::fs::create_dir_all(WORK_DIR).context("couldn't create the work folder")?;
             let pkg_path = Path::new(TEMP_PKG);
             download(&entry.download_url, pkg_path, tx).await?;
 
-            match install_psx_pkg(entry, tx, pkg_path).await {
-                Ok(state) => return Ok(state),
-                Err(err) => {
-                    eprintln!("in-app pkg install failed for {}, falling back to BGDL: {err:#}", entry.name);
-                    let _ = std::fs::remove_file(pkg_path);
-                }
+            if let Ok(state) = install_psx_pkg(entry, tx, pkg_path).await {
+                return Ok(state);
             }
+            let _ = std::fs::remove_file(pkg_path);
         }
 
-        let _ = tx.send(Progress::Installing);
-
-        stage_bgdl_icon(entry).await;
-
-        let content_id = licensing::resolve_content_id(entry)?;
-        let psp_license = licensing::create_fake_license(&content_id);
-        bgdl::start_bgdl(&entry.name, &entry.download_url, Some(&psp_license), bgdl::BGDL_TYPE_PSP)
-            .context("Failed to queue PSP/PS1 background download (BGDL)")?;
-
-        installed::stamp_pending_install(&installed::index_key(entry), &entry.hash, None);
-        return Ok(Progress::Queued);
+        bail!("Failed to install PSP/PS1 game: BGDL service unavailable");
     }
 
     std::fs::create_dir_all(WORK_DIR).context("couldn't create the work folder")?;

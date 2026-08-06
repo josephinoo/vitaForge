@@ -4,6 +4,17 @@ use std::collections::HashMap;
 /// How many failed uploads to retry per frame. Retrying all of them at once
 /// would just fail all of them again while video memory is still tight.
 const RETRIES_PER_FRAME: usize = 2;
+/// After this many failed attempts, an upload is presumed to need more than
+/// "try again next frame" — it backs off instead of retrying at 16ms/frame
+/// forever. Without this, a scroll burst that outruns the 8 MiB icon budget
+/// pinned the loop in its "active" branch indefinitely (CPU stuck near 100%
+/// with nothing new ever landing on screen) — the same bug class already
+/// diagnosed once in this project's since-abandoned imgui backend.
+const MAX_UPLOAD_ATTEMPTS: u32 = 8;
+/// Once an upload has backed off, how long to wait before trying again —
+/// gives the icon cache's own LRU eviction (`icons.rs`) a real chance to free
+/// video memory instead of racing it every frame.
+const BACKOFF_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
 
 #[derive(Default)]
 pub struct SdlEguiPainter {
@@ -34,6 +45,8 @@ struct PendingUpload {
     size: [usize; 2],
     pos: Option<[usize; 2]>,
     pixels: Vec<u8>,
+    attempts: u32,
+    next_retry_at: std::time::Instant,
 }
 
 impl SdlEguiPainter {
@@ -109,12 +122,22 @@ impl SdlEguiPainter {
         // Give the images that ran out of video memory another go first —
         // eviction may have freed room since. These already own their pixel
         // buffer from a previous failed attempt, so no conversion needed.
+        // Only entries whose backoff has elapsed are eligible: retrying every
+        // one of them every frame is what pinned CPU near 100% during a
+        // scroll burst that outran the icon budget, with nothing new ever
+        // landing on screen.
         if !self.pending.is_empty() {
-            let retry: Vec<egui::TextureId> =
-                self.pending.keys().copied().take(RETRIES_PER_FRAME).collect();
+            let now = std::time::Instant::now();
+            let retry: Vec<egui::TextureId> = self
+                .pending
+                .iter()
+                .filter(|(_, upload)| upload.next_retry_at <= now)
+                .map(|(id, _)| *id)
+                .take(RETRIES_PER_FRAME)
+                .collect();
             for texture_id in retry {
                 let upload = self.pending.remove(&texture_id).expect("key came from the map");
-                self.upload(canvas, texture_id, upload.size, upload.pos, &upload.pixels);
+                self.upload(canvas, texture_id, upload.size, upload.pos, &upload.pixels, upload.attempts);
             }
         }
 
@@ -127,13 +150,45 @@ impl SdlEguiPainter {
         for (texture_id, delta) in &textures_delta.set {
             scratch.clear();
             Self::fill_sdl_rgba(&delta.image, &mut scratch);
-            self.upload(canvas, *texture_id, delta.image.size(), delta.pos, &scratch);
+            self.upload(canvas, *texture_id, delta.image.size(), delta.pos, &scratch, 0);
         }
         self.scratch = scratch;
     }
 
+    /// Parks a copy of `pixels` in `pending` for another try later, unless
+    /// this upload has already failed `MAX_UPLOAD_ATTEMPTS` times — past that
+    /// point the image is presumed to genuinely not fit and is dropped
+    /// instead of retried forever. A mesh whose texture is missing is simply
+    /// skipped in `paint`, so the tile just stays blank rather than spinning
+    /// CPU on an upload that was never going to succeed.
+    fn defer_or_give_up(
+        &mut self,
+        texture_id: egui::TextureId,
+        size: [usize; 2],
+        pos: Option<[usize; 2]>,
+        pixels: &[u8],
+        attempts: u32,
+    ) {
+        let attempts = attempts + 1;
+        if attempts >= MAX_UPLOAD_ATTEMPTS {
+            eprintln!("giving up on a {}x{} texture after {attempts} attempts", size[0], size[1]);
+            return;
+        }
+        self.pending.insert(
+            texture_id,
+            PendingUpload {
+                size,
+                pos,
+                pixels: pixels.to_vec(),
+                attempts,
+                next_retry_at: std::time::Instant::now() + BACKOFF_RETRY_INTERVAL,
+            },
+        );
+    }
+
     /// Uploads one image, parking a copy of `pixels` in `pending` if video
-    /// memory says no.
+    /// memory says no. `attempts` is how many times this same upload has
+    /// already failed (0 for a brand-new delta).
     fn upload(
         &mut self,
         canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
@@ -141,6 +196,7 @@ impl SdlEguiPainter {
         size: [usize; 2],
         pos: Option<[usize; 2]>,
         pixels: &[u8],
+        attempts: u32,
     ) {
         use sdl2::pixels::PixelFormatEnum;
         use sdl2::rect::Rect;
@@ -155,14 +211,14 @@ impl SdlEguiPainter {
                 Ok(texture) => texture,
                 Err(err) => {
                     eprintln!("no room for a {width}x{height} texture, will retry: {err}");
-                    self.pending.insert(texture_id, PendingUpload { size, pos, pixels: pixels.to_vec() });
+                    self.defer_or_give_up(texture_id, size, pos, pixels, attempts);
                     return;
                 }
             };
             texture.set_blend_mode(BlendMode::Blend);
             if let Err(err) = texture.update(Rect::new(0, 0, width as u32, height as u32), pixels, width * 4) {
                 eprintln!("couldn't upload a texture, will retry: {err}");
-                self.pending.insert(texture_id, PendingUpload { size, pos, pixels: pixels.to_vec() });
+                self.defer_or_give_up(texture_id, size, pos, pixels, attempts);
                 return;
             }
             self.textures.insert(texture_id, SdlEguiTexture { texture, uv_scale: egui::vec2(1.0, 1.0) });

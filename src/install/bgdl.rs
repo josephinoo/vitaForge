@@ -360,13 +360,20 @@ pub fn start_bgdl(title: &str, url: &str, rif: Option<&[u8]>, bgdl_type: u32) ->
         init_ref.ptr_to_dc0_ptr = &mut init_ref.addr_dc0 as *mut _;
         init_ref.ptr_to_2e0_ptr = &mut params.addr_2e0 as *mut _ as *mut _;
 
-        std::ptr::copy_nonoverlapping(url.as_ptr(), (*addr_dc0).url.as_mut_ptr(), url.len().min(0x7FF));
+        let copy_cstr = |src: &str, dst: &mut [u8]| {
+            let bytes = src.as_bytes();
+            let max_len = dst.len().saturating_sub(1);
+            let len = bytes.len().min(max_len);
+            dst[..len].copy_from_slice(&bytes[..len]);
+            dst[len] = 0;
+        };
+
+        copy_cstr(url, &mut (*addr_dc0).url);
         if !rif_str.is_empty() {
-            let rif_bytes = rif_str.as_bytes();
-            std::ptr::copy_nonoverlapping(rif_bytes.as_ptr(), (*addr_dc0).license_path.as_mut_ptr(), rif_bytes.len().min(0xFF));
+            copy_cstr(rif_str, &mut (*addr_dc0).license_path);
         }
-        std::ptr::copy_nonoverlapping(title.as_ptr(), (*addr_dc0).title.as_mut_ptr(), title.len().min(0x339));
-        std::ptr::copy_nonoverlapping(b"ux0:bgdl/icon0.png\0".as_ptr(), (*addr_dc0).icon_path.as_mut_ptr(), 19);
+        copy_cstr(title, &mut (*addr_dc0).title);
+        copy_cstr("ux0:bgdl/icon0.png", &mut (*addr_dc0).icon_path);
 
         (*addr_dc0).type_[0] = bgdl_type;
         (*addr_dc0).type_[1] = bgdl_type;

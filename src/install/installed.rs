@@ -22,10 +22,22 @@ const HASH_LEN: usize = 32;
 // installed executables — cheap once, but `back_to_catalog` requests one on
 // every single navigation, which used to keep the eMMC busy far more often
 // than installs actually change.
-const RESCAN_INTERVAL: Duration = Duration::from_secs(5);
+const RESCAN_INTERVAL: Duration = Duration::from_secs(60);
+const INSTALLED_CACHE_FILE: &str = "ux0:data/vitaforge/installed_cache.json";
 const HASH_CHUNK: usize = 64 * 1024;
 
 const HASH_BATCH: usize = 8;
+/// Gap between MD5 hashes on every rescan after the first. Cheap: by then
+/// almost every title is already stamped in the on-disk ledger, so this loop
+/// mostly just `continue`s past entries with nothing left to hash.
+const HASH_GAP: Duration = Duration::from_millis(15);
+/// Gap used only on the very first scan of a fresh install, when the ledger
+/// is empty and every installed title needs a real MD5 pass. That's real CPU
+/// competing with the main render thread for the one core that matters,
+/// right as the first catalog frame is being built — widened here so the UI
+/// gets more of a chance to keep painting instead of stalling to 0 FPS while
+/// this thread works through the list.
+const FIRST_SCAN_HASH_GAP: Duration = Duration::from_millis(40);
 
 struct Wanted {
     key: String,
@@ -89,13 +101,55 @@ pub struct InstalledIndex {
     summary: Arc<Mutex<String>>,
 }
 
+fn load_installed_cache() -> HashMap<String, InstallState> {
+    let mut map = HashMap::new();
+    let Ok(content) = std::fs::read_to_string(INSTALLED_CACHE_FILE) else {
+        return map;
+    };
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Some((key, val)) = line.split_once('=') {
+            let state = match val {
+                "installed" => InstallState::Installed,
+                "outdated" => InstallState::Outdated,
+                _ => continue,
+            };
+            map.insert(key.to_string(), state);
+        }
+    }
+    map
+}
+
+fn save_installed_cache(states: &HashMap<String, InstallState>) {
+    let _ = std::fs::create_dir_all(WORK_DIR);
+    let mut lines = Vec::new();
+    for (k, v) in states {
+        let val_str = match v {
+            InstallState::Installed => "installed",
+            InstallState::Outdated => "outdated",
+            InstallState::Absent => continue,
+        };
+        lines.push(format!("{k}={val_str}"));
+    }
+    let _ = std::fs::write(INSTALLED_CACHE_FILE, lines.join("\n"));
+}
+
 impl InstalledIndex {
     pub fn new() -> Self {
+        let cached_states = load_installed_cache();
+        let summary_text = if cached_states.is_empty() {
+            concat!("b", env!("BUILD_STAMP"), " · scanning…").to_owned()
+        } else {
+            format!("b{} · {} ready", env!("BUILD_STAMP"), cached_states.len())
+        };
         Self {
-            states: Arc::new(Mutex::new(HashMap::new())),
+            states: Arc::new(Mutex::new(cached_states)),
             scanned_at: Arc::new(Mutex::new(None)),
             scanning: Arc::new(AtomicBool::new(false)),
-            summary: Arc::new(Mutex::new(concat!("b", env!("BUILD_STAMP"), " · scanning…").to_owned())),
+            summary: Arc::new(Mutex::new(summary_text)),
         }
     }
 
@@ -135,6 +189,13 @@ impl InstalledIndex {
         self.scanning.store(true, Ordering::Release);
 
         let wanted: Vec<Wanted> = entries.iter().filter_map(Wanted::from_entry).collect();
+        // Empty `states` here means nothing survived from a previous run's
+        // cache file — this is the very first scan since install, the one
+        // where every title still needs a real MD5 pass instead of a ledger
+        // hit. That's the case that actually costs CPU (see `HASH_GAP` vs
+        // `FIRST_SCAN_HASH_GAP`), so widen the gap between hashes just this
+        // once to leave more room for the render thread.
+        let hash_gap = if self.states.lock().unwrap().is_empty() { FIRST_SCAN_HASH_GAP } else { HASH_GAP };
 
         let index = self.clone();
         let ctx = ctx.clone();
@@ -145,6 +206,7 @@ impl InstalledIndex {
             .spawn(move || {
                 scan(
                     &wanted,
+                    hash_gap,
                     |found, authoritative| {
                         index.publish(found, authoritative);
                         ctx.request_repaint();
@@ -173,13 +235,16 @@ impl InstalledIndex {
         } else {
             states.extend(found);
         }
+        save_installed_cache(&states);
     }
 
     pub fn mark_installed(&self, key: &str) {
         if key.is_empty() {
             return;
         }
-        self.states.lock().unwrap().insert(key.to_owned(), InstallState::Installed);
+        let mut states = self.states.lock().unwrap();
+        states.insert(key.to_owned(), InstallState::Installed);
+        save_installed_cache(&states);
     }
 }
 
@@ -230,6 +295,7 @@ fn ledger() -> HashMap<String, Option<String>> {
 
 fn scan(
     wanted: &[Wanted],
+    hash_gap: Duration,
     mut publish: impl FnMut(HashMap<String, InstallState>, bool),
     report: impl Fn(String),
 ) {
@@ -336,6 +402,7 @@ fn scan(
             continue;
         }
         let Some(app_dir) = found.get(&entry.key) else { continue };
+        std::thread::sleep(hash_gap);
         if hash_state(&entry.key, app_dir, &entry.hash, &entry.hash2) == InstallState::Outdated {
             batch.insert(entry.key.clone(), InstallState::Outdated);
         }
