@@ -46,7 +46,7 @@ mod sys {
             let mut res: i32 = 0;
             let ret = unsafe { scePromoterUtilityCheckExist(path.as_ptr(), &mut res) };
 
-            Some(ret >= 0)
+            Some(ret >= 0 && res == 1)
         }
 
         pub fn promote(&self, dir: &str) -> Result<()> {

@@ -10,7 +10,7 @@ const MAX_CONCURRENT_FETCHES: usize = 3;
 const MAX_CONCURRENT_LARGE_FETCHES: usize = 1;
 const MAX_ICON_SIDE: u32 = 128;
 pub const MAX_SCREENSHOT_SIDE: u32 = 256;
-const MAX_RESIDENT_BYTES: usize = 16 * 1024 * 1024;
+const MAX_RESIDENT_BYTES: usize = 64 * 1024 * 1024;
 
 const RETRY_AFTER: Duration = Duration::from_secs(5);
 const MAX_ATTEMPTS: u32 = 3;
@@ -61,6 +61,14 @@ impl IconCache {
             Some(state) => state.retriable(),
             None => false,
         })
+    }
+
+    pub fn preload_catalog_icons(&self, ctx: &egui::Context, apps: &[crate::data::AppEntry]) {
+        for app in apps {
+            if let Some(url) = &app.icon_url {
+                let _ = self.get(ctx, url);
+            }
+        }
     }
 
     pub fn get(&self, ctx: &egui::Context, url: &str) -> Option<egui::TextureHandle> {

@@ -22,6 +22,10 @@ pub static SCE_LIBC_HEAP_SIZE: u32 = 24 * 1024 * 1024;
 pub static NEWLIB_HEAP_SIZE_USER: u32 = 96 * 1024 * 1024;
 
 fn main() -> anyhow::Result<()> {
+    #[cfg(target_os = "vita")]
+    unsafe {
+        let _ = vitasdk_sys::sceSysmoduleLoadModule(vitasdk_sys::SCE_SYSMODULE_IME);
+    }
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(1)
