@@ -17,7 +17,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
 vita-newlib-shims = "0.3"
-vitasdk-sys = { version = "0.3", features = ["SceAppUtil_stub", "SceSysmem_stub", "SceSysmodule_stub", "ScePromoterUtil_stub", "SceKernelThreadMgr_stub", "SceIme_stub", "SceCommonDialog_stub", "SceLibKernel_stub", "SceIofilemgr_stub"] }
+vitasdk-sys = { version = "0.3", features = ["SceAppUtil_stub", "SceSysmem_stub", "SceSysmodule_stub", "ScePromoterUtil_stub", "SceKernelThreadMgr_stub", "SceIme_stub", "SceCommonDialog_stub", "SceLibKernel_stub", "SceIofilemgr_stub", "ScePower_stub", "SceGxm_stub", "SceDisplay_stub", "SceCtrl_stub", "SceTouch_stub"] }
 sha1 = "0.10"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
