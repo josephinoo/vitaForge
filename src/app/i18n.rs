@@ -1,164 +1,327 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Language {
     English,
+    Spanish,
 }
 
 impl Language {
     pub fn detect() -> Self {
+        #[cfg(target_os = "vita")]
+        {
+            let mut lang: i32 = 0;
+            unsafe {
+                if vitasdk_sys::sceAppUtilSystemParamGetInt(
+                    vitasdk_sys::SCE_SYSTEM_PARAM_ID_LANG as u32,
+                    &mut lang,
+                ) == 0 {
+                    if lang == 5 {
+                        return Language::Spanish;
+                    }
+                }
+            }
+        }
+
+        if let Ok(sys_lang) = std::env::var("LANG").or_else(|_| std::env::var("LC_ALL")) {
+            if sys_lang.to_lowercase().starts_with("es") {
+                return Language::Spanish;
+            }
+        }
         Language::English
     }
 
     pub fn apps_count(self, count: usize) -> String {
-        format!("{count} APPS")
+        match self {
+            Language::Spanish => format!("{count} APPS"),
+            Language::English => format!("{count} APPS"),
+        }
     }
 
     pub fn category_label(self, cat: Option<crate::data::Category>) -> &'static str {
         match cat {
-            None => "ALL",
+            None => match self {
+                Language::Spanish => "TODOS",
+                Language::English => "ALL",
+            },
             Some(c) => match c {
-                crate::data::Category::Game => "Games",
-                crate::data::Category::Emulator => "Emulators",
-                crate::data::Category::Utility => "Utilities",
-                crate::data::Category::Port => "Ports",
-                crate::data::Category::Plugin => "Plugins",
-                crate::data::Category::Media => "Media",
-                crate::data::Category::Theme => "Themes",
-                crate::data::Category::Other => "Other",
+                crate::data::Category::Game => match self {
+                    Language::Spanish => "Juegos",
+                    Language::English => "Games",
+                },
+                crate::data::Category::Emulator => match self {
+                    Language::Spanish => "Emuladores",
+                    Language::English => "Emulators",
+                },
+                crate::data::Category::Utility => match self {
+                    Language::Spanish => "Utilidades",
+                    Language::English => "Utilities",
+                },
+                crate::data::Category::Port => match self {
+                    Language::Spanish => "Ports",
+                    Language::English => "Ports",
+                },
+                crate::data::Category::Plugin => match self {
+                    Language::Spanish => "Plugins",
+                    Language::English => "Plugins",
+                },
+                crate::data::Category::Media => match self {
+                    Language::Spanish => "Multimedia",
+                    Language::English => "Media",
+                },
+                crate::data::Category::Theme => match self {
+                    Language::Spanish => "Temas",
+                    Language::English => "Themes",
+                },
+                crate::data::Category::Other => match self {
+                    Language::Spanish => "Otros",
+                    Language::English => "Other",
+                },
             },
         }
     }
 
     pub fn sort_by_prefix(self) -> &'static str {
-        "Sort by:"
+        match self {
+            Language::Spanish => "Ordenar por:",
+            Language::English => "Sort by:",
+        }
     }
 
     pub fn sort_label(self, sort: crate::data::SortOrder) -> &'static str {
         match sort {
-            crate::data::SortOrder::Downloads => "Most downloaded",
-            crate::data::SortOrder::Rating => "Top rated",
-            crate::data::SortOrder::Recent => "Recently updated",
-            crate::data::SortOrder::Size => "Size",
-            crate::data::SortOrder::NameAsc => "A - Z",
+            crate::data::SortOrder::Downloads => match self {
+                Language::Spanish => "Más descargados",
+                Language::English => "Most downloaded",
+            },
+            crate::data::SortOrder::Rating => match self {
+                Language::Spanish => "Mejor valorados",
+                Language::English => "Top rated",
+            },
+            crate::data::SortOrder::Recent => match self {
+                Language::Spanish => "Recientes",
+                Language::English => "Recently updated",
+            },
+            crate::data::SortOrder::Size => match self {
+                Language::Spanish => "Tamaño",
+                Language::English => "Size",
+            },
+            crate::data::SortOrder::NameAsc => match self {
+                Language::Spanish => "A - Z",
+                Language::English => "A - Z",
+            },
         }
     }
 
     pub fn search_placeholder(self) -> &'static str {
-        "Search..."
+        match self {
+            Language::Spanish => "Buscar homebrew...",
+            Language::English => "Search...",
+        }
     }
 
     pub fn no_results(self) -> &'static str {
-        "No homebrews found"
+        match self {
+            Language::Spanish => "No se encontraron resultados",
+            Language::English => "No homebrews found",
+        }
     }
 
     pub fn no_results_sub(self) -> &'static str {
-        "Try changing filters or search terms"
+        match self {
+            Language::Spanish => "Intenta cambiar los filtros o la búsqueda",
+            Language::English => "Try changing filters or search terms",
+        }
     }
 
     pub fn install(self) -> &'static str {
-        "INSTALL"
+        match self {
+            Language::Spanish => "INSTALAR",
+            Language::English => "INSTALL",
+        }
     }
 
     pub fn reinstall(self) -> &'static str {
-        "REINSTALL"
+        match self {
+            Language::Spanish => "REINSTALAR",
+            Language::English => "REINSTALL",
+        }
     }
 
     pub fn update(self) -> &'static str {
-        "UPDATE"
+        match self {
+            Language::Spanish => "ACTUALIZAR",
+            Language::English => "UPDATE",
+        }
     }
 
     pub fn installed(self) -> &'static str {
-        "INSTALLED"
+        match self {
+            Language::Spanish => "INSTALADO",
+            Language::English => "INSTALLED",
+        }
     }
 
     pub fn update_available(self) -> &'static str {
-        "UPDATE AVAILABLE"
+        match self {
+            Language::Spanish => "ACTUALIZACIÓN DISPONIBLE",
+            Language::English => "UPDATE AVAILABLE",
+        }
     }
 
     pub fn installed_version(self) -> &'static str {
-        "Status"
+        match self {
+            Language::Spanish => "Estado",
+            Language::English => "Status",
+        }
     }
 
     pub fn install_in_progress(self) -> &'static str {
-        "Install running - stay on this screen"
+        match self {
+            Language::Spanish => "Instalación en curso, no salgas de esta pantalla",
+            Language::English => "Install running - stay on this screen",
+        }
     }
 
     pub fn plugin_manual_note(self) -> &'static str {
-        "Downloaded to ux0:data/vitaforge/plugins. Moving it and editing config.txt is up to you."
+        match self {
+            Language::Spanish => {
+                "Se descarga en ux0:data/vitaforge/plugins. Debes moverlo y añadirlo a config.txt tú mismo."
+            }
+            Language::English => {
+                "Downloaded to ux0:data/vitaforge/plugins. Moving it and editing config.txt is up to you."
+            }
+        }
     }
 
     pub fn release_page(self) -> &'static str {
-        "Release page"
+        match self {
+            Language::Spanish => "Página del autor",
+            Language::English => "Release page",
+        }
     }
 
     pub fn download(self) -> &'static str {
-        "DOWNLOAD"
+        match self {
+            Language::Spanish => "DESCARGAR",
+            Language::English => "DOWNLOAD",
+        }
     }
 
     pub fn requirements(self) -> &'static str {
-        "Requirements"
+        match self {
+            Language::Spanish => "Requisitos",
+            Language::English => "Requirements",
+        }
     }
 
     pub fn changelog(self) -> &'static str {
-        "What's new"
+        match self {
+            Language::Spanish => "Novedades",
+            Language::English => "What's new",
+        }
     }
 
     pub fn needs_game_data(self) -> &'static str {
-        "NEEDS EXTRA GAME DATA"
+        match self {
+            Language::Spanish => "REQUIERE DATOS ADICIONALES",
+            Language::English => "NEEDS EXTRA GAME DATA",
+        }
     }
 
     pub fn description(self) -> &'static str {
-        "Description"
+        match self {
+            Language::Spanish => "Descripción",
+            Language::English => "Description",
+        }
     }
 
     pub fn technical_info(self) -> &'static str {
-        "Technical Details"
+        match self {
+            Language::Spanish => "Información Técnica",
+            Language::English => "Technical Details",
+        }
     }
 
     pub fn version(self) -> &'static str {
-        "Version"
+        match self {
+            Language::Spanish => "Versión",
+            Language::English => "Version",
+        }
     }
 
     pub fn size(self) -> &'static str {
-        "Size"
+        match self {
+            Language::Spanish => "Tamaño",
+            Language::English => "Size",
+        }
     }
 
     pub fn downloads(self) -> &'static str {
-        "Downloads"
+        match self {
+            Language::Spanish => "Descargas",
+            Language::English => "Downloads",
+        }
     }
 
     pub fn rating(self) -> &'static str {
-        "Rating"
+        match self {
+            Language::Spanish => "Valoración",
+            Language::English => "Rating",
+        }
     }
 
     pub fn updated(self) -> &'static str {
-        "Updated"
+        match self {
+            Language::Spanish => "Actualizado",
+            Language::English => "Updated",
+        }
     }
 
     pub fn back(self) -> &'static str {
-        "Back"
+        match self {
+            Language::Spanish => "Atrás",
+            Language::English => "Back",
+        }
     }
 
     pub fn by_author(self, author: &str) -> String {
-        format!("by {author}")
+        match self {
+            Language::Spanish => format!("por {author}"),
+            Language::English => format!("by {author}"),
+        }
     }
 
     pub fn btn_open(self) -> &'static str {
-        "Select"
+        match self {
+            Language::Spanish => "Seleccionar",
+            Language::English => "Select",
+        }
     }
 
     pub fn btn_back(self) -> &'static str {
-        "Back"
+        match self {
+            Language::Spanish => "Atrás",
+            Language::English => "Back",
+        }
     }
 
     pub fn btn_search(self) -> &'static str {
-        "Search"
+        match self {
+            Language::Spanish => "Buscar",
+            Language::English => "Search",
+        }
     }
 
     pub fn btn_category(self) -> &'static str {
-        "Categories"
+        match self {
+            Language::Spanish => "Categorías",
+            Language::English => "Categories",
+        }
     }
 
     pub fn loading_msg(self) -> &'static str {
-        "Loading app catalog & pre-caching icons..."
+        match self {
+            Language::Spanish => "Cargando catálogo y precargando iconos...",
+            Language::English => "Loading app catalog & pre-caching icons...",
+        }
     }
 }
