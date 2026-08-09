@@ -1,15 +1,11 @@
 use anyhow::Result;
-
 static PROMOTER: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
 #[cfg(target_os = "vita")]
 mod sys {
     use anyhow::{Result, bail};
     use std::ffi::CString;
     use vitasdk_sys::*;
-
     pub struct Session;
-
     impl Session {
         pub fn open() -> Result<Self> {
             unsafe {
@@ -17,7 +13,6 @@ mod sys {
                 opt_storage[0] = 0;
                 opt_storage[1] = opt_storage.as_ptr() as u32;
                 let mut paf_args: [u32; 5] = [0x400000, 0xEA60, 0x40000, 0, 0];
-
                 let ret = sceSysmoduleLoadModuleInternalWithArg(
                     SCE_SYSMODULE_INTERNAL_PAF,
                     std::mem::size_of_val(&paf_args) as u32,
@@ -27,12 +22,10 @@ mod sys {
                 if ret < 0 {
                     bail!("couldn't load the paf sysmodule (0x{ret:08x})");
                 }
-
                 let ret = sceSysmoduleLoadModuleInternal(SCE_SYSMODULE_INTERNAL_PROMOTER_UTIL);
                 if ret < 0 {
                     bail!("couldn't load the promoter sysmodule (0x{ret:08x})");
                 }
-
                 let ret = scePromoterUtilityInit();
                 if ret < 0 {
                     bail!("scePromoterUtilityInit failed (0x{ret:08x})");
@@ -40,7 +33,6 @@ mod sys {
             }
             Ok(Self)
         }
-
         pub fn is_installed(&self, titleid: &str) -> Option<bool> {
             let path = CString::new(titleid).ok()?;
             let mut res: i32 = 0;
@@ -48,7 +40,6 @@ mod sys {
 
             Some(ret >= 0 && res == 1)
         }
-
         pub fn promote(&self, dir: &str) -> Result<()> {
             let path = CString::new(dir)?;
             unsafe {
@@ -67,7 +58,6 @@ mod sys {
                     }
                     sceKernelDelayThread(200_000);
                 }
-
                 let mut result: i32 = 0;
                 if scePromoterUtilityGetResult(&mut result) >= 0 && result < 0 {
                     bail!("the system rejected the package (0x{result:08x})");
@@ -76,7 +66,6 @@ mod sys {
             Ok(())
         }
     }
-
     impl Drop for Session {
         fn drop(&mut self) {
             unsafe {
@@ -88,14 +77,12 @@ mod sys {
         }
     }
 }
-
 #[cfg(target_os = "vita")]
 pub fn promote_package(dir: &str) -> Result<()> {
     let _guard = PROMOTER.lock().map_err(|_| anyhow::anyhow!("the promoter lock is poisoned"))?;
     let session = sys::Session::open()?;
     session.promote(dir)
 }
-
 #[cfg(target_os = "vita")]
 pub fn installed_titles(titleids: &[String]) -> Option<Vec<String>> {
     let _guard = PROMOTER.lock().ok()?;
@@ -114,12 +101,10 @@ pub fn installed_titles(titleids: &[String]) -> Option<Vec<String>> {
     }
     Some(found)
 }
-
 #[cfg(not(target_os = "vita"))]
 pub fn promote_package(_dir: &str) -> Result<()> {
     anyhow::bail!("installing only works on the vita itself")
 }
-
 #[cfg(not(target_os = "vita"))]
 pub fn installed_titles(_titleids: &[String]) -> Option<Vec<String>> {
     None

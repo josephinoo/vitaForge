@@ -2,7 +2,6 @@ use sdl2::controller::{Axis, Button, GameController};
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 use sdl2::mouse::MouseButton;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputCommand {
     Back,
@@ -14,7 +13,11 @@ pub enum InputCommand {
     CategoryPrev,
     CategoryNext,
 }
-
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextTarget {
+    Search,
+    Comment,
+}
 #[derive(Debug, Clone, PartialEq)]
 pub enum AppCommand {
     Input(InputCommand),
@@ -22,23 +25,27 @@ pub enum AppCommand {
     RequestSearch,
     CloseSearch,
     SetCategoryFilter(Option<crate::data::Category>),
+    SetSourceFilter(Option<crate::data::SourceCatalog>),
     SetSortOrder(crate::data::SortOrder),
-    SelectApp { index: usize, origin: Option<egui::Rect> },
+    SelectApp { index: usize },
     BackToCatalog,
     InstallCurrent,
     DismissInstall,
-    SelfUpdate,
-    Exit,
+    OpenSettings,
+    CloseSettings,
+    SetLanguage(crate::app::i18n::Language),
+    ToggleLike,
+    RateCurrent(u8),
+    RequestCommentEntry,
+    CloseCommentEntry,
+    SubmitComment(String),
 }
-
 impl From<InputCommand> for AppCommand {
     fn from(cmd: InputCommand) -> Self {
         AppCommand::Input(cmd)
     }
 }
-
 pub const FRONT_TOUCH_DEVICE_ID: i64 = 1;
-
 pub fn map_keyboard_event(event: &Event) -> Option<AppCommand> {
     let Event::KeyDown { keycode: Some(key), repeat: false, .. } = event else {
         return None;
@@ -53,11 +60,12 @@ pub fn map_keyboard_event(event: &Event) -> Option<AppCommand> {
         Keycode::Q | Keycode::PageUp => InputCommand::CategoryPrev,
         Keycode::E | Keycode::PageDown => InputCommand::CategoryNext,
         Keycode::F | Keycode::Slash => return Some(AppCommand::RequestSearch),
+        Keycode::L => return Some(AppCommand::ToggleLike),
+        Keycode::C => return Some(AppCommand::RequestCommentEntry),
         _ => return None,
     };
     Some(command.into())
 }
-
 pub fn map_controller_button_event(event: &Event) -> Option<AppCommand> {
     let Event::ControllerButtonDown { button, .. } = event else {
         return None;
@@ -66,25 +74,25 @@ pub fn map_controller_button_event(event: &Event) -> Option<AppCommand> {
         Button::A => InputCommand::Confirm,
         Button::B => InputCommand::Back,
         Button::Y => return Some(AppCommand::RequestSearch),
-        Button::Back => return Some(AppCommand::Exit),
-        Button::DPadUp => InputCommand::MoveUp,
-        Button::DPadDown => InputCommand::MoveDown,
-        Button::DPadLeft => InputCommand::MoveLeft,
-        Button::DPadRight => InputCommand::MoveRight,
+        Button::Start => return Some(AppCommand::OpenSettings),
+        Button::X => return Some(AppCommand::ToggleLike),
+        // D-pad directions are handled entirely by `held_stick_direction`
+        // below instead — SDL's button-down/up events fire exactly once per
+        // physical press with no OS-level auto-repeat, which is what made
+        // holding the D-pad feel like it required mashing it once per step
+        // (measured directly: real device/Vita3K logs showed 100% of
         Button::LeftShoulder => InputCommand::CategoryPrev,
         Button::RightShoulder => InputCommand::CategoryNext,
         _ => return None,
     };
     Some(command.into())
 }
-
 const STICK_DEADZONE: f32 = 0.6;
-
 pub fn held_stick_direction(controller: Option<&GameController>) -> Option<InputCommand> {
     let controller = controller?;
     let x = controller.axis(Axis::LeftX) as f32 / i16::MAX as f32;
     let y = controller.axis(Axis::LeftY) as f32 / i16::MAX as f32;
-    if y.abs() >= x.abs() {
+    let from_stick = if y.abs() >= x.abs() {
         match y {
             y if y <= -STICK_DEADZONE => Some(InputCommand::MoveUp),
             y if y >= STICK_DEADZONE => Some(InputCommand::MoveDown),
@@ -96,9 +104,22 @@ pub fn held_stick_direction(controller: Option<&GameController>) -> Option<Input
             x if x >= STICK_DEADZONE => Some(InputCommand::MoveRight),
             _ => None,
         }
+    };
+    from_stick.or_else(|| held_dpad_direction(controller))
+}
+fn held_dpad_direction(controller: &GameController) -> Option<InputCommand> {
+    if controller.button(Button::DPadUp) {
+        Some(InputCommand::MoveUp)
+    } else if controller.button(Button::DPadDown) {
+        Some(InputCommand::MoveDown)
+    } else if controller.button(Button::DPadLeft) {
+        Some(InputCommand::MoveLeft)
+    } else if controller.button(Button::DPadRight) {
+        Some(InputCommand::MoveRight)
+    } else {
+        None
     }
 }
-
 pub fn register_vita_controller_mapping(sdl: &sdl2::Sdl) -> Result<(), String> {
     let joystick = sdl.joystick()?;
     if joystick.num_joysticks().map_err(|e| e.to_string())? == 0 {
@@ -118,12 +139,10 @@ pub fn register_vita_controller_mapping(sdl: &sdl2::Sdl) -> Result<(), String> {
     sdl.game_controller()?.add_mapping(&mapping).map_err(|e| e.to_string())?;
     Ok(())
 }
-
 pub fn open_first_controller(subsystem: &sdl2::GameControllerSubsystem) -> Option<GameController> {
     let available = subsystem.num_joysticks().ok()?;
     (0..available).find_map(|id| subsystem.is_game_controller(id).then(|| subsystem.open(id).ok())?)
 }
-
 pub fn map_pointer_event(
     event: &Event,
     screen_size: (f32, f32),
@@ -160,20 +179,16 @@ pub fn map_pointer_event(
         _ => None,
     }
 }
-
 fn pointer_button_at(pointer_pos: &mut egui::Pos2, pos: egui::Pos2, button: egui::PointerButton, pressed: bool) -> egui::Event {
     *pointer_pos = pos;
     egui::Event::PointerButton { pos, button, pressed, modifiers: egui::Modifiers::default() }
 }
-
 fn mouse_to_screen_pos(x: i32, y: i32, pixels_per_point: f32) -> egui::Pos2 {
     egui::pos2(x as f32 / pixels_per_point, y as f32 / pixels_per_point)
 }
-
 fn touch_to_screen_pos(x: f32, y: f32, screen_size: (f32, f32)) -> egui::Pos2 {
     egui::pos2(x * screen_size.0, y * screen_size.1)
 }
-
 fn map_mouse_button(button: MouseButton) -> egui::PointerButton {
     match button {
         MouseButton::Right => egui::PointerButton::Secondary,

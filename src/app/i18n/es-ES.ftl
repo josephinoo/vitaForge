@@ -1,0 +1,67 @@
+apps-count = { $count } APPS
+
+category-all = ALL
+category-emulator = Emulator
+category-original = Original
+category-ps-vita-game = PS Vita Game
+category-ps1-game = PS1 Game
+category-psp-game = PSP Game
+category-plugin = Plugin
+category-port = Port
+category-tool = Tool
+category-utility = Utility
+category-other = Other
+
+sort-by-prefix = Ordenar por:
+sort-downloads = Más descargados
+sort-rating = Mejor valorados
+sort-recent = Recientes
+sort-size = Tamaño
+sort-name-asc = A - Z
+sort-name-desc = Z - A
+
+search-placeholder = Buscar homebrew...
+no-results = No se encontraron resultados
+no-results-sub = Intenta cambiar los filtros o la búsqueda
+loading-msg = Cargando catálogo y precargando iconos...
+
+featured-label = DESTACADO
+view-details-label = VER DETALLES
+
+install-btn = INSTALAR
+reinstall-btn = REINSTALAR
+update-btn = ACTUALIZAR
+installed-label = INSTALADO
+update-available = ACTUALIZACIÓN DISPONIBLE
+installed-version-label = Estado
+install-in-progress = Instalación en curso, no salgas de esta pantalla
+plugin-manual-note = Se descarga en ux0:data/vitaforge/plugins. Debes moverlo y añadirlo a config.txt tú mismo.
+release-page = Página del autor
+download-btn = DESCARGAR
+requirements-label = Requisitos
+changelog-label = Novedades
+needs-game-data = REQUIERE DATOS ADICIONALES
+overview-label = Resumen
+needs-nonpdrm = Requiere NoNpDrm / fake license
+description-label = Descripción
+technical-info = Información Técnica
+version-label = Versión
+size-label = Tamaño
+downloads-label = Descargas
+rating-label = Valoración
+updated-label = Actualizado
+community-label = Comunidad
+your-rating = Tu valoración
+ratings-count = Valoraciones
+comments-label = Comentarios
+add-comment = + Añadir comentario
+loading-comments = Cargando comentarios…
+no-comments-yet = Aún no hay comentarios. ¡Sé el primero!
+back-label = Atrás
+settings-title = AJUSTES
+language-label = Idioma
+by-author = por { $author }
+btn-open = Abrir
+btn-back = Atrás
+btn-search = Buscar
+btn-category = Categorías

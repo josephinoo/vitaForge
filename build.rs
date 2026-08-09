@@ -1,12 +1,15 @@
 fn main() {
-    // `option_env!` bakes the value in at compile time, so without these the
-    // catalog url would stay stale until something else forced a rebuild.
     println!("cargo:rerun-if-env-changed=SERVER_URL");
     println!("cargo:rerun-if-env-changed=GITHUB_API_URL");
     println!("cargo:rerun-if-changed=.env");
-
-    // Day-of-month + time of the build, e.g. `03-1847`. Shown on screen so a stale
-    // install on the device is caught at a glance instead of by symptom.
+    println!("cargo:rerun-if-changed=src/install/puff.c");
+    println!("cargo:rerun-if-changed=src/install/puff.h");
+    println!("cargo:rerun-if-changed=src/install/zrif.c");
+    println!("cargo:rerun-if-changed=src/install/zrif.h");
+    cc::Build::new()
+        .file("src/install/puff.c")
+        .file("src/install/zrif.c")
+        .compile("zrif_c");
     let seconds = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -17,8 +20,6 @@ fn main() {
     let minute = (seconds % 3600) / 60;
     println!("cargo:rustc-env=BUILD_STAMP={day_of_month:02}-{hour:02}{minute:02}");
 }
-
-/// Day of the month for a unix day count, utc. Enough calendar for a build tag.
 fn day_of_month(mut days: u64) -> u64 {
     let mut year = 1970;
     loop {
@@ -51,7 +52,6 @@ fn day_of_month(mut days: u64) -> u64 {
     }
     days + 1
 }
-
 fn leap(year: u64) -> bool {
     (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
 }

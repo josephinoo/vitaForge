@@ -1,0 +1,67 @@
+apps-count = { $count } APPS
+
+category-all = ALL
+category-emulator = Emulator
+category-original = Original
+category-ps-vita-game = PS Vita Game
+category-ps1-game = PS1 Game
+category-psp-game = PSP Game
+category-plugin = Plugin
+category-port = Port
+category-tool = Tool
+category-utility = Utility
+category-other = Other
+
+sort-by-prefix = Sort by:
+sort-downloads = Most downloaded
+sort-rating = Top rated
+sort-recent = Recently updated
+sort-size = Size
+sort-name-asc = A - Z
+sort-name-desc = Z - A
+
+search-placeholder = Search...
+no-results = No homebrews found
+no-results-sub = Try changing filters or search terms
+loading-msg = Loading app catalog & pre-caching icons...
+
+featured-label = FEATURED
+view-details-label = VIEW DETAILS
+
+install-btn = INSTALL
+reinstall-btn = REINSTALL
+update-btn = UPDATE
+installed-label = INSTALLED
+update-available = UPDATE AVAILABLE
+installed-version-label = Status
+install-in-progress = Install running - stay on this screen
+plugin-manual-note = Downloaded to ux0:data/vitaforge/plugins. Moving it and editing config.txt is up to you.
+release-page = Release page
+download-btn = DOWNLOAD
+requirements-label = Requirements
+changelog-label = What's new
+needs-game-data = NEEDS EXTRA GAME DATA
+overview-label = Overview
+needs-nonpdrm = Requires NoNpDrm / fake license
+description-label = Description
+technical-info = Technical Details
+version-label = Version
+size-label = Size
+downloads-label = Downloads
+rating-label = Rating
+updated-label = Updated
+community-label = Community
+your-rating = Your rating
+ratings-count = Ratings
+comments-label = Comments
+add-comment = + Add comment
+loading-comments = Loading comments…
+no-comments-yet = No comments yet. Be the first!
+back-label = Back
+settings-title = SETTINGS
+language-label = Language
+by-author = by { $author }
+btn-open = Select
+btn-back = Back
+btn-search = Search
+btn-category = Categories

@@ -5,24 +5,22 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-
 use crate::data::{AppEntry, Platform};
-
 const APP_ROOTS: &[&str] = &["ux0:app", "ur0:app", "uma0:app"];
 const PSP_ROOTS: &[&str] = &["ux0:pspemu/PSP/GAME", "ur0:pspemu/PSP/GAME"];
-
 const META_ROOTS: &[&str] = &["ux0:appmeta", "ur0:appmeta"];
 const WORK_DIR: &str = "ux0:data/vitaforge";
 const HASH_CACHE_DIR: &str = "ux0:data/vitaforge/hashes";
-
 const SCAN_LOG: &str = "ux0:data/vitaforge/scan.log";
 const HASH_LEN: usize = 32;
-
-const RESCAN_INTERVAL: Duration = Duration::from_millis(750);
+const RESCAN_INTERVAL: Duration = Duration::from_secs(60);
+const INSTALLED_CACHE_FILE: &str = "ux0:data/vitaforge/installed_cache.json";
 const HASH_CHUNK: usize = 64 * 1024;
-
 const HASH_BATCH: usize = 8;
-
+const HASH_GAP: Duration = Duration::from_millis(15);
+// Wider gap on the very first scan (empty ledger, every title needs a real MD5 pass) so the
+// render thread isn't starved while the catalog is still coming up.
+const FIRST_SCAN_HASH_GAP: Duration = Duration::from_millis(40);
 struct Wanted {
     key: String,
     folder: String,
@@ -30,10 +28,9 @@ struct Wanted {
     hash: String,
     hash2: String,
 }
-
 impl Wanted {
     fn from_entry(entry: &AppEntry) -> Option<Self> {
-        let psp = entry.platform == Platform::Psp;
+        let psp = matches!(entry.platform, Platform::Psp | Platform::NpsPsp | Platform::NpsPsx);
         let folder = if psp { entry.id.trim().to_owned() } else { key_of(&entry.titleid) };
         if folder.is_empty() {
             return None;
@@ -46,11 +43,9 @@ impl Wanted {
             hash2: entry.hash2.clone(),
         })
     }
-
     fn roots(&self) -> &'static [&'static str] {
         if self.psp { PSP_ROOTS } else { APP_ROOTS }
     }
-
     fn markers(&self) -> &'static [&'static str] {
         if self.psp {
             &["hash.vdb", "EBOOT.PBP", "eboot.pbp"]
@@ -59,62 +54,91 @@ impl Wanted {
         }
     }
 }
-
 pub fn index_key(entry: &AppEntry) -> String {
-    if entry.platform == Platform::Psp {
+    if matches!(entry.platform, Platform::Psp | Platform::NpsPsp | Platform::NpsPsx) {
         format!("PSP-{}", entry.id.trim())
     } else {
         key_of(&entry.titleid)
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InstallState {
     Absent,
-
     Outdated,
     Installed,
 }
-
 #[derive(Clone)]
 pub struct InstalledIndex {
     states: Arc<Mutex<HashMap<String, InstallState>>>,
     scanned_at: Arc<Mutex<Option<Instant>>>,
     scanning: Arc<AtomicBool>,
-
     summary: Arc<Mutex<String>>,
 }
-
-impl InstalledIndex {
-    pub fn new() -> Self {
-        Self {
-            states: Arc::new(Mutex::new(HashMap::new())),
-            scanned_at: Arc::new(Mutex::new(None)),
-            scanning: Arc::new(AtomicBool::new(false)),
-            summary: Arc::new(Mutex::new(concat!("b", env!("BUILD_STAMP"), " · scanning…").to_owned())),
+fn load_installed_cache() -> HashMap<String, InstallState> {
+    let mut map = HashMap::new();
+    let Ok(content) = std::fs::read_to_string(INSTALLED_CACHE_FILE) else {
+        return map;
+    };
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Some((key, val)) = line.split_once('=') {
+            let state = match val {
+                "installed" => InstallState::Installed,
+                "outdated" => InstallState::Outdated,
+                _ => continue,
+            };
+            map.insert(key.to_string(), state);
         }
     }
-
+    map
+}
+fn save_installed_cache(states: &HashMap<String, InstallState>) {
+    let _ = std::fs::create_dir_all(WORK_DIR);
+    let mut lines = Vec::new();
+    for (k, v) in states {
+        let val_str = match v {
+            InstallState::Installed => "installed",
+            InstallState::Outdated => "outdated",
+            InstallState::Absent => continue,
+        };
+        lines.push(format!("{k}={val_str}"));
+    }
+    let _ = std::fs::write(INSTALLED_CACHE_FILE, lines.join("\n"));
+}
+impl InstalledIndex {
+    pub fn new() -> Self {
+        let cached_states = load_installed_cache();
+        let summary_text = if cached_states.is_empty() {
+            concat!("b", env!("BUILD_STAMP"), " · scanning…").to_owned()
+        } else {
+            format!("b{} · {} ready", env!("BUILD_STAMP"), cached_states.len())
+        };
+        Self {
+            states: Arc::new(Mutex::new(cached_states)),
+            scanned_at: Arc::new(Mutex::new(None)),
+            scanning: Arc::new(AtomicBool::new(false)),
+            summary: Arc::new(Mutex::new(summary_text)),
+        }
+    }
     pub fn summary(&self) -> String {
         self.summary.lock().unwrap().clone()
     }
-
     pub fn state(&self, entry: &AppEntry) -> InstallState {
         self.state_by_key(&index_key(entry))
     }
-
     pub fn state_by_key(&self, key: &str) -> InstallState {
         if key.is_empty() {
             return InstallState::Absent;
         }
         self.states.lock().unwrap().get(key).copied().unwrap_or(InstallState::Absent)
     }
-
     pub fn force_refresh(&self, ctx: &egui::Context, entries: &[AppEntry]) {
         *self.scanned_at.lock().unwrap() = None;
         self.refresh(ctx, entries);
     }
-
     pub fn refresh(&self, ctx: &egui::Context, entries: &[AppEntry]) -> bool {
         if entries.is_empty() {
             return false;
@@ -129,18 +153,17 @@ impl InstalledIndex {
             }
         }
         self.scanning.store(true, Ordering::Release);
-
         let wanted: Vec<Wanted> = entries.iter().filter_map(Wanted::from_entry).collect();
-
+        let hash_gap = if self.states.lock().unwrap().is_empty() { FIRST_SCAN_HASH_GAP } else { HASH_GAP };
         let index = self.clone();
         let ctx = ctx.clone();
-
         let spawned = std::thread::Builder::new()
             .name("installed-scan".to_owned())
             .stack_size(512 * 1024)
             .spawn(move || {
                 scan(
                     &wanted,
+                    hash_gap,
                     |found, authoritative| {
                         index.publish(found, authoritative);
                         ctx.request_repaint();
@@ -161,7 +184,6 @@ impl InstalledIndex {
         }
         true
     }
-
     fn publish(&self, found: HashMap<String, InstallState>, authoritative: bool) {
         let mut states = self.states.lock().unwrap();
         if authoritative {
@@ -169,26 +191,25 @@ impl InstalledIndex {
         } else {
             states.extend(found);
         }
+        save_installed_cache(&states);
     }
-
     pub fn mark_installed(&self, key: &str) {
         if key.is_empty() {
             return;
         }
-        self.states.lock().unwrap().insert(key.to_owned(), InstallState::Installed);
+        let mut states = self.states.lock().unwrap();
+        states.insert(key.to_owned(), InstallState::Installed);
+        save_installed_cache(&states);
     }
 }
-
 impl Default for InstalledIndex {
     fn default() -> Self {
         Self::new()
     }
 }
-
 pub fn hash_file_path(titleid: &str) -> PathBuf {
     PathBuf::from(HASH_CACHE_DIR).join(format!("{}.hash", titleid.trim().to_uppercase()))
 }
-
 pub fn stamp_pending_install(titleid: &str, hash: &str, extract_dir: Option<&Path>) {
     if titleid.is_empty() {
         return;
@@ -198,20 +219,17 @@ pub fn stamp_pending_install(titleid: &str, hash: &str, extract_dir: Option<&Pat
     let dir = PathBuf::from(HASH_CACHE_DIR);
     let _ = std::fs::create_dir_all(&dir);
     let _ = std::fs::write(hash_file_path(titleid), &lower_hash);
-
     if let Some(extract_dir) = extract_dir
         && !lower_hash.is_empty()
     {
         let _ = std::fs::write(extract_dir.join("hash.vdb"), &lower_hash);
     }
 }
-
 pub fn clear_pending_install(titleid: &str) {
     if !titleid.is_empty() {
         let _ = std::fs::remove_file(hash_file_path(titleid));
     }
 }
-
 fn ledger() -> HashMap<String, Option<String>> {
     let mut out = HashMap::new();
     let Ok(dir) = std::fs::read_dir(HASH_CACHE_DIR) else { return out };
@@ -223,21 +241,19 @@ fn ledger() -> HashMap<String, Option<String>> {
     }
     out
 }
-
 fn scan(
     wanted: &[Wanted],
+    hash_gap: Duration,
     mut publish: impl FnMut(HashMap<String, InstallState>, bool),
     report: impl Fn(String),
 ) {
     let mut log = Vec::new();
     note(&mut log, format!("build {}", env!("BUILD_STAMP")));
-
     let (listing, listed) = list_app_dirs(&mut log);
     let by_listing = listed && !listing.is_empty();
     if !by_listing {
         note(&mut log, "nothing could be listed, asking by title id instead".to_owned());
     }
-
     let mut found: HashMap<String, PathBuf> = HashMap::new();
     for entry in wanted {
         let dir = if by_listing {
@@ -249,7 +265,6 @@ fn scan(
             found.insert(entry.key.clone(), dir);
         }
     }
-
     let mut asked_system = false;
     if found.is_empty() {
         let titleids: Vec<String> =
@@ -268,24 +283,20 @@ fn scan(
                     ),
                 );
                 for titleid in installed {
-
                     found.insert(titleid.clone(), PathBuf::from(format!("{}/{titleid}", APP_ROOTS[0])));
                 }
             }
             None => note(&mut log, "the system would not say what is installed".to_owned()),
         }
     }
-
     let authoritative = !found.is_empty();
     note(
         &mut log,
         format!("{} folders listed, {} catalog entries installed", listing.len(), found.len()),
     );
-
     let first_pass: HashMap<String, InstallState> =
         found.keys().map(|key| (key.clone(), InstallState::Installed)).collect();
     publish(first_pass, authoritative);
-
     let ledger = ledger();
     let expected: HashMap<&str, (&str, &str)> = wanted
         .iter()
@@ -294,7 +305,6 @@ fn scan(
     let mut from_ledger = HashMap::new();
     for (key, stamped) in &ledger {
         if authoritative && !found.contains_key(key) {
-
             let _ = std::fs::remove_file(hash_file_path(key));
             continue;
         }
@@ -321,17 +331,16 @@ fn scan(
         publish(from_ledger, false);
     }
     write_log(&log);
-
     let mut batch = HashMap::new();
     for entry in wanted {
         if entry.hash.len() != HASH_LEN && entry.hash2.len() != HASH_LEN {
             continue;
         }
-
         if ledger.get(&entry.key).is_some_and(|stamped| stamped.is_some()) {
             continue;
         }
         let Some(app_dir) = found.get(&entry.key) else { continue };
+        std::thread::sleep(hash_gap);
         if hash_state(&entry.key, app_dir, &entry.hash, &entry.hash2) == InstallState::Outdated {
             batch.insert(entry.key.clone(), InstallState::Outdated);
         }
@@ -343,7 +352,6 @@ fn scan(
         publish(batch, false);
     }
 }
-
 fn locate(entry: &Wanted) -> Option<PathBuf> {
     for root in entry.roots() {
         let dir = format!("{root}/{}", entry.folder);
@@ -354,7 +362,6 @@ fn locate(entry: &Wanted) -> Option<PathBuf> {
             }
         }
     }
-
     if !entry.psp {
         for root in META_ROOTS {
             let meta = format!("{root}/{}", entry.folder);
@@ -365,24 +372,21 @@ fn locate(entry: &Wanted) -> Option<PathBuf> {
     }
     None
 }
-
 fn note(log: &mut Vec<String>, line: String) {
     eprintln!("installed scan: {line}");
     log.push(line);
 }
-
 fn write_log(lines: &[String]) {
     let _ = std::fs::create_dir_all(WORK_DIR);
     let _ = std::fs::write(SCAN_LOG, lines.join("\n"));
 }
-
 fn key_of(titleid: &str) -> String {
     titleid.trim().to_uppercase()
 }
-
+// sceIo calls see mount points (ux0:, ur0:) that std::fs does not.
+#[cfg(target_os = "vita")]
 pub mod vita_fs {
     use std::ffi::CString;
-
     pub fn list_dir(path: &str) -> Result<Vec<String>, i32> {
         let Ok(path) = CString::new(path) else { return Err(-1) };
         let mut names = Vec::new();
@@ -393,7 +397,6 @@ pub mod vita_fs {
             }
             loop {
                 let mut dirent: vitasdk_sys::SceIoDirent = std::mem::zeroed();
-
                 if vitasdk_sys::sceIoDread(fd, &mut dirent) <= 0 {
                     break;
                 }
@@ -406,13 +409,24 @@ pub mod vita_fs {
         }
         Ok(names)
     }
-
     pub fn exists(path: &str) -> bool {
-        let Ok(path) = CString::new(path) else { return false };
-        let mut stat: vitasdk_sys::SceIoStat = unsafe { std::mem::zeroed() };
-        unsafe { vitasdk_sys::sceIoGetstat(path.as_ptr(), &mut stat) >= 0 }
+        stat_code(path) >= 0
     }
-
+    // Raw code, not a bool: 0x80010002 = ENOENT (absent), 0x8001000D = EACCES (sandboxed).
+    pub fn stat_code(path: &str) -> i32 {
+        let Ok(path) = CString::new(path) else { return -1 };
+        let mut stat: vitasdk_sys::SceIoStat = unsafe { std::mem::zeroed() };
+        unsafe { vitasdk_sys::sceIoGetstat(path.as_ptr(), &mut stat) }
+    }
+    // mode must be octal (0o777), not decimal 777.
+    pub fn mkdir(path: &str, mode: i32) -> i32 {
+        let Ok(path) = CString::new(path) else { return -1 };
+        unsafe { vitasdk_sys::sceIoMkdir(path.as_ptr(), mode as vitasdk_sys::SceMode) }
+    }
+    pub fn rmdir(path: &str) -> i32 {
+        let Ok(path) = CString::new(path) else { return -1 };
+        unsafe { vitasdk_sys::sceIoRmdir(path.as_ptr()) }
+    }
     fn name_of(dirent: &vitasdk_sys::SceIoDirent) -> String {
         let bytes: Vec<u8> = dirent
             .d_name
@@ -423,18 +437,32 @@ pub mod vita_fs {
         String::from_utf8_lossy(&bytes).into_owned()
     }
 }
-
+#[cfg(not(target_os = "vita"))]
+pub mod vita_fs {
+    pub fn list_dir(_path: &str) -> Result<Vec<String>, i32> {
+        Err(-1)
+    }
+    pub fn exists(_path: &str) -> bool {
+        false
+    }
+    pub fn stat_code(_path: &str) -> i32 {
+        -1
+    }
+    pub fn mkdir(_path: &str, _mode: i32) -> i32 {
+        -1
+    }
+    pub fn rmdir(_path: &str) -> i32 {
+        -1
+    }
+}
 fn list_app_dirs(log: &mut Vec<String>) -> (HashMap<String, PathBuf>, bool) {
     let mut present: HashMap<String, PathBuf> = HashMap::new();
     let mut listed = false;
-
     for root in APP_ROOTS.iter().chain(PSP_ROOTS) {
         let (names, how) = match vita_fs::list_dir(root) {
             Ok(names) => (names, "sceIo".to_owned()),
             Err(code) => {
-
                 match std::fs::read_dir(root).or_else(|err| {
-
                     std::fs::read_dir(format!("{root}/")).map_err(|_| err)
                 }) {
                     Ok(dir) => (
@@ -454,19 +482,15 @@ fn list_app_dirs(log: &mut Vec<String>) -> (HashMap<String, PathBuf>, bool) {
             present.entry(key_of(&name)).or_insert_with(|| PathBuf::from(root).join(&name));
         }
     }
-
     (present, listed)
 }
-
 fn hash_state(titleid: &str, app_dir: &Path, expected1: &str, expected2: &str) -> InstallState {
-
     if let Some(cached) = read_hash_file(&app_dir.join("hash.vdb"))
         .or_else(|| read_hash_file(&app_dir.join("HASH.VDB")))
         .or_else(|| read_hash_file(&hash_file_path(titleid)))
     {
         return compare(&cached, expected1, expected2);
     }
-
     let Some(executable) = find_executable(app_dir) else {
         return InstallState::Installed;
     };
@@ -476,10 +500,8 @@ fn hash_state(titleid: &str, app_dir: &Path, expected1: &str, expected2: &str) -
     let _ = std::fs::create_dir_all(HASH_CACHE_DIR);
     let _ = std::fs::write(hash_file_path(titleid), &digest);
     let _ = std::fs::write(app_dir.join("hash.vdb"), &digest);
-
     compare(&digest, expected1, expected2)
 }
-
 fn find_executable(app_dir: &Path) -> Option<PathBuf> {
     for name in &["eboot.bin", "EBOOT.BIN", "Eboot.bin", "eboot.pbp", "EBOOT.PBP", "Eboot.pbp"] {
         let p = app_dir.join(name);
@@ -498,7 +520,6 @@ fn find_executable(app_dir: &Path) -> Option<PathBuf> {
     }
     None
 }
-
 fn compare(actual: &str, expected1: &str, expected2: &str) -> InstallState {
     if (expected1.len() == HASH_LEN && actual.eq_ignore_ascii_case(expected1))
         || (expected2.len() == HASH_LEN && actual.eq_ignore_ascii_case(expected2))
@@ -508,7 +529,6 @@ fn compare(actual: &str, expected1: &str, expected2: &str) -> InstallState {
         InstallState::Outdated
     }
 }
-
 fn read_hash_file(path: &Path) -> Option<String> {
     let text = std::fs::read_to_string(path).ok()?;
     let trimmed = text.trim();
@@ -520,7 +540,6 @@ fn read_hash_file(path: &Path) -> Option<String> {
     }
     None
 }
-
 fn md5_file(path: &Path) -> Option<String> {
     let mut file = std::fs::File::open(path).ok()?;
     let mut hasher = Md5::new();
