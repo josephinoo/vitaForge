@@ -51,8 +51,17 @@ impl VitaSurface {
         pixels_per_point: f32,
         primitives: &[egui::ClippedPrimitive],
         textures_delta: &egui::TexturesDelta,
+        ime_active: bool,
     ) -> Result<()> {
         self.egui_painter.paint(&mut self.canvas, [WIDTH, HEIGHT], pixels_per_point, primitives, textures_delta)?;
+        #[cfg(target_os = "vita")]
+        if ime_active {
+            unsafe {
+                vitasdk_sys::sceCommonDialogUpdate(std::ptr::null_mut());
+            }
+        }
+        self.canvas.present();
+        Ok(())
         self.canvas.present();
         Ok(())
     }

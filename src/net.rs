@@ -13,6 +13,8 @@ pub fn client() -> reqwest::Client {
                 .redirect(reqwest::redirect::Policy::limited(10))
                 .connect_timeout(CONNECT_TIMEOUT)
                 .read_timeout(READ_TIMEOUT)
+                .pool_max_idle_per_host(8)
+                .tcp_keepalive(Duration::from_secs(60))
                 .build()
                 .expect("failed to build the shared http client")
         })

@@ -151,20 +151,24 @@ impl SdlEguiPainter {
     }
 
     fn image_to_sdl_rgba(image: &egui::ImageData) -> Vec<u8> {
-        let mut pixels = Vec::with_capacity(image.width() * image.height() * 4);
         match image {
             egui::ImageData::Color(image) => {
-                for pixel in &image.pixels {
-                    pixels.extend_from_slice(&pixel.to_srgba_unmultiplied());
-                }
+                let bytes: &[u8] = unsafe {
+                    std::slice::from_raw_parts(
+                        image.pixels.as_ptr() as *const u8,
+                        image.pixels.len() * 4,
+                    )
+                };
+                bytes.to_vec()
             }
             egui::ImageData::Font(image) => {
+                let mut pixels = Vec::with_capacity(image.width() * image.height() * 4);
                 for pixel in image.srgba_pixels(None) {
                     pixels.extend_from_slice(&pixel.to_srgba_unmultiplied());
                 }
+                pixels
             }
         }
-        pixels
     }
 
     fn sdl_vertex(
@@ -172,7 +176,7 @@ impl SdlEguiPainter {
         pixels_per_point: f32,
         uv_scale: egui::Vec2,
     ) -> sdl2::render::Vertex {
-        let [r, g, b, a] = vertex.color.to_srgba_unmultiplied();
+        let [r, g, b, a] = vertex.color.to_array();
         sdl2::render::Vertex {
             position: sdl2::rect::FPoint::new(
                 vertex.pos.x * pixels_per_point,
