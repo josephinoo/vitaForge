@@ -292,7 +292,7 @@ impl Language {
 
     pub fn btn_open(self) -> &'static str {
         match self {
-            Language::Spanish => "Abrir",
+            Language::Spanish => "Seleccionar",
             Language::English => "Select",
         }
     }
@@ -320,8 +320,8 @@ impl Language {
 
     pub fn loading_msg(self) -> &'static str {
         match self {
-            Language::Spanish => "Cargando catálogo...",
-            Language::English => "Fetching catalog...",
+            Language::Spanish => "Cargando catálogo y precargando iconos...",
+            Language::English => "Loading app catalog & pre-caching icons...",
         }
     }
 }

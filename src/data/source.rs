@@ -30,7 +30,6 @@ fn load_cached() -> Option<Vec<AppEntry>> {
     let text = std::fs::read_to_string(CACHE_PATH).ok()?;
     match serde_json::from_str::<Vec<AppEntry>>(&text) {
         Ok(mut entries) => {
-
             for entry in &mut entries {
                 entry.rebuild_derived();
             }

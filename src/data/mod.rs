@@ -77,6 +77,7 @@ impl SortOrder {
     pub const ALL: [SortOrder; 5] =
         [SortOrder::Downloads, SortOrder::Rating, SortOrder::Recent, SortOrder::Size, SortOrder::NameAsc];
 
+    #[allow(dead_code)]
     pub fn label(self) -> &'static str {
         match self {
             SortOrder::Downloads => "Most downloaded",

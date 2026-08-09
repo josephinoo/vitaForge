@@ -1,4 +1,7 @@
 #[link(name = "SDL2", kind = "static")]
+#[link(name = "vitaGL", kind = "static")]
+#[link(name = "vita2d", kind = "static")]
+#[link(name = "mathneon", kind = "static")]
 unsafe extern "C" {}
 
 mod egui_painter;
@@ -18,18 +21,17 @@ use surface::{HEIGHT, VitaSurface, WIDTH};
 
 const UI_SCALE: f32 = 1.3;
 const TARGET_FRAME_TIME: Duration = Duration::from_millis(16);
+#[allow(dead_code)]
 const INPUT_POLL_INTERVAL: Duration = Duration::from_millis(4);
 const IDLE_REPAINT_FLOOR: Duration = Duration::from_millis(200);
-const STICK_REPEAT_DELAY: Duration = Duration::from_millis(350);
-const STICK_REPEAT_INTERVAL: Duration = Duration::from_millis(110);
+const STICK_REPEAT_DELAY: Duration = Duration::from_millis(150);
+const STICK_REPEAT_INTERVAL: Duration = Duration::from_millis(30);
 
-const IME_OPEN_GRACE: Duration = Duration::from_millis(500);
 
 struct ImeSession {
-    opened_at: Instant,
-    seen_open: bool,
     text: Option<String>,
     confirmed: bool,
+    canceled: bool,
 }
 
 pub fn run(mut app: App) -> Result<()> {
@@ -49,20 +51,49 @@ pub fn run(mut app: App) -> Result<()> {
     let mut held_since = Instant::now();
     let mut last_repeat_at = Instant::now();
 
+    let mut last_present = Instant::now();
+    #[cfg(target_os = "vita")]
+    let mut native_ime: Option<NativeImeSession> = None;
+
     loop {
+        request_display_keepalive();
+
         let loop_started_at = Instant::now();
         let mut egui_events = Vec::new();
         let mut direct_commands = Vec::new();
         let screen_points = (WIDTH as f32 / UI_SCALE, HEIGHT as f32 / UI_SCALE);
 
-        for event in event_pump.poll_iter() {
+        #[cfg(target_os = "vita")]
+        if let Some(session) = &mut native_ime {
+            if let Some(result) = session.update() {
+                native_ime = None;
+                if let Some(text) = result {
+                    let _ = app.handle_command(AppCommand::SetSearchQuery(text));
+                }
+                let _ = app.handle_command(AppCommand::CloseSearch);
+                last_present = Instant::now() - Duration::from_secs(1);
+            } else {
+                surface.present_snapshot()?;
+                sleep(TARGET_FRAME_TIME);
+                continue;
+            }
+        }
 
+        for event in event_pump.poll_iter() {
             if let Some(session) = &mut ime {
                 match event {
-                    sdl2::event::Event::TextInput { text, .. } => session.text = Some(text),
-
+                    sdl2::event::Event::TextInput { text, .. } => {
+                        session.text = Some(text);
+                        session.confirmed = true;
+                    }
                     sdl2::event::Event::KeyDown { keycode: Some(Keycode::Return), .. } => {
                         session.confirmed = true;
+                    }
+                    sdl2::event::Event::KeyDown { keycode: Some(Keycode::Escape), .. } => {
+                        session.canceled = true;
+                    }
+                    sdl2::event::Event::ControllerButtonDown { button: sdl2::controller::Button::B, .. } => {
+                        session.canceled = true;
                     }
                     _ => {}
                 }
@@ -79,6 +110,16 @@ pub fn run(mut app: App) -> Result<()> {
                 direct_commands.push(command);
             }
             match event {
+                sdl2::event::Event::Quit { .. }
+                | sdl2::event::Event::AppWillEnterBackground { .. }
+                | sdl2::event::Event::AppDidEnterBackground { .. } => {
+                    #[cfg(target_os = "vita")]
+                    unsafe {
+                        vitasdk_sys::sceKernelExitProcess(0);
+                    }
+                    #[cfg(not(target_os = "vita"))]
+                    return Ok(());
+                }
                 sdl2::event::Event::ControllerDeviceAdded { .. } if controller.is_none() => {
                     controller = open_first_controller(&controllers);
                 }
@@ -88,19 +129,11 @@ pub fn run(mut app: App) -> Result<()> {
         }
 
         if let Some(session) = &mut ime {
-            let shown = video.text_input().is_screen_keyboard_shown(surface.window());
-            session.seen_open |= shown;
-
-            let reported_result = session.text.is_some() || session.confirmed;
-            let finished = if session.seen_open {
-                !shown || reported_result
-            } else {
-                reported_result || session.opened_at.elapsed() >= IME_OPEN_GRACE
-            };
+            let finished = session.confirmed || session.canceled || session.text.is_some();
 
             if !finished {
                 app.tick(&egui_ctx)?;
-                surface.present_snapshot()?;
+                sleep(TARGET_FRAME_TIME);
                 continue;
             }
 
@@ -146,7 +179,9 @@ pub fn run(mut app: App) -> Result<()> {
             crate::app::AppState::Catalog(catalog) if catalog.search_requested
         );
 
-        let entering_ime = search_requested;
+        let entering_ime = search_requested && ime.is_none();
+        #[cfg(target_os = "vita")]
+        let entering_ime = entering_ime && native_ime.is_none();
 
         let _had_egui_events = !egui_events.is_empty();
         let raw_input = egui::RawInput {
@@ -183,40 +218,107 @@ pub fn run(mut app: App) -> Result<()> {
             && !_had_direct_commands
             && !has_texture_delta;
 
-        if !idle || entering_ime {
+        if !idle || entering_ime || last_present.elapsed() >= Duration::from_millis(500) {
             let clipped_primitives = egui_ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
             if entering_ime {
+                surface.snapshot_egui(full_output.pixels_per_point, &clipped_primitives, &full_output.textures_delta)?;
                 surface.snapshot_egui(full_output.pixels_per_point, &clipped_primitives, &full_output.textures_delta)?;
             } else {
                 surface.draw_scene();
                 surface.paint_egui(full_output.pixels_per_point, &clipped_primitives, &full_output.textures_delta)?;
             }
+            last_present = Instant::now();
         }
 
         if entering_ime {
-            video.text_input().start();
-            ime = Some(ImeSession {
-                opened_at: Instant::now(),
-                seen_open: false,
-                text: None,
-                confirmed: false,
-            });
+            #[cfg(target_os = "vita")]
+            {
+                native_ime = NativeImeSession::start("Search VitaForge");
+            }
+            #[cfg(not(target_os = "vita"))]
+            {
+                video.text_input().start();
+                ime = Some(ImeSession {
+                    text: None,
+                    confirmed: false,
+                    canceled: false,
+                });
+            }
             continue;
         }
 
-        let frame_deadline = if idle {
-            loop_started_at + TARGET_FRAME_TIME.max(repaint_after.min(IDLE_REPAINT_FLOOR))
-        } else {
-            loop_started_at + TARGET_FRAME_TIME
-        };
-
-        while Instant::now() < frame_deadline {
-            let remaining = frame_deadline.saturating_duration_since(Instant::now());
-            sleep(remaining.min(INPUT_POLL_INTERVAL));
-            if Instant::now() >= frame_deadline {
-                break;
+        if idle {
+            let target_delay = TARGET_FRAME_TIME.max(repaint_after.min(IDLE_REPAINT_FLOOR));
+            let elapsed = loop_started_at.elapsed();
+            if elapsed < target_delay {
+                sleep(target_delay - elapsed);
             }
-            event_pump.pump_events();
         }
     }
 }
+
+fn request_display_keepalive() {
+    #[cfg(target_os = "vita")]
+    unsafe {
+        let _ = vitasdk_sys::scePowerRequestDisplayOn();
+    }
+}
+
+#[cfg(target_os = "vita")]
+struct NativeImeSession {
+    _title_u16: Vec<u16>,
+    _initial_u16: Vec<u16>,
+    buffer_u16: Vec<u16>,
+}
+
+#[cfg(target_os = "vita")]
+impl NativeImeSession {
+    fn start(title: &str) -> Option<Self> {
+        use vitasdk_sys::*;
+        let _title_u16: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
+        let _initial_u16: Vec<u16> = vec![0u16];
+        let mut buffer_u16: Vec<u16> = vec![0u16; 256];
+
+        let mut param: SceImeDialogParam = unsafe { std::mem::zeroed() };
+        param.sdkVersion = 0x03150000;
+        param.supportedLanguages = 0x0001;
+        param.dialogMode = 1;
+        param.textBoxMode = 0;
+        param.title = _title_u16.as_ptr();
+        param.maxTextLength = 200;
+        param.initialText = _initial_u16.as_ptr() as *mut _;
+        param.inputTextBuffer = buffer_u16.as_mut_ptr();
+
+        unsafe {
+            let common_ptr = &mut param.commonParam as *mut _;
+            param.commonParam.magic = 0xC0D1A109u32.wrapping_add(common_ptr as usize as u32);
+            if sceImeDialogInit(&param) < 0 {
+                return None;
+            }
+        }
+
+        Some(Self { _title_u16, _initial_u16, buffer_u16 })
+    }
+
+    fn update(&mut self) -> Option<Option<String>> {
+        use vitasdk_sys::*;
+        unsafe {
+            let _ = sceCommonDialogUpdate(std::ptr::null_mut());
+            let status = sceImeDialogGetStatus();
+            if status == 2 {
+                let mut result: SceImeDialogResult = std::mem::zeroed();
+                sceImeDialogGetResult(&mut result);
+                sceImeDialogTerm();
+                if result.button == 2 {
+                    let len = self.buffer_u16.iter().position(|&c| c == 0).unwrap_or(self.buffer_u16.len());
+                    return Some(String::from_utf16(&self.buffer_u16[..len]).ok());
+                } else {
+                    return Some(None);
+                }
+            }
+        }
+        None
+    }
+}
+
+

@@ -24,13 +24,15 @@ impl SdlEguiPainter {
     ) -> Result<()> {
         self.apply_textures(canvas, textures_delta);
 
+        let mut current_clip: Option<sdl2::rect::Rect> = None;
+        let mut current_texture_id: Option<egui::TextureId> = None;
+
         for clipped_primitive in primitives {
             let Some(clip_rect) =
                 Self::sdl_clip_rect(clipped_primitive.clip_rect, screen_size, pixels_per_point)
             else {
                 continue;
             };
-            canvas.set_clip_rect(clip_rect);
 
             let egui::epaint::Primitive::Mesh(mesh) = &clipped_primitive.primitive else {
                 continue;
@@ -39,28 +41,31 @@ impl SdlEguiPainter {
                 continue;
             }
 
-            let texture = self.textures.get(&mesh.texture_id);
+            let uv_scale = match self.textures.get(&mesh.texture_id) {
+                Some(t) => t.uv_scale,
+                None if mesh.texture_id != egui::TextureId::default() => continue,
+                None => egui::vec2(1.0, 1.0),
+            };
 
-            if texture.is_none() && mesh.texture_id != egui::TextureId::default() {
-                continue;
+            let same_batch = current_clip == Some(clip_rect) && current_texture_id == Some(mesh.texture_id);
+
+            if !same_batch {
+                self.flush_batch(canvas, current_texture_id);
+                canvas.set_clip_rect(clip_rect);
+                current_clip = Some(clip_rect);
+                current_texture_id = Some(mesh.texture_id);
             }
-            self.vertices.clear();
-            let uv_scale = texture.map(|t| t.uv_scale).unwrap_or(egui::vec2(1.0, 1.0));
+
+            let base_index = self.vertices.len() as u32;
             self.vertices.extend(
                 mesh.vertices
                     .iter()
                     .map(|vertex| Self::sdl_vertex(vertex, pixels_per_point, uv_scale)),
             );
-
-            self.indices.clear();
-            self.indices.extend(mesh.indices.iter().map(|&i| i as i32));
-
-            let texture_ref = texture.map(|t| &t.texture);
-
-            if let Err(err) = canvas.render_geometry(&self.vertices, texture_ref, &self.indices) {
-                eprintln!("skipped a draw call: {err}");
-            }
+            self.indices.extend(mesh.indices.iter().map(|&i| (base_index + i) as i32));
         }
+
+        self.flush_batch(canvas, current_texture_id);
 
         canvas.set_clip_rect(None);
         for texture_id in &textures_delta.free {
@@ -68,6 +73,27 @@ impl SdlEguiPainter {
         }
 
         Ok(())
+    }
+
+    fn flush_batch(
+        &mut self,
+        canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+        texture_id: Option<egui::TextureId>,
+    ) {
+        if self.indices.is_empty() || self.vertices.is_empty() {
+            self.vertices.clear();
+            self.indices.clear();
+            return;
+        }
+
+        let texture_ref = texture_id.and_then(|id| self.textures.get(&id)).map(|t| &t.texture);
+
+        if let Err(err) = canvas.render_geometry(&self.vertices, texture_ref, &self.indices) {
+            eprintln!("skipped a draw call: {err}");
+        }
+
+        self.vertices.clear();
+        self.indices.clear();
     }
 
     fn apply_textures(

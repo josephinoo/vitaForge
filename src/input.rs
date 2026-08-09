@@ -28,6 +28,7 @@ pub enum AppCommand {
     InstallCurrent,
     DismissInstall,
     SelfUpdate,
+    Exit,
 }
 
 impl From<InputCommand> for AppCommand {
@@ -65,6 +66,7 @@ pub fn map_controller_button_event(event: &Event) -> Option<AppCommand> {
         Button::A => InputCommand::Confirm,
         Button::B => InputCommand::Back,
         Button::Y => return Some(AppCommand::RequestSearch),
+        Button::Back => return Some(AppCommand::Exit),
         Button::DPadUp => InputCommand::MoveUp,
         Button::DPadDown => InputCommand::MoveDown,
         Button::DPadLeft => InputCommand::MoveLeft,

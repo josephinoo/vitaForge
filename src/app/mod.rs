@@ -102,12 +102,8 @@ impl CatalogState {
             return;
         }
         self.scroll_to_selected = true;
+        self.selection_active = true;
 
-        if !self.selection_active {
-            self.selection_active = true;
-            self.selected = 0;
-            return;
-        }
         let last = self.filtered_indices.len() as isize - 1;
         let target = (self.selected as isize + delta).clamp(0, last);
         self.selected = target as usize;
@@ -120,6 +116,7 @@ pub enum AppState {
     Detail {
         app: AppEntry,
         previous: Box<CatalogState>,
+        #[allow(dead_code)]
         origin: Option<egui::Rect>,
         scroll_offset: f32,
     },
@@ -283,6 +280,7 @@ impl App {
                 self.load_rx = None;
                 if matches!(self.state, AppState::Loading) && !self.install_busy() {
                     let catalog = CatalogState::new(apps);
+                    self.icons.preload_catalog_icons(ctx, &catalog.apps);
                     self.installed.force_refresh(ctx, &catalog.apps);
                     self.state = AppState::Catalog(catalog);
                     ctx.request_repaint();
@@ -292,6 +290,7 @@ impl App {
                 self.load_rx = None;
                 if matches!(self.state, AppState::Loading) && !self.install_busy() {
                     let catalog = CatalogState::new(data::source::initial_catalog());
+                    self.icons.preload_catalog_icons(ctx, &catalog.apps);
                     self.installed.force_refresh(ctx, &catalog.apps);
                     self.state = AppState::Catalog(catalog);
                     ctx.request_repaint();
@@ -340,12 +339,14 @@ impl App {
                 }
             }
             AppCommand::Input(InputCommand::Confirm) => {
-
                 let target = match &mut self.state {
-                    AppState::Catalog(catalog) if catalog.selection_active => Some(catalog.selected),
                     AppState::Catalog(catalog) => {
-                        catalog.move_selection(0);
-                        None
+                        if !catalog.filtered_indices.is_empty() {
+                            catalog.selection_active = true;
+                            Some(catalog.selected)
+                        } else {
+                            None
+                        }
                     }
                     _ => None,
                 };
@@ -463,6 +464,14 @@ impl App {
                     self.install = Some(InstallJob { app_id, app_id_title, progress, rx });
                 }
             }
+            AppCommand::Exit => {
+                #[cfg(target_os = "vita")]
+                unsafe {
+                    vitasdk_sys::sceKernelExitProcess(0);
+                }
+                #[cfg(not(target_os = "vita"))]
+                std::process::exit(0);
+            }
         }
         Ok(())
     }
@@ -496,12 +505,22 @@ impl App {
     }
 
     fn back_to_catalog(&mut self) {
-
         if self.install_busy() {
             return;
         }
+        if let AppState::Catalog(catalog) = &mut self.state {
+            if !catalog.search_query.is_empty() || catalog.search_requested {
+                catalog.search_query.clear();
+                catalog.search_requested = false;
+                catalog.refresh_filter();
+                return;
+            }
+        }
         if let AppState::Detail { previous, .. } = &mut self.state {
-            let previous = std::mem::replace(previous.as_mut(), CatalogState::empty());
+            let mut previous = std::mem::replace(previous.as_mut(), CatalogState::empty());
+            previous.search_query.clear();
+            previous.search_requested = false;
+            previous.refresh_filter();
             self.state = AppState::Catalog(previous);
             self.needs_installed_rescan = true;
         }

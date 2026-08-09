@@ -35,6 +35,7 @@ const SCROLLBAR_RESERVE: f32 = 30.0;
 const PRESS_ANIM_SECS: f32 = 0.08;
 const HOVER_ANIM_SECS: f32 = 0.12;
 const PRESS_SHRINK: f32 = 2.5;
+#[allow(dead_code)]
 const TILE_INSET: f32 = 3.0;
 #[allow(dead_code)]
 const TILE_GROW: f32 = 3.0;
@@ -191,7 +192,7 @@ fn loading_screen(
                         if let Some(progress) = install_progress {
                             let tag = self_update.map_or("", |u| u.tag.as_str());
                             ui.label(
-                                egui::RichText::new(format!("🚀 Actualizando VitaForge {}...", tag))
+                                egui::RichText::new(format!("🚀 Updating VitaForge {}...", tag))
                                     .color(STAR_GOLD)
                                     .size(15.0)
                                     .strong(),
@@ -344,6 +345,7 @@ fn catalog_screen(
                     });
                     ui.add_space(GRID_SPACING);
                 }
+                ui.add_space(60.0);
             });
         });
 
@@ -546,13 +548,12 @@ fn draw_cover(ui: &mut egui::Ui, icons: &IconCache, rect: egui::Rect, entry: &cr
 
     if let Some(url) = entry.icon_url.as_deref() {
         if let Some(texture) = icons.get(ui.ctx(), url) {
-            let mut mesh = egui::Mesh::with_texture(texture.id());
-            mesh.add_rect_with_uv(
+            ui.painter().image(
+                texture.id(),
                 rect,
                 egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
                 TEXT_WHITE,
             );
-            ui.painter().add(egui::Shape::mesh(mesh));
             return;
         }
     }
@@ -820,6 +821,39 @@ fn detail_screen(
             &[(Glyph::Circle, lang.btn_back()), (Glyph::Cross, lang.btn_open())],
             Some(installed.summary()),
         );
+    }
+
+    if let Some(job) = install {
+        if !job.is_finished() {
+            egui::Area::new(egui::Id::new("install_overlay"))
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                .order(egui::Order::Foreground)
+                .show(ctx, |ui| {
+                    egui::Frame::window(&ctx.style())
+                        .fill(BG_CARD)
+                        .stroke(egui::Stroke::new(1.5_f32, ACCENT_STEAM))
+                        .corner_radius(12.0)
+                        .inner_margin(egui::vec2(24.0, 18.0))
+                        .show(ui, |ui| {
+                            ui.vertical_centered(|ui| {
+                                ui.add(egui::Spinner::new().size(32.0).color(ACCENT_STEAM));
+                                ui.add_space(12.0);
+                                ui.label(
+                                    egui::RichText::new(format!("Installing {}...", entry.name))
+                                        .size(16.0)
+                                        .strong()
+                                        .color(TEXT_WHITE),
+                                );
+                                ui.add_space(6.0);
+                                ui.label(
+                                    egui::RichText::new(job.label())
+                                        .size(13.0)
+                                        .color(STAR_GOLD),
+                                );
+                            });
+                        });
+                });
+        }
     }
 
     egui::CentralPanel::default()
@@ -1162,13 +1196,12 @@ fn draw_screenshot(ui: &mut egui::Ui, icons: &IconCache, rect: egui::Rect, url: 
     ui.painter().rect_stroke(rect, 8.0, egui::Stroke::new(1.0_f32, SEPARATOR), egui::StrokeKind::Inside);
 
     if let Some(texture) = icons.get_sized(ui.ctx(), url, super::icons::MAX_SCREENSHOT_SIDE) {
-        let mut mesh = egui::Mesh::with_texture(texture.id());
-        mesh.add_rect_with_uv(
+        ui.painter().image(
+            texture.id(),
             rect,
             egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
             TEXT_WHITE,
         );
-        ui.painter().add(egui::Shape::mesh(mesh));
         ui.painter().rect_stroke(rect, 8.0, egui::Stroke::new(1.0_f32, SEPARATOR), egui::StrokeKind::Inside);
         return;
     }
@@ -1221,13 +1254,12 @@ fn draw_icon(ui: &mut egui::Ui, icons: &IconCache, rect: egui::Rect, entry: &cra
 
     if let Some(url) = entry.icon_url.as_deref() {
         if let Some(texture) = icons.get(ui.ctx(), url) {
-            let mut mesh = egui::Mesh::with_texture(texture.id());
-            mesh.add_rect_with_uv(
+            ui.painter().image(
+                texture.id(),
                 rect,
                 egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
                 TEXT_WHITE,
             );
-            ui.painter().add(egui::Shape::mesh(mesh));
             return;
         }
     }

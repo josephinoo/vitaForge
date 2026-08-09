@@ -1,11 +1,9 @@
 .PHONY: vpk desktop ftp eboot upload-vpk run-vita
 
-# Without this the build never sees SERVER_URL and silently falls back to the
-# default catalog url baked into the source.
 -include .env
 export SERVER_URL
 
-RUSTFLAGS ?= -C target-feature=-neon
+RUSTFLAGS ?= -A internal_features
 CARGO_VITA ?= cargo +nightly vita
 VPK := target/armv7-sony-vita-newlibeabihf/release/vitaforge.vpk
 VITA_UPLOAD_DIR ?= ux0:/data/
@@ -31,14 +29,3 @@ endif
 eboot:
 	RUSTFLAGS="$(RUSTFLAGS)" $(CARGO_VITA) build eboot --release
 
-upload-vpk: vpk
-ifndef VITA_IP
-	$(error Usage: make upload-vpk VITA_IP=192.168.0.103)
-endif
-	$(CARGO_VITA) upload --vita-ip $(VITA_IP) --source $(VPK) --destination $(VITA_UPLOAD_DIR)
-
-run-vita:
-ifndef VITA_IP
-	$(error Usage: make run-vita VITA_IP=192.168.0.103)
-endif
-	RUSTFLAGS="$(RUSTFLAGS)" $(CARGO_VITA) build eboot --update --run --vita-ip $(VITA_IP) -- --release
