@@ -5,9 +5,8 @@ use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
 
 const CACHE_DIR: &str = "ux0:data/vitaforge/cache";
-const MAX_CONCURRENT_FETCHES: usize = 3;
-
-const MAX_CONCURRENT_LARGE_FETCHES: usize = 1;
+const MAX_CONCURRENT_FETCHES: usize = 4;
+const MAX_CONCURRENT_LARGE_FETCHES: usize = 2;
 const MAX_ICON_SIDE: u32 = 128;
 pub const MAX_SCREENSHOT_SIDE: u32 = 256;
 const MAX_RESIDENT_BYTES: usize = 64 * 1024 * 1024;
@@ -137,12 +136,12 @@ impl IconCache {
 }
 
 fn evict_stale(entries: &mut HashMap<u32, Bucket>, ctx: &egui::Context) {
-    let mut by_age: Vec<(u32, String, u64, usize)> = entries
+    let mut by_age: Vec<(u32, &String, u64, usize)> = entries
         .iter()
         .flat_map(|(size, bucket)| {
             bucket.iter().filter_map(move |(url, state)| match state {
                 IconState::Ready { last_used, byte_size, .. } => {
-                    Some((*size, url.clone(), *last_used, *byte_size))
+                    Some((*size, url, *last_used, *byte_size))
                 }
                 _ => None,
             })
@@ -154,17 +153,21 @@ fn evict_stale(entries: &mut HashMap<u32, Bucket>, ctx: &egui::Context) {
         return;
     }
 
-    by_age.sort_by_key(|(_, _, last_used, _)| *last_used);
+    by_age.sort_unstable_by_key(|(_, _, last_used, _)| *last_used);
 
+    let mut to_remove = Vec::new();
     for (max_side, url, _, byte_size) in by_age {
         if resident_bytes <= MAX_RESIDENT_BYTES {
             break;
         }
-        let Some(bucket) = entries.get_mut(&max_side) else { continue };
-        if let Some(IconState::Ready { texture, .. }) = bucket.remove(&url) {
-            ctx.forget_image(&url);
-            drop(texture);
-            resident_bytes = resident_bytes.saturating_sub(byte_size);
+        to_remove.push((max_side, url.clone()));
+        ctx.forget_image(url);
+        resident_bytes = resident_bytes.saturating_sub(byte_size);
+    }
+
+    for (max_side, url) in to_remove {
+        if let Some(bucket) = entries.get_mut(&max_side) {
+            bucket.remove(&url);
         }
     }
 }

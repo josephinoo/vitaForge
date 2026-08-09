@@ -2,6 +2,16 @@
 #[link(name = "vitaGL", kind = "static")]
 #[link(name = "vita2d", kind = "static")]
 #[link(name = "mathneon", kind = "static")]
+#[link(name = "SceShaccCg_stub", kind = "static")]
+#[link(name = "SceGxm_stub", kind = "static")]
+#[link(name = "SceDisplay_stub", kind = "static")]
+#[link(name = "SceCtrl_stub", kind = "static")]
+#[link(name = "SceAppMgr_stub", kind = "static")]
+#[link(name = "SceAppUtil_stub", kind = "static")]
+#[link(name = "SceSysmodule_stub", kind = "static")]
+#[link(name = "SceCommonDialog_stub", kind = "static")]
+#[link(name = "SceIme_stub", kind = "static")]
+#[link(name = "taihen_stub", kind = "static")]
 unsafe extern "C" {}
 
 mod egui_painter;
@@ -64,18 +74,17 @@ pub fn run(mut app: App) -> Result<()> {
         let screen_points = (WIDTH as f32 / UI_SCALE, HEIGHT as f32 / UI_SCALE);
 
         #[cfg(target_os = "vita")]
+        let mut ime_just_closed = false;
+
+        #[cfg(target_os = "vita")]
         if let Some(session) = &mut native_ime {
             if let Some(result) = session.update() {
                 native_ime = None;
+                ime_just_closed = true;
                 if let Some(text) = result {
                     let _ = app.handle_command(AppCommand::SetSearchQuery(text));
                 }
                 let _ = app.handle_command(AppCommand::CloseSearch);
-                last_present = Instant::now() - Duration::from_secs(1);
-            } else {
-                surface.present_snapshot()?;
-                sleep(TARGET_FRAME_TIME);
-                continue;
             }
         }
 
@@ -126,6 +135,13 @@ pub fn run(mut app: App) -> Result<()> {
                 sdl2::event::Event::ControllerDeviceRemoved { .. } => controller = None,
                 _ => {}
             }
+        }
+
+        #[cfg(target_os = "vita")]
+        if native_ime.is_some() || ime_just_closed {
+            egui_events.clear();
+            direct_commands.clear();
+            held_direction = None;
         }
 
         if let Some(session) = &mut ime {
@@ -218,17 +234,15 @@ pub fn run(mut app: App) -> Result<()> {
             && !_had_direct_commands
             && !has_texture_delta;
 
-        if !idle || entering_ime || last_present.elapsed() >= Duration::from_millis(500) {
-            let clipped_primitives = egui_ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
-            if entering_ime {
-                surface.snapshot_egui(full_output.pixels_per_point, &clipped_primitives, &full_output.textures_delta)?;
-                surface.snapshot_egui(full_output.pixels_per_point, &clipped_primitives, &full_output.textures_delta)?;
-            } else {
-                surface.draw_scene();
-                surface.paint_egui(full_output.pixels_per_point, &clipped_primitives, &full_output.textures_delta)?;
-            }
-            last_present = Instant::now();
-        }
+        #[cfg(target_os = "vita")]
+        let ime_active = native_ime.is_some() || entering_ime;
+        #[cfg(not(target_os = "vita"))]
+        let ime_active = false;
+
+        let clipped_primitives = egui_ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
+        surface.draw_scene();
+        surface.paint_egui(full_output.pixels_per_point, &clipped_primitives, &full_output.textures_delta, ime_active)?;
+        last_present = Instant::now();
 
         if entering_ime {
             #[cfg(target_os = "vita")]
@@ -247,12 +261,9 @@ pub fn run(mut app: App) -> Result<()> {
             continue;
         }
 
-        if idle {
-            let target_delay = TARGET_FRAME_TIME.max(repaint_after.min(IDLE_REPAINT_FLOOR));
-            let elapsed = loop_started_at.elapsed();
-            if elapsed < target_delay {
-                sleep(target_delay - elapsed);
-            }
+        let elapsed = loop_started_at.elapsed();
+        if elapsed < TARGET_FRAME_TIME {
+            sleep(TARGET_FRAME_TIME - elapsed);
         }
     }
 }
@@ -303,7 +314,6 @@ impl NativeImeSession {
     fn update(&mut self) -> Option<Option<String>> {
         use vitasdk_sys::*;
         unsafe {
-            let _ = sceCommonDialogUpdate(std::ptr::null_mut());
             let status = sceImeDialogGetStatus();
             if status == 2 {
                 let mut result: SceImeDialogResult = std::mem::zeroed();
