@@ -8,7 +8,7 @@ const MAX_CONCURRENT_FETCHES: usize = 4;
 const MAX_CONCURRENT_LARGE_FETCHES: usize = 2;
 pub const MAX_ICON_SIDE: u32 = 128;
 pub const MAX_SCREENSHOT_SIDE: u32 = 256;
-const MAX_RESIDENT_BYTES: usize = 64 * 1024 * 1024;
+const MAX_RESIDENT_BYTES: usize = 32 * 1024 * 1024;
 
 pub const HERO_SIDE: u32 = 160;
 const RETRY_AFTER: Duration = Duration::from_secs(5);
@@ -177,10 +177,19 @@ impl IconCache {
     }
 
     
-    pub fn precache_background(&self, urls: Vec<String>) {
+    pub fn precache_background(&self, mut urls: Vec<String>) {
+
+        const PRECACHE_LIMIT: usize = 100;
+        urls.truncate(PRECACHE_LIMIT);
         let cache = self.clone();
         tokio::spawn(async move {
-            for url in urls {
+    
+            let to_fetch: Vec<String> = tokio::task::spawn_blocking(move || {
+                urls.into_iter().filter(|url| cache_path(url).is_some_and(|p| !p.exists())).collect()
+            })
+            .await
+            .unwrap_or_default();
+            for url in to_fetch {
                 if cache.is_loading(&url, MAX_ICON_SIDE) {
                     continue;
                 }
@@ -192,12 +201,6 @@ impl IconCache {
                     ) {
                         continue;
                     }
-                }
-                let Some(path) = cache_path(&url) else { continue };
-                let already_cached =
-                    tokio::task::spawn_blocking(move || path.exists()).await.unwrap_or(false);
-                if already_cached {
-                    continue;
                 }
                 let Some(wait) = cache.try_reserve_slot() else {
                     tokio::time::sleep(BACKGROUND_PACING).await;
@@ -400,9 +403,9 @@ fn decode_image(bytes: &[u8], max_side: u32) -> Option<egui::ColorImage> {
     };
     if decoded.width() > max_side || decoded.height() > max_side {
         let filter = if max_side <= HERO_SIDE {
-            image::imageops::FilterType::Triangle
-        } else {
             image::imageops::FilterType::Nearest
+        } else {
+            image::imageops::FilterType::Triangle
         };
         decoded = decoded.resize(max_side, max_side, filter);
     }

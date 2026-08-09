@@ -355,7 +355,8 @@ fn catalog_screen(
                 });
                 return;
             }
-            let featured_entry = if search_query.trim().is_empty() {
+
+            let featured_entry = if search_query.trim().is_empty() && !is_commercial_view {
                 filtered_indices.first().and_then(|&top_index| apps.get(top_index))
             } else {
                 None
@@ -367,20 +368,24 @@ fn catalog_screen(
             let card_height = card_width * aspect_ratio;
             let row_height = card_height + GRID_ROW_SPACING;
             let total_rows = filtered_indices.len().div_ceil(GRID_COLUMNS);
-            let viewport_height = ui.available_height();
             let mut scroll_area = egui::ScrollArea::vertical().id_salt("catalog_grid");
             if scroll_reset {
                 scroll_area = scroll_area.vertical_scroll_offset(0.0);
-            } else if scroll_to_selected && let Some(cursor) = selected {
-                let rows_per_page = (viewport_height / row_height).floor().max(1.0) as usize;
-                let cursor_row = cursor / GRID_COLUMNS;
-                let page = cursor_row / rows_per_page;
-                let offset =
-                    if page == 0 { 0.0 } else { banner_height + (page * rows_per_page) as f32 * row_height };
-                scroll_area = scroll_area.vertical_scroll_offset(offset);
             }
             scroll_area.show_viewport(ui, |ui, viewport| {
                 ui.set_height(banner_height + row_height * total_rows as f32);
+   
+                if scroll_to_selected && !scroll_reset && let Some(cursor) = selected {
+                    let row = cursor / GRID_COLUMNS;
+                    let row_top = ui.max_rect().top() + banner_height + row as f32 * row_height;
+
+                    let target_top = if row == 0 { ui.max_rect().top() } else { row_top };
+                    let row_rect = egui::Rect::from_x_y_ranges(
+                        ui.max_rect().x_range(),
+                        target_top..=(row_top + row_height),
+                    );
+                    ui.scroll_to_rect(row_rect, None);
+                }
                 if let Some(entry) = featured_entry
                     && viewport.min.y < banner_height
                 {

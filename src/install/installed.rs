@@ -185,13 +185,16 @@ impl InstalledIndex {
         true
     }
     fn publish(&self, found: HashMap<String, InstallState>, authoritative: bool) {
-        let mut states = self.states.lock().unwrap();
-        if authoritative {
-            *states = found;
-        } else {
-            states.extend(found);
-        }
-        save_installed_cache(&states);
+        let snapshot = {
+            let mut states = self.states.lock().unwrap();
+            if authoritative {
+                *states = found;
+            } else {
+                states.extend(found);
+            }
+            states.clone()
+        };
+        save_installed_cache(&snapshot);
     }
     pub fn mark_installed(&self, key: &str) {
         if key.is_empty() {
