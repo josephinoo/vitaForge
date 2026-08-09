@@ -66,6 +66,12 @@ Special thanks to the following projects and developers powering the PS Vita hom
 
 ---
 
+## Contributors 
+
+Thanks to everyone who contributes to VitaForge ❤️ 
+
+<a href="https://github.com/josephinoo/vitaForge/graphs/contributors"> <img src="https://contrib.rocks/image?repo=josephinoo/vitaForge" /> </a>
+
 ### License
 
 Distributed under the [GPL-3.0 License](LICENSE).
