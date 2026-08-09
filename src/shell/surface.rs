@@ -62,6 +62,18 @@ impl VitaSurface {
         }
         self.canvas.present();
         Ok(())
+        self.canvas.present();
+        Ok(())
+    }
+
+    pub fn snapshot_egui(
+        &mut self,
+        pixels_per_point: f32,
+        primitives: &[egui::ClippedPrimitive],
+        textures_delta: &egui::TexturesDelta,
+    ) -> Result<()> {
+        self.draw_scene();
+        self.paint_egui(pixels_per_point, primitives, textures_delta)
     }
 
     #[allow(dead_code)]

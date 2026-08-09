@@ -88,6 +88,21 @@ pub fn run(mut app: App) -> Result<()> {
             }
         }
 
+        if let Some(session) = &mut native_ime {
+            if let Some(result) = session.update() {
+                native_ime = None;
+                if let Some(text) = result {
+                    let _ = app.handle_command(AppCommand::SetSearchQuery(text));
+                }
+                let _ = app.handle_command(AppCommand::CloseSearch);
+                last_present = Instant::now() - Duration::from_secs(1);
+            } else {
+                surface.present_snapshot()?;
+                sleep(TARGET_FRAME_TIME);
+                continue;
+            }
+        }
+
         for event in event_pump.poll_iter() {
             if let Some(session) = &mut ime {
                 match event {
@@ -243,6 +258,17 @@ pub fn run(mut app: App) -> Result<()> {
         surface.draw_scene();
         surface.paint_egui(full_output.pixels_per_point, &clipped_primitives, &full_output.textures_delta, ime_active)?;
         last_present = Instant::now();
+        if !idle || entering_ime || last_present.elapsed() >= Duration::from_millis(500) {
+            let clipped_primitives = egui_ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
+            if entering_ime {
+                surface.snapshot_egui(full_output.pixels_per_point, &clipped_primitives, &full_output.textures_delta)?;
+                surface.snapshot_egui(full_output.pixels_per_point, &clipped_primitives, &full_output.textures_delta)?;
+            } else {
+                surface.draw_scene();
+                surface.paint_egui(full_output.pixels_per_point, &clipped_primitives, &full_output.textures_delta)?;
+            }
+            last_present = Instant::now();
+        }
 
         if entering_ime {
             #[cfg(target_os = "vita")]
@@ -264,6 +290,12 @@ pub fn run(mut app: App) -> Result<()> {
         let elapsed = loop_started_at.elapsed();
         if elapsed < TARGET_FRAME_TIME {
             sleep(TARGET_FRAME_TIME - elapsed);
+        if idle {
+            let target_delay = TARGET_FRAME_TIME.max(repaint_after.min(IDLE_REPAINT_FLOOR));
+            let elapsed = loop_started_at.elapsed();
+            if elapsed < target_delay {
+                sleep(target_delay - elapsed);
+            }
         }
     }
 }
@@ -314,6 +346,7 @@ impl NativeImeSession {
     fn update(&mut self) -> Option<Option<String>> {
         use vitasdk_sys::*;
         unsafe {
+            let _ = sceCommonDialogUpdate(std::ptr::null_mut());
             let status = sceImeDialogGetStatus();
             if status == 2 {
                 let mut result: SceImeDialogResult = std::mem::zeroed();
