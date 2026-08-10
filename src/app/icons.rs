@@ -17,7 +17,9 @@ const REQUEST_SPACING: Duration = Duration::from_millis(60);
 const MAX_QUEUE_AHEAD: Duration = Duration::from_millis(750);
 const DEFAULT_THROTTLE: Duration = Duration::from_secs(2);
 const RETRY_DEFERRED: Duration = Duration::from_millis(150);
-const BACKGROUND_PACING: Duration = Duration::from_millis(250);
+// spends a slot when the live gate has been idle for LIVE_PRIORITY_WINDOW: demand always wins.
+const BACKGROUND_PACING: Duration = Duration::from_millis(40);
+const LIVE_PRIORITY_WINDOW: Duration = Duration::from_millis(250);
 enum IconState {
     Loading,
     Ready { texture: egui::TextureHandle, last_used: u64, byte_size: usize },
@@ -43,15 +45,20 @@ pub struct IconCache {
     large_fetch_limit: Arc<Semaphore>,
     clock: Arc<Mutex<u64>>,
     gate: Arc<Mutex<Instant>>,
+    precache_gate: Arc<Mutex<Instant>>,
+    last_live_request: Arc<Mutex<Instant>>,
 }
 impl IconCache {
     pub fn new() -> Self {
+        let far_past = Instant::now() - LIVE_PRIORITY_WINDOW - Duration::from_secs(1);
         Self {
             entries: Arc::new(Mutex::new(HashMap::new())),
             fetch_limit: Arc::new(Semaphore::new(MAX_CONCURRENT_FETCHES)),
             large_fetch_limit: Arc::new(Semaphore::new(MAX_CONCURRENT_LARGE_FETCHES)),
             clock: Arc::new(Mutex::new(0)),
             gate: Arc::new(Mutex::new(Instant::now())),
+            precache_gate: Arc::new(Mutex::new(Instant::now())),
+            last_live_request: Arc::new(Mutex::new(far_past)),
         }
     }
     fn tick(&self) -> u64 {
@@ -60,6 +67,7 @@ impl IconCache {
         *clock
     }
     fn try_reserve_slot(&self) -> Option<Duration> {
+        *self.last_live_request.lock().unwrap() = Instant::now();
         let mut gate = self.gate.lock().unwrap();
         let now = Instant::now();
         let start = (*gate).max(now);
@@ -73,6 +81,20 @@ impl IconCache {
     fn back_off(&self, after: Duration) {
         let mut gate = self.gate.lock().unwrap();
         *gate = (*gate).max(Instant::now() + after);
+    }
+    fn try_reserve_precache_slot(&self) -> Option<Duration> {
+        if self.last_live_request.lock().unwrap().elapsed() < LIVE_PRIORITY_WINDOW {
+            return None;
+        }
+        let mut gate = self.precache_gate.lock().unwrap();
+        let now = Instant::now();
+        let start = (*gate).max(now);
+        let wait = start - now;
+        if wait > MAX_QUEUE_AHEAD {
+            return None;
+        }
+        *gate = start + BACKGROUND_PACING;
+        Some(wait)
     }
     pub fn is_loading(&self, url: &str, max_side: u32) -> bool {
         let entries = self.entries.lock().unwrap();
@@ -177,13 +199,9 @@ impl IconCache {
     }
 
     
-    pub fn precache_background(&self, mut urls: Vec<String>) {
-
-        const PRECACHE_LIMIT: usize = 100;
-        urls.truncate(PRECACHE_LIMIT);
+    pub fn precache_background(&self, urls: Vec<String>) {
         let cache = self.clone();
         tokio::spawn(async move {
-    
             let to_fetch: Vec<String> = tokio::task::spawn_blocking(move || {
                 urls.into_iter().filter(|url| cache_path(url).is_some_and(|p| !p.exists())).collect()
             })
@@ -202,15 +220,18 @@ impl IconCache {
                         continue;
                     }
                 }
-                let Some(wait) = cache.try_reserve_slot() else {
-                    tokio::time::sleep(BACKGROUND_PACING).await;
-                    continue;
-                };
-                if !wait.is_zero() {
-                    tokio::time::sleep(wait).await;
+                loop {
+                    match cache.try_reserve_precache_slot() {
+                        Some(wait) => {
+                            if !wait.is_zero() {
+                                tokio::time::sleep(wait).await;
+                            }
+                            break;
+                        }
+                        None => tokio::time::sleep(LIVE_PRIORITY_WINDOW).await,
+                    }
                 }
                 warm_disk_cache(&url).await;
-                tokio::time::sleep(BACKGROUND_PACING).await;
             }
         });
     }

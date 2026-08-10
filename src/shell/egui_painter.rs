@@ -11,8 +11,8 @@ const MAX_UPLOAD_ATTEMPTS: u32 = 8;
 const BACKOFF_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
 // New streaming-texture creation cost 30-160ms on real hardware (vs Vita3K, where it barely
 const NEW_TEXTURES_PER_FRAME: usize = 1;
-const ICON_FREE_POOL_CAP: usize = 32;
-const ICON_FREE_POOL_WARM_LOW: usize = 8;
+const ICON_FREE_POOL_CAP: usize = 40;
+const ICON_FREE_POOL_WARM_LOW: usize = 12;
 #[derive(Default)]
 pub struct SdlEguiPainter {
     textures: HashMap<egui::TextureId, SdlEguiTexture>,
@@ -209,7 +209,7 @@ impl SdlEguiPainter {
             uploaded += 1;
         }
         self.scratch = scratch;
-        if new_creations == 0 && self.icon_free_pool.len() < ICON_FREE_POOL_WARM_LOW {
+        if new_creations <= NEW_TEXTURES_PER_FRAME && self.icon_free_pool.len() < ICON_FREE_POOL_WARM_LOW {
             if let Ok(mut texture) =
                 canvas.create_texture_streaming(PixelFormatEnum::RGBA32, MAX_ICON_SIDE, MAX_ICON_SIDE)
             {
