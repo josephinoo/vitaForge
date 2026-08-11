@@ -27,7 +27,7 @@ unic-langid = "0.9.6"
 # and run with plain `cargo test` on a dev machine.
 [target.'cfg(target_os = "vita")'.dependencies]
 vita-newlib-shims = "0.3"
-vitasdk-sys = { version = "0.3", features = ["SceAppUtil_stub", "SceSysmem_stub", "SceSysmodule_stub", "ScePromoterUtil_stub", "SceKernelThreadMgr_stub", "SceIme_stub", "SceCommonDialog_stub", "SceLibKernel_stub", "SceIofilemgr_stub", "SceNotificationUtil_stub", "ScePower_stub", "SceGxm_stub", "SceDisplay_stub", "SceCtrl_stub", "SceTouch_stub"] }
+vitasdk-sys = { version = "0.3", features = ["SceAppUtil_stub", "SceSysmem_stub", "SceSysmodule_stub", "ScePromoterUtil_stub", "SceKernelThreadMgr_stub", "SceIme_stub", "SceCommonDialog_stub", "SceLibKernel_stub", "SceIofilemgr_stub", "SceNotificationUtil_stub", "ScePower_stub", "SceGxm_stub", "SceDisplay_stub", "SceCtrl_stub", "SceTouch_stub", "SceAudio_stub"] }
 [build-dependencies]
 cc = "1.0"
 [patch.crates-io]

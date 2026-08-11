@@ -1,6 +1,7 @@
 #[cfg(target_os = "vita")]
 use vita_newlib_shims as _;
 mod app;
+mod audio;
 mod data;
 mod input;
 mod install;

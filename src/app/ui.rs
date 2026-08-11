@@ -1,7 +1,7 @@
 use super::i18n::Language;
 use super::icons::IconCache;
 use super::{App, AppState};
-use crate::data::{Category, Platform, SortOrder};
+use crate::data::{Category, Platform, SortDirection, SortOrder};
 use crate::input::AppCommand;
 use crate::install::installed::{InstallState, InstalledIndex};
 const BG_DEEP: egui::Color32 = egui::Color32::from_rgb(0x06, 0x07, 0x0e);
@@ -341,12 +341,8 @@ fn catalog_screen(
                 ui.add_space(6.0);
                 for sort in SortOrder::ALL {
                     let active = sort == sort_order;
-                    let label = if active {
-                        format!("{} {}", lang.sort_label(sort), sort_direction.arrow())
-                    } else {
-                        lang.sort_label(sort).to_owned()
-                    };
-                    if pill_button(ui, &label, active) {
+                    let direction = active.then_some(sort_direction);
+                    if sort_pill_button(ui, lang.sort_label(sort), active, direction) {
                         commands.push(AppCommand::SetSortOrder(sort));
                     }
                 }
@@ -564,6 +560,42 @@ fn pill_button(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
         ui.painter().rect_stroke(rect, rect.height() / 2.0, egui::Stroke::new(1.0_f32, SEPARATOR), egui::StrokeKind::Inside);
     }
     ui.painter().galley(rect.center() - galley.size() / 2.0, galley, text_color);
+    response.clicked()
+}
+fn sort_direction_triangle(painter: &egui::Painter, center: egui::Pos2, direction: SortDirection, color: egui::Color32) {
+    let (top, bottom) = match direction {
+        SortDirection::Asc => (-3.0, 3.0),
+        SortDirection::Desc => (3.0, -3.0),
+    };
+    painter.add(egui::Shape::convex_polygon(
+        vec![
+            center + egui::vec2(-3.5, top),
+            center + egui::vec2(3.5, top),
+            center + egui::vec2(0.0, bottom),
+        ],
+        color,
+        egui::Stroke::NONE,
+    ));
+}
+fn sort_pill_button(ui: &mut egui::Ui, label: &str, active: bool, direction: Option<SortDirection>) -> bool {
+    let text_color = if active { BG_DEEP } else { TEXT_WHITE };
+    let galley = ui.fonts(|f| f.layout_no_wrap(label.to_owned(), font(FONT_SMALL), text_color));
+    let triangle_space = if direction.is_some() { 14.0 } else { 0.0 };
+    let size = egui::vec2(galley.size().x + 22.0 + triangle_space, 28.0);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    let hover_t = if response.hovered() { 1.0_f32 } else { 0.0_f32 };
+    if active {
+        ui.painter().rect_filled(rect, rect.height() / 2.0, TEXT_WHITE);
+    } else {
+        ui.painter().rect_filled(rect, rect.height() / 2.0, BG_CARD.lerp_to_gamma(BG_CARD_HOVER, hover_t));
+        ui.painter().rect_stroke(rect, rect.height() / 2.0, egui::Stroke::new(1.0_f32, SEPARATOR), egui::StrokeKind::Inside);
+    }
+    let text_pos = rect.center() - egui::vec2(galley.size().x / 2.0 + triangle_space / 2.0, galley.size().y / 2.0);
+    ui.painter().galley(text_pos, galley.clone(), text_color);
+    if let Some(dir) = direction {
+        let tri_center = egui::pos2(rect.right() - 12.0, rect.center().y);
+        sort_direction_triangle(ui.painter(), tri_center, dir, text_color);
+    }
     response.clicked()
 }
 fn chevron(painter: &egui::Painter, center: egui::Pos2, open: bool) {
@@ -1135,9 +1167,6 @@ fn detail_screen(
             egui::ScrollArea::vertical()
                 .id_salt(&entry.id)
                 .show(ui, |ui| {
-                if scroll_delta != 0.0 {
-                    ui.scroll_with_delta(egui::vec2(0.0, -scroll_delta));
-                }
                 egui::Frame::NONE
                     .fill(glass(BG_CARD))
                     .corner_radius(CARD_RADIUS)
@@ -1348,6 +1377,9 @@ fn detail_screen(
                     }
                 }
                 ui.add_space(20.0);
+                if scroll_delta != 0.0 {
+                    ui.scroll_with_delta(egui::vec2(0.0, -scroll_delta));
+                }
             });
         });
     commands
@@ -1620,7 +1652,10 @@ fn draw_screenshot(
             TEXT_DIM,
         );
     }
+
 }
+// TODO  PSP, PS1, Tool, Other - CORE
+
 fn category_color(category: Category) -> egui::Color32 {
     match category {
         Category::Emulator => egui::Color32::from_rgb(0xf5, 0x9e, 0x0b),
@@ -1676,3 +1711,4 @@ fn draw_icon(ui: &mut egui::Ui, icons: &IconCache, rect: egui::Rect, entry: &cra
         TEXT_WHITE,
     );
 }
+

@@ -19,16 +19,17 @@ pub enum Category {
     Other,
 }
 impl Category {
-    pub const ALL: [Category; 9] = [
+    pub const ALL: [Category; 6] = [
         Category::Emulator,
         Category::Original,
         Category::PsVitaGame,
-        Category::Ps1Game,
-        Category::PspGame,
+        // Category::Ps1Game, // disabled for now
+        // Category::PspGame, // disabled for now
         Category::Plugin,
         Category::Port,
         Category::Utility,
-        Category::Other,
+        // Category::Tool, // disabled for now
+        // Category::Other, // disabled for now
     ];
     pub fn label_upper(self) -> &'static str {
         match self {
@@ -172,12 +173,6 @@ impl SortDirection {
         match self {
             SortDirection::Asc => SortDirection::Desc,
             SortDirection::Desc => SortDirection::Asc,
-        }
-    }
-    pub fn arrow(self) -> &'static str {
-        match self {
-            SortDirection::Asc => "^",
-            SortDirection::Desc => "v",
         }
     }
 }

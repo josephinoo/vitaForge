@@ -207,6 +207,7 @@ pub fn run(mut app: App) -> Result<()> {
     let mut held_direction = None;
     let mut held_since = Instant::now();
     let mut last_repeat_at = Instant::now();
+    let mut last_state_kind = std::mem::discriminant(&app.state);
     let mut frame_stats = FrameStats::default();
     let _ = std::fs::create_dir_all(FRAME_LOG_DIR);
     let _ = std::fs::write(FRAME_LOG_FILE, "");
@@ -313,6 +314,13 @@ pub fn run(mut app: App) -> Result<()> {
                 TextTarget::Search => app.handle_command(AppCommand::CloseSearch)?,
                 TextTarget::Comment => app.handle_command(AppCommand::CloseCommentEntry)?,
             }
+            held_direction = None;
+            held_since = Instant::now();
+            last_repeat_at = Instant::now();
+        }
+        let current_state_kind = std::mem::discriminant(&app.state);
+        if current_state_kind != last_state_kind {
+            last_state_kind = current_state_kind;
             held_direction = None;
             held_since = Instant::now();
             last_repeat_at = Instant::now();

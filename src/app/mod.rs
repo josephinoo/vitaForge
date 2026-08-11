@@ -153,7 +153,7 @@ impl CatalogState {
     fn resort(&mut self) {
         self.sorted_indices = self.sort_order_indices();
         self.recompute_dropdown_counts();
-        self.refresh_filter_preserving_selection();
+        self.refresh_filter();
     }
     fn refresh_filter_preserving_selection(&mut self) {
         let selected_id = self
@@ -282,6 +282,7 @@ pub struct App {
     load_rx: Option<oneshot::Receiver<CatalogSource>>,
     comments_rx: Option<oneshot::Receiver<(String, Vec<data::api::Comment>)>>,
     social_rx: Option<oneshot::Receiver<(String, data::api::Social)>>,
+    audio: crate::audio::AudioEngine,
 }
 pub struct InstallJob {
     pub app_id: String,
@@ -314,6 +315,7 @@ impl App {
             load_rx: Some(rx),
             comments_rx: None,
             social_rx: None,
+            audio: crate::audio::AudioEngine::new(),
         })
     }
     pub fn install_busy(&self) -> bool {
@@ -433,6 +435,7 @@ impl App {
             AppCommand::RequestSearch => {
                 if let AppState::Catalog(catalog) = &mut self.state {
                     catalog.search_requested = true;
+                    self.audio.play(crate::audio::Sfx::Typing);
                 }
             }
             AppCommand::CloseSearch => {
@@ -444,6 +447,7 @@ impl App {
                 if let AppState::Catalog(catalog) = &mut self.state {
                     catalog.category_filter = category;
                     catalog.refresh_filter();
+                    self.audio.play(crate::audio::Sfx::TabTransition);
                 }
             }
             AppCommand::SetSourceFilter(source) => {
@@ -452,16 +456,19 @@ impl App {
                     catalog.category_filter = None;
                     catalog.recompute_dropdown_counts();
                     catalog.refresh_filter();
+                    self.audio.play(crate::audio::Sfx::TabTransition);
                 }
             }
             AppCommand::SetSortOrder(sort) => {
                 if let AppState::Catalog(catalog) = &mut self.state {
                     catalog.set_sort(sort);
+                    self.audio.play(crate::audio::Sfx::Activation);
                 }
             }
             AppCommand::FlipSortDirection => {
                 if let AppState::Catalog(catalog) = &mut self.state {
                     catalog.flip_sort_direction();
+                    self.audio.play(crate::audio::Sfx::Activation);
                 }
             }
             AppCommand::Input(InputCommand::Confirm) => {
@@ -522,6 +529,7 @@ impl App {
                         };
                         if delta != 0 {
                             catalog.move_selection(delta);
+                            self.audio.play(crate::audio::Sfx::Navigate);
                         }
                     }
                     AppState::Detail { scroll_delta, .. } => {
@@ -555,6 +563,7 @@ impl App {
                     let rx = crate::install::start(entry);
                     let progress = rx.borrow().clone();
                     self.install = Some(InstallJob { app_id, app_id_title, title, progress, rx });
+                    self.audio.play(crate::audio::Sfx::Launch);
                 }
             }
             AppCommand::DismissInstall => self.install = None,
@@ -569,12 +578,14 @@ impl App {
                 };
                 let selected = if self.lang == Language::English { 0 } else { 1 };
                 self.state = AppState::Settings { previous, selected };
+                self.audio.play(crate::audio::Sfx::MenuFlyIn);
             }
             AppCommand::CloseSettings => {
                 if let AppState::Settings { previous, .. } = &mut self.state {
                     let previous = std::mem::replace(previous.as_mut(), CatalogState::empty());
                     self.state = AppState::Catalog(previous);
                     self.needs_installed_rescan = true;
+                    self.audio.play(crate::audio::Sfx::MenuFlyOut);
                 }
             }
             AppCommand::SetLanguage(lang) => {
@@ -598,6 +609,7 @@ impl App {
                             eprintln!("like update failed: {err:#}");
                         }
                     });
+                    self.audio.play(if liked { crate::audio::Sfx::ToggleOn } else { crate::audio::Sfx::ToggleOff });
                 }
             }
             AppCommand::RateCurrent(score) => {
@@ -623,11 +635,13 @@ impl App {
             AppCommand::RequestCommentEntry => {
                 if let AppState::Detail { comment_entry_requested, .. } = &mut self.state {
                     *comment_entry_requested = true;
+                    self.audio.play(crate::audio::Sfx::ShowModal);
                 }
             }
             AppCommand::CloseCommentEntry => {
                 if let AppState::Detail { comment_entry_requested, .. } = &mut self.state {
                     *comment_entry_requested = false;
+                    self.audio.play(crate::audio::Sfx::HideModal);
                 }
             }
             AppCommand::SubmitComment(content) => {
@@ -705,6 +719,7 @@ impl App {
             comments_loaded: false,
             comment_entry_requested: false,
         };
+        self.audio.play(crate::audio::Sfx::IntoDetail);
     }
     pub fn clear_one_shot_ui_state(&mut self) {
         match &mut self.state {
@@ -745,6 +760,7 @@ impl App {
             previous.refresh_filter_preserving_selection();
             self.state = AppState::Catalog(previous);
             self.needs_installed_rescan = true;
+            self.audio.play(crate::audio::Sfx::OutOfDetail);
         }
     }
 }
@@ -873,13 +889,13 @@ mod sort_tests {
     }
 
     #[test]
-    fn sort_change_preserves_selected_app() {
+    fn sort_change_resets_selection_to_first_item() {
         let mut catalog = mixed_catalog();
         let pos = catalog.filtered_indices.iter().position(|&i| catalog.apps[i].id == "vitadb-big").unwrap();
         catalog.selected = pos;
         catalog.selection_active = true;
         catalog.set_sort(SortOrder::Name);
-        let selected_id = &catalog.apps[catalog.filtered_indices[catalog.selected]].id;
-        assert_eq!(selected_id, "vitadb-big");
+        assert_eq!(catalog.selected, 0);
+        assert!(catalog.selection_active);
     }
 }
