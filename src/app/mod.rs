@@ -2,7 +2,7 @@ pub mod i18n;
 pub mod icons;
 pub mod text;
 pub mod ui;
-use crate::data::{self, AppEntry, Category, SortOrder, SourceCatalog};
+use crate::data::{self, AppEntry, Category, SortDirection, SortOrder, SourceCatalog};
 use crate::input::{AppCommand, InputCommand};
 use anyhow::Result;
 use i18n::Language;
@@ -21,6 +21,7 @@ pub struct CatalogState {
     pub category_filter: Option<Category>,
     pub source_filter: Option<SourceCatalog>,
     pub sort_order: SortOrder,
+    pub sort_direction: SortDirection,
     pub selected: usize,
     pub selection_active: bool,
     pub scroll_to_selected: bool,
@@ -30,9 +31,11 @@ pub struct CatalogState {
     pub source_counts: Vec<(SourceCatalog, usize)>,
     pub category_counts: Vec<(Category, usize)>,
     pub source_scoped_count: usize,
+    pub featured_index: Option<usize>,
 }
 impl CatalogState {
     fn new(apps: Vec<AppEntry>) -> Self {
+        let settings = data::settings::load();
         let mut state = Self {
             apps,
             sorted_indices: Vec::new(),
@@ -41,7 +44,8 @@ impl CatalogState {
             search_requested: false,
             category_filter: None,
             source_filter: None,
-            sort_order: SortOrder::Downloads,
+            sort_order: settings.sort_order,
+            sort_direction: settings.sort_direction,
             selected: 0,
             selection_active: false,
             scroll_to_selected: false,
@@ -50,6 +54,7 @@ impl CatalogState {
             source_counts: Vec::new(),
             category_counts: Vec::new(),
             source_scoped_count: 0,
+            featured_index: None,
         };
         state.resort();
         state
@@ -63,7 +68,8 @@ impl CatalogState {
             search_requested: false,
             category_filter: None,
             source_filter: None,
-            sort_order: SortOrder::Downloads,
+            sort_order: SortOrder::default(),
+            sort_direction: SortDirection::default(),
             selected: 0,
             selection_active: false,
             scroll_to_selected: false,
@@ -72,6 +78,7 @@ impl CatalogState {
             source_counts: Vec::new(),
             category_counts: Vec::new(),
             source_scoped_count: 0,
+            featured_index: None,
         }
     }
     fn replace_apps(&mut self, apps: Vec<AppEntry>) {
@@ -83,15 +90,65 @@ impl CatalogState {
     fn sort_order_indices(&self) -> Vec<usize> {
         let mut order: Vec<usize> = (0..self.apps.len()).collect();
         let apps = &self.apps;
+        let direction = self.sort_direction;
         match self.sort_order {
-            SortOrder::Downloads => order.sort_by(|&a, &b| apps[b].downloads.cmp(&apps[a].downloads)),
-            SortOrder::Rating => order.sort_by(|&a, &b| apps[b].rating.total_cmp(&apps[a].rating)),
-            SortOrder::Recent => order.sort_by(|&a, &b| apps[b].updated_at.cmp(&apps[a].updated_at)),
-            SortOrder::Size => order.sort_by(|&a, &b| apps[b].size_bytes.cmp(&apps[a].size_bytes)),
-            SortOrder::NameAsc => order.sort_by(|&a, &b| apps[a].name_lower.cmp(&apps[b].name_lower)),
-            SortOrder::NameDesc => order.sort_by(|&a, &b| apps[b].name_lower.cmp(&apps[a].name_lower)),
+            SortOrder::Downloads => order.sort_by(|&a, &b| {
+                match direction {
+                    SortDirection::Asc => apps[a].downloads.cmp(&apps[b].downloads),
+                    SortDirection::Desc => apps[b].downloads.cmp(&apps[a].downloads),
+                }
+                .then_with(|| apps[a].name_lower.cmp(&apps[b].name_lower))
+            }),
+            SortOrder::Rating => order.sort_by(|&a, &b| {
+                match direction {
+                    SortDirection::Asc => apps[a].rating.total_cmp(&apps[b].rating),
+                    SortDirection::Desc => apps[b].rating.total_cmp(&apps[a].rating),
+                }
+                .then_with(|| apps[a].name_lower.cmp(&apps[b].name_lower))
+            }),
+            SortOrder::Recent => order.sort_by(|&a, &b| {
+                let ea = apps[a].sort_epoch();
+                let eb = apps[b].sort_epoch();
+                match direction {
+                    SortDirection::Asc => ea.cmp(&eb),
+                    SortDirection::Desc => eb.cmp(&ea),
+                }
+                .then_with(|| apps[a].name_lower.cmp(&apps[b].name_lower))
+            }),
+            SortOrder::Size => order.sort_by(|&a, &b| {
+                match direction {
+                    SortDirection::Asc => apps[a].size_bytes.cmp(&apps[b].size_bytes),
+                    SortDirection::Desc => apps[b].size_bytes.cmp(&apps[a].size_bytes),
+                }
+                .then_with(|| apps[a].name_lower.cmp(&apps[b].name_lower))
+            }),
+            SortOrder::Name => order.sort_by(|&a, &b| match direction {
+                SortDirection::Asc => apps[a].name_lower.cmp(&apps[b].name_lower),
+                SortDirection::Desc => apps[b].name_lower.cmp(&apps[a].name_lower),
+            }.then_with(|| apps[a].id.cmp(&apps[b].id))),
         }
         order
+    }
+    fn set_sort(&mut self, sort: SortOrder) {
+        if self.sort_order == sort {
+            self.sort_direction = self.sort_direction.flipped();
+        } else {
+            self.sort_order = sort;
+            self.sort_direction = sort.default_direction();
+        }
+        self.resort();
+        data::settings::save(&data::settings::Settings {
+            sort_order: self.sort_order,
+            sort_direction: self.sort_direction,
+        });
+    }
+    fn flip_sort_direction(&mut self) {
+        self.sort_direction = self.sort_direction.flipped();
+        self.resort();
+        data::settings::save(&data::settings::Settings {
+            sort_order: self.sort_order,
+            sort_direction: self.sort_direction,
+        });
     }
     fn resort(&mut self) {
         self.sorted_indices = self.sort_order_indices();
@@ -145,6 +202,16 @@ impl CatalogState {
             self.scroll_reset = true;
         }
         self.is_commercial_view = self.source_filter == Some(SourceCatalog::Nps);
+        self.featured_index = self
+            .filtered_indices
+            .iter()
+            .copied()
+            .max_by(|&a, &b| {
+                apps[a]
+                    .downloads
+                    .cmp(&apps[b].downloads)
+                    .then_with(|| apps[a].rating.total_cmp(&apps[b].rating))
+            });
     }
     fn recompute_dropdown_counts(&mut self) {
         let apps = &self.apps;
@@ -215,6 +282,7 @@ pub struct App {
     load_rx: Option<oneshot::Receiver<CatalogSource>>,
     comments_rx: Option<oneshot::Receiver<(String, Vec<data::api::Comment>)>>,
     social_rx: Option<oneshot::Receiver<(String, data::api::Social)>>,
+    audio: crate::audio::AudioEngine,
 }
 pub struct InstallJob {
     pub app_id: String,
@@ -247,6 +315,7 @@ impl App {
             load_rx: Some(rx),
             comments_rx: None,
             social_rx: None,
+            audio: crate::audio::AudioEngine::new(),
         })
     }
     pub fn install_busy(&self) -> bool {
@@ -366,6 +435,7 @@ impl App {
             AppCommand::RequestSearch => {
                 if let AppState::Catalog(catalog) = &mut self.state {
                     catalog.search_requested = true;
+                    self.audio.play(crate::audio::Sfx::Typing);
                 }
             }
             AppCommand::CloseSearch => {
@@ -377,6 +447,7 @@ impl App {
                 if let AppState::Catalog(catalog) = &mut self.state {
                     catalog.category_filter = category;
                     catalog.refresh_filter();
+                    self.audio.play(crate::audio::Sfx::TabTransition);
                 }
             }
             AppCommand::SetSourceFilter(source) => {
@@ -385,14 +456,19 @@ impl App {
                     catalog.category_filter = None;
                     catalog.recompute_dropdown_counts();
                     catalog.refresh_filter();
+                    self.audio.play(crate::audio::Sfx::TabTransition);
                 }
             }
             AppCommand::SetSortOrder(sort) => {
-                if let AppState::Catalog(catalog) = &mut self.state
-                    && catalog.sort_order != sort
-                {
-                    catalog.sort_order = sort;
-                    catalog.resort();
+                if let AppState::Catalog(catalog) = &mut self.state {
+                    catalog.set_sort(sort);
+                    self.audio.play(crate::audio::Sfx::Activation);
+                }
+            }
+            AppCommand::FlipSortDirection => {
+                if let AppState::Catalog(catalog) = &mut self.state {
+                    catalog.flip_sort_direction();
+                    self.audio.play(crate::audio::Sfx::Activation);
                 }
             }
             AppCommand::Input(InputCommand::Confirm) => {
@@ -453,6 +529,7 @@ impl App {
                         };
                         if delta != 0 {
                             catalog.move_selection(delta);
+                            self.audio.play(crate::audio::Sfx::Navigate);
                         }
                     }
                     AppState::Detail { scroll_delta, .. } => {
@@ -486,6 +563,7 @@ impl App {
                     let rx = crate::install::start(entry);
                     let progress = rx.borrow().clone();
                     self.install = Some(InstallJob { app_id, app_id_title, title, progress, rx });
+                    self.audio.play(crate::audio::Sfx::Launch);
                 }
             }
             AppCommand::DismissInstall => self.install = None,
@@ -500,12 +578,14 @@ impl App {
                 };
                 let selected = if self.lang == Language::English { 0 } else { 1 };
                 self.state = AppState::Settings { previous, selected };
+                self.audio.play(crate::audio::Sfx::MenuFlyIn);
             }
             AppCommand::CloseSettings => {
                 if let AppState::Settings { previous, .. } = &mut self.state {
                     let previous = std::mem::replace(previous.as_mut(), CatalogState::empty());
                     self.state = AppState::Catalog(previous);
                     self.needs_installed_rescan = true;
+                    self.audio.play(crate::audio::Sfx::MenuFlyOut);
                 }
             }
             AppCommand::SetLanguage(lang) => {
@@ -529,6 +609,7 @@ impl App {
                             eprintln!("like update failed: {err:#}");
                         }
                     });
+                    self.audio.play(if liked { crate::audio::Sfx::ToggleOn } else { crate::audio::Sfx::ToggleOff });
                 }
             }
             AppCommand::RateCurrent(score) => {
@@ -554,11 +635,13 @@ impl App {
             AppCommand::RequestCommentEntry => {
                 if let AppState::Detail { comment_entry_requested, .. } = &mut self.state {
                     *comment_entry_requested = true;
+                    self.audio.play(crate::audio::Sfx::ShowModal);
                 }
             }
             AppCommand::CloseCommentEntry => {
                 if let AppState::Detail { comment_entry_requested, .. } = &mut self.state {
                     *comment_entry_requested = false;
+                    self.audio.play(crate::audio::Sfx::HideModal);
                 }
             }
             AppCommand::SubmitComment(content) => {
@@ -636,6 +719,7 @@ impl App {
             comments_loaded: false,
             comment_entry_requested: false,
         };
+        self.audio.play(crate::audio::Sfx::IntoDetail);
     }
     pub fn clear_one_shot_ui_state(&mut self) {
         match &mut self.state {
@@ -676,6 +760,142 @@ impl App {
             previous.refresh_filter_preserving_selection();
             self.state = AppState::Catalog(previous);
             self.needs_installed_rescan = true;
+            self.audio.play(crate::audio::Sfx::OutOfDetail);
         }
+    }
+}
+#[cfg(test)]
+mod sort_tests {
+    use super::*;
+    use crate::data::Category;
+
+    fn entry(id: &str, source_catalog: &str, size_bytes: u64, downloads: u64, rating: f32, updated_at: &str) -> AppEntry {
+        let mut e = AppEntry {
+            id: id.to_owned(),
+            titleid: String::new(),
+            titleid_lower: String::new(),
+            content_id: None,
+            name: id.to_owned(),
+            original_name: None,
+            name_lower: String::new(),
+            author: "unknown".to_owned(),
+            author_lower: String::new(),
+            description: String::new(),
+            long_description: String::new(),
+            requirements: String::new(),
+            changelog: String::new(),
+            release_page: None,
+            category: Category::Tool,
+            platform: crate::data::Platform::Vita,
+            kind: String::new(),
+            icon_url: None,
+            cover_url: None,
+            background_url: None,
+            screenshot_urls: Vec::new(),
+            download_url: "http://example.com".to_owned(),
+            source: None,
+            version: "1.0".to_owned(),
+            region: None,
+            zrif: None,
+            source_catalog: source_catalog.to_owned(),
+            source_labels: Vec::new(),
+            hash: String::new(),
+            hash2: String::new(),
+            data_url: None,
+            data_size_bytes: 0,
+            size_bytes,
+            downloads,
+            rating,
+            updated_at: updated_at.to_owned(),
+            ratings_count: 0,
+            likes_count: 0,
+            comments_count: 0,
+            user_liked: false,
+            user_rating: None,
+            overview: Vec::new(),
+        };
+        e.rebuild_derived();
+        e
+    }
+
+    fn mixed_catalog() -> CatalogState {
+        let apps = vec![
+            entry("vitadb-small", "vitadb", 1_000_000, 500, 4.0, "2024-01-01"),
+            entry("vitadb-big", "vitadb", 900_000_000, 5000, 4.5, "2025-06-15"),
+            entry("pkgj-unknown", "nps", 0, 0, 0.0, ""),
+            entry("pkgj-known", "nps", 50_000_000, 0, 0.0, ""),
+        ];
+        // Tests must not depend on whatever sort preference a previous test run
+        // persisted to disk (set_sort() writes settings.json as a side effect).
+        let mut catalog = CatalogState::new(apps);
+        catalog.sort_order = SortOrder::Downloads;
+        catalog.sort_direction = SortDirection::Desc;
+        catalog.resort();
+        catalog
+    }
+
+    fn ordered_ids(catalog: &CatalogState) -> Vec<String> {
+        catalog.filtered_indices.iter().map(|&i| catalog.apps[i].id.clone()).collect()
+    }
+
+    #[test]
+    fn size_ascending_puts_zero_first_as_true_reversal_of_descending() {
+        let mut catalog = mixed_catalog();
+        catalog.set_sort(SortOrder::Size);
+        catalog.set_sort(SortOrder::Size); // second press flips to Asc
+        assert_eq!(catalog.sort_direction, SortDirection::Asc);
+        let ids = ordered_ids(&catalog);
+        assert_eq!(ids, vec!["pkgj-unknown", "vitadb-small", "pkgj-known", "vitadb-big"]);
+    }
+
+    #[test]
+    fn size_descending_puts_largest_first_and_unknowns_last() {
+        let mut catalog = mixed_catalog();
+        catalog.set_sort(SortOrder::Size);
+        assert_eq!(catalog.sort_direction, SortDirection::Desc);
+        let ids = ordered_ids(&catalog);
+        assert_eq!(ids, vec!["vitadb-big", "pkgj-known", "vitadb-small", "pkgj-unknown"]);
+    }
+
+    #[test]
+    fn downloads_ascending_puts_zero_first_as_true_reversal_of_descending() {
+        let mut catalog = mixed_catalog();
+        catalog.set_sort(SortOrder::Downloads); // mode already active -> flips to Asc
+        assert_eq!(catalog.sort_direction, SortDirection::Asc);
+        let ids = ordered_ids(&catalog);
+        assert_eq!(ids, vec!["pkgj-known", "pkgj-unknown", "vitadb-small", "vitadb-big"]);
+    }
+
+    #[test]
+    fn recent_orders_by_parsed_date_with_empty_last() {
+        let mut catalog = mixed_catalog();
+        catalog.set_sort(SortOrder::Recent);
+        let ids = ordered_ids(&catalog);
+        assert_eq!(&ids[0], "vitadb-big");
+        assert_eq!(&ids[1], "vitadb-small");
+        assert!(ids[2] == "pkgj-known" || ids[2] == "pkgj-unknown");
+    }
+
+    #[test]
+    fn set_sort_same_mode_flips_direction_different_mode_resets_default() {
+        let mut catalog = mixed_catalog();
+        assert_eq!(catalog.sort_order, SortOrder::Downloads);
+        assert_eq!(catalog.sort_direction, SortDirection::Desc);
+        catalog.set_sort(SortOrder::Downloads);
+        assert_eq!(catalog.sort_direction, SortDirection::Asc);
+        catalog.set_sort(SortOrder::Name);
+        assert_eq!(catalog.sort_order, SortOrder::Name);
+        assert_eq!(catalog.sort_direction, SortDirection::Asc);
+    }
+
+    #[test]
+    fn sort_change_resets_selection_to_first_item() {
+        let mut catalog = mixed_catalog();
+        let pos = catalog.filtered_indices.iter().position(|&i| catalog.apps[i].id == "vitadb-big").unwrap();
+        catalog.selected = pos;
+        catalog.selection_active = true;
+        catalog.set_sort(SortOrder::Name);
+        assert_eq!(catalog.selected, 0);
+        assert!(catalog.selection_active);
     }
 }
