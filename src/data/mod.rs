@@ -1,5 +1,6 @@
 pub mod api;
 pub mod client_id;
+pub mod settings;
 pub mod source;
 use serde::{Deserialize, Serialize};
 
@@ -131,25 +132,54 @@ impl SourceCatalog {
         }
     }
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SortOrder {
     Downloads,
     Rating,
     Recent,
     Size,
-    NameAsc,
-    NameDesc,
+    Name,
+}
+impl Default for SortOrder {
+    fn default() -> Self {
+        SortOrder::Downloads
+    }
 }
 impl SortOrder {
-    pub const ALL: [SortOrder; 6] = [
-        SortOrder::Downloads,
-        SortOrder::Rating,
-        SortOrder::Recent,
-        SortOrder::Size,
-        SortOrder::NameAsc,
-        SortOrder::NameDesc,
-    ];
+    pub const ALL: [SortOrder; 5] =
+        [SortOrder::Downloads, SortOrder::Rating, SortOrder::Recent, SortOrder::Size, SortOrder::Name];
+    pub fn default_direction(self) -> SortDirection {
+        match self {
+            SortOrder::Name => SortDirection::Asc,
+            _ => SortDirection::Desc,
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SortDirection {
+    Asc,
+    Desc,
+}
+impl Default for SortDirection {
+    fn default() -> Self {
+        SortDirection::Desc
+    }
+}
+impl SortDirection {
+    pub fn flipped(self) -> Self {
+        match self {
+            SortDirection::Asc => SortDirection::Desc,
+            SortDirection::Desc => SortDirection::Asc,
+        }
+    }
+    pub fn arrow(self) -> &'static str {
+        match self {
+            SortDirection::Asc => "^",
+            SortDirection::Desc => "v",
+        }
+    }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppEntry {
@@ -260,6 +290,21 @@ impl AppEntry {
     }
     pub fn size_label(&self) -> String {
         format_size(self.size_bytes)
+    }
+    /// Comparable `YYYYMMDD` key parsed from the leading date of `updated_at`, or `0` if missing/unparseable.
+    pub fn sort_epoch(&self) -> u32 {
+        let bytes = self.updated_at.as_bytes();
+        if bytes.len() < 10 || bytes[4] != b'-' || bytes[7] != b'-' {
+            return 0;
+        }
+        let digits = |s: &str| s.parse::<u32>().ok();
+        let year = digits(&self.updated_at[0..4]);
+        let month = digits(&self.updated_at[5..7]);
+        let day = digits(&self.updated_at[8..10]);
+        match (year, month, day) {
+            (Some(y), Some(m), Some(d)) => y * 10000 + m * 100 + d,
+            _ => 0,
+        }
     }
     pub fn data_size_label(&self) -> String {
         format_size(self.data_size_bytes)

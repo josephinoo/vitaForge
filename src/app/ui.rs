@@ -145,12 +145,14 @@ pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
             catalog.category_filter,
             catalog.source_filter,
             catalog.sort_order,
+            catalog.sort_direction,
             catalog.selection_active.then_some(catalog.selected),
             catalog.scroll_to_selected,
             catalog.scroll_reset,
             catalog.is_commercial_view,
             &catalog.source_counts,
             &catalog.category_counts,
+            catalog.featured_index,
         ),
         AppState::Detail { app: entry, scroll_delta, comments, comments_loaded, comment_entry_requested, .. } => {
             let progress = app
@@ -279,12 +281,14 @@ fn catalog_screen(
     category_filter: Option<Category>,
     source_filter: Option<crate::data::SourceCatalog>,
     sort_order: SortOrder,
+    sort_direction: crate::data::SortDirection,
     selected: Option<usize>,
     scroll_to_selected: bool,
     scroll_reset: bool,
     is_commercial_view: bool,
     source_counts: &[(crate::data::SourceCatalog, usize)],
     category_counts: &[(Category, usize)],
+    featured_index: Option<usize>,
 ) -> Vec<AppCommand> {
     let mut commands = Vec::new();
     button_hints(
@@ -329,13 +333,20 @@ fn catalog_screen(
                 }
             });
             ui.add_space(8.0);
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
                 ui.label(
                     egui::RichText::new(lang.sort_by_prefix()).size(FONT_SMALL).color(TEXT_FAINT),
                 );
                 ui.add_space(6.0);
                 for sort in SortOrder::ALL {
-                    if pill_button(ui, lang.sort_label(sort), sort == sort_order) {
+                    let active = sort == sort_order;
+                    let label = if active {
+                        format!("{} {}", lang.sort_label(sort), sort_direction.arrow())
+                    } else {
+                        lang.sort_label(sort).to_owned()
+                    };
+                    if pill_button(ui, &label, active) {
                         commands.push(AppCommand::SetSortOrder(sort));
                     }
                 }
@@ -357,7 +368,7 @@ fn catalog_screen(
             }
 
             let featured_entry = if search_query.trim().is_empty() && !is_commercial_view {
-                filtered_indices.first().and_then(|&top_index| apps.get(top_index))
+                featured_index.and_then(|idx| apps.get(idx))
             } else {
                 None
             };
@@ -395,8 +406,11 @@ fn catalog_screen(
                     );
                     ui.allocate_new_ui(egui::UiBuilder::new().max_rect(banner_rect), |ui| {
                         let banner = featured_banner(ui, icons, lang, entry);
-                        if banner.clicked {
-                            commands.push(AppCommand::SelectApp { index: 0 });
+                        if banner.clicked
+                            && let Some(pos) = featured_index
+                                .and_then(|real_idx| filtered_indices.iter().position(|&i| i == real_idx))
+                        {
+                            commands.push(AppCommand::SelectApp { index: pos });
                         }
                         ui.add_space(10.0);
                         let line_rect =

@@ -17,8 +17,7 @@ sort-downloads = Más descargados
 sort-rating = Mejor valorados
 sort-recent = Recientes
 sort-size = Tamaño
-sort-name-asc = A - Z
-sort-name-desc = Z - A
+sort-name = Nombre
 
 search-placeholder = Buscar homebrew...
 no-results = No se encontraron resultados

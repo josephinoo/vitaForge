@@ -27,6 +27,7 @@ pub enum AppCommand {
     SetCategoryFilter(Option<crate::data::Category>),
     SetSourceFilter(Option<crate::data::SourceCatalog>),
     SetSortOrder(crate::data::SortOrder),
+    FlipSortDirection,
     SelectApp { index: usize },
     BackToCatalog,
     InstallCurrent,
@@ -62,6 +63,7 @@ pub fn map_keyboard_event(event: &Event) -> Option<AppCommand> {
         Keycode::F | Keycode::Slash => return Some(AppCommand::RequestSearch),
         Keycode::L => return Some(AppCommand::ToggleLike),
         Keycode::C => return Some(AppCommand::RequestCommentEntry),
+        Keycode::S => return Some(AppCommand::FlipSortDirection),
         _ => return None,
     };
     Some(command.into())
@@ -76,6 +78,7 @@ pub fn map_controller_button_event(event: &Event) -> Option<AppCommand> {
         Button::Y => return Some(AppCommand::RequestSearch),
         Button::Start => return Some(AppCommand::OpenSettings),
         Button::X => return Some(AppCommand::ToggleLike),
+        Button::Back => return Some(AppCommand::FlipSortDirection),
         // D-pad directions are handled entirely by `held_stick_direction`
         // below instead — SDL's button-down/up events fire exactly once per
         // physical press with no OS-level auto-repeat, which is what made

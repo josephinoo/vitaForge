@@ -83,8 +83,7 @@ impl Language {
             crate::data::SortOrder::Rating => s.sort_rating,
             crate::data::SortOrder::Recent => s.sort_recent,
             crate::data::SortOrder::Size => s.sort_size,
-            crate::data::SortOrder::NameAsc => s.sort_name_asc,
-            crate::data::SortOrder::NameDesc => s.sort_name_desc,
+            crate::data::SortOrder::Name => s.sort_name,
         })
     }
     pub fn search_placeholder(self) -> &'static str {
@@ -258,8 +257,7 @@ struct LocalizedStrings {
     sort_rating: &'static str,
     sort_recent: &'static str,
     sort_size: &'static str,
-    sort_name_asc: &'static str,
-    sort_name_desc: &'static str,
+    sort_name: &'static str,
     search_placeholder: &'static str,
     no_results: &'static str,
     no_results_sub: &'static str,
@@ -326,8 +324,7 @@ impl LocalizedStrings {
             sort_rating: r("sort-rating"),
             sort_recent: r("sort-recent"),
             sort_size: r("sort-size"),
-            sort_name_asc: r("sort-name-asc"),
-            sort_name_desc: r("sort-name-desc"),
+            sort_name: r("sort-name"),
             search_placeholder: r("search-placeholder"),
             no_results: r("no-results"),
             no_results_sub: r("no-results-sub"),
