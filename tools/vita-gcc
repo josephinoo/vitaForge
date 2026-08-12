@@ -1,4 +1,5 @@
 #!/bin/sh
 set -e
 
-exec "$(dirname "$0")/vita-tool" arm-vita-eabi-gcc "$@"
+DIR="$(cd "$(dirname "$0")" && pwd)"
+exec "$DIR/vita-tool" arm-vita-eabi-gcc -I"$DIR/include" -DSQLITE_MAX_MMAP_SIZE=0 -DSQLITE_OMIT_LOAD_EXTENSION=1 -DHAVE_FCHOWN=0 -DHAVE_READLINK=0 "$@"

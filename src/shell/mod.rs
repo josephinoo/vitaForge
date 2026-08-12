@@ -11,6 +11,7 @@ unsafe extern "C" {}
 mod egui_painter;
 mod ime;
 mod surface;
+mod vitagl_painter;
 use crate::app::ui::build_ui;
 use crate::app::App;
 use crate::input::{

@@ -6,9 +6,11 @@ fn main() {
     println!("cargo:rerun-if-changed=src/install/puff.h");
     println!("cargo:rerun-if-changed=src/install/zrif.c");
     println!("cargo:rerun-if-changed=src/install/zrif.h");
+    println!("cargo:rerun-if-changed=src/install/sqlite_stubs.c");
     cc::Build::new()
         .file("src/install/puff.c")
         .file("src/install/zrif.c")
+        .file("src/install/sqlite_stubs.c")
         .compile("zrif_c");
     let seconds = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

@@ -216,41 +216,15 @@ pub struct CatalogVersionInfo {
     #[serde(default)]
     pub etag: String,
 }
-#[allow(dead_code)]
-const CATALOG_CACHE_PATH: &str = "ux0:data/vitaforge/catalog_cache.json";
-#[allow(dead_code)]
-const CATALOG_VERSION_PATH: &str = "ux0:data/vitaforge/catalog_version.json";
-#[cfg(not(target_os = "vita"))]
-const CATALOG_CACHE_PATH_HOST: &str = "data/vitaforge/catalog_cache.json";
-#[cfg(not(target_os = "vita"))]
-const CATALOG_VERSION_PATH_HOST: &str = "data/vitaforge/catalog_version.json";
-fn get_catalog_cache_paths() -> (&'static str, &'static str) {
-    #[cfg(target_os = "vita")]
-    { (CATALOG_CACHE_PATH, CATALOG_VERSION_PATH) }
-    #[cfg(not(target_os = "vita"))]
-    { (CATALOG_CACHE_PATH_HOST, CATALOG_VERSION_PATH_HOST) }
-}
 fn load_cached_catalog_blocking() -> Option<(Vec<AppEntry>, CatalogVersionInfo)> {
-    let (cache_path, version_path) = get_catalog_cache_paths();
-    let version_bytes = std::fs::read(version_path).ok()?;
-    let version_info: CatalogVersionInfo = serde_json::from_slice(&version_bytes).ok()?;
-    let cache_bytes = std::fs::read(cache_path).ok()?;
-    let mut entries: Vec<AppEntry> = serde_json::from_slice(&cache_bytes).ok()?;
-    for entry in &mut entries {
-        entry.rebuild_derived();
-    }
-    Some((entries, version_info))
+    super::db::load_cached_catalog_db()
 }
 fn save_cached_catalog_blocking(entries: Vec<AppEntry>, version_info: CatalogVersionInfo) {
-    let (cache_path, version_path) = get_catalog_cache_paths();
-    if let Some(parent) = std::path::Path::new(cache_path).parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    if let Ok(version_bytes) = serde_json::to_vec(&version_info) {
-        let _ = std::fs::write(version_path, version_bytes);
-    }
-    if let Ok(cache_bytes) = serde_json::to_vec(&entries) {
-        let _ = std::fs::write(cache_path, cache_bytes);
+    super::db::log_db(&format!("[Catalog API] Calling save_cached_catalog_blocking with {} entries...", entries.len()));
+    if let Err(err) = super::db::save_cached_catalog_db(&entries, &version_info) {
+        super::db::log_db(&format!("[Catalog API] ERROR: Failed to save catalog cache to SQLite DB: {err}"));
+    } else {
+        super::db::log_db("[Catalog API] Successfully saved catalog cache to SQLite DB!");
     }
 }
 // so keep those entries out of the catalog entirely instead of showing them and failing later.

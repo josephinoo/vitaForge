@@ -1,5 +1,6 @@
 pub mod api;
 pub mod client_id;
+pub mod db;
 pub mod settings;
 pub mod source;
 use serde::{Deserialize, Serialize};

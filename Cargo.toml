@@ -21,6 +21,7 @@ sha1 = "0.10"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 fluent-bundle = "0.16.0"
 unic-langid = "0.9.6"
+rusqlite = { version = "0.32", features = ["bundled"] }
 # Console-only. Every use site is already behind `cfg(target_os = "vita")`;
 # keeping the crates themselves off the host build means the pure-logic unit
 # tests (catalog parsing, text sanitizing, rate-limit handling) can be linked

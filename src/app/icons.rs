@@ -8,7 +8,10 @@ const MAX_CONCURRENT_FETCHES: usize = 4;
 const MAX_CONCURRENT_LARGE_FETCHES: usize = 2;
 pub const MAX_ICON_SIDE: u32 = 128;
 pub const MAX_SCREENSHOT_SIDE: u32 = 256;
-const MAX_RESIDENT_BYTES: usize = 32 * 1024 * 1024;
+#[cfg(target_os = "vita")]
+const MAX_RESIDENT_BYTES: usize = 6 * 1024 * 1024;
+#[cfg(not(target_os = "vita"))]
+const MAX_RESIDENT_BYTES: usize = 16 * 1024 * 1024;
 
 pub const HERO_SIDE: u32 = 160;
 const RETRY_AFTER: Duration = Duration::from_secs(5);
@@ -203,7 +206,7 @@ impl IconCache {
         let cache = self.clone();
         tokio::spawn(async move {
             let to_fetch: Vec<String> = tokio::task::spawn_blocking(move || {
-                urls.into_iter().filter(|url| cache_path(url).is_some_and(|p| !p.exists())).collect()
+                urls.into_iter().take(40).filter(|url| cache_path(url).is_some_and(|p| !p.exists())).collect()
             })
             .await
             .unwrap_or_default();
