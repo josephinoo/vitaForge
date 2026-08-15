@@ -1,4 +1,5 @@
 pub mod api;
+pub mod cache_manager;
 pub mod client_id;
 pub mod settings;
 pub mod source;
@@ -23,13 +24,9 @@ impl Category {
         Category::Emulator,
         Category::Original,
         Category::PsVitaGame,
-        // Category::Ps1Game, // disabled for now
-        // Category::PspGame, // disabled for now
         Category::Plugin,
         Category::Port,
         Category::Utility,
-        // Category::Tool, // disabled for now
-        // Category::Other, // disabled for now
     ];
     pub fn label_upper(self) -> &'static str {
         match self {
@@ -115,21 +112,41 @@ impl Platform {
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceCatalog {
+    VitaDb,
     VitaDbToo,
     Nps,
 }
 impl SourceCatalog {
-    pub const ALL: [SourceCatalog; 2] = [SourceCatalog::VitaDbToo, SourceCatalog::Nps];
+    pub const ALL: [SourceCatalog; 3] = [SourceCatalog::VitaDb, SourceCatalog::VitaDbToo, SourceCatalog::Nps];
     pub fn label(self) -> &'static str {
         match self {
+            SourceCatalog::VitaDb => "VitaDB Official",
             SourceCatalog::VitaDbToo => "VitaDBtoo",
             SourceCatalog::Nps => "PKGj",
         }
     }
+    pub fn short_label(self) -> &'static str {
+        match self {
+            SourceCatalog::VitaDb => "VitaDB",
+            SourceCatalog::VitaDbToo => "DBtoo",
+            SourceCatalog::Nps => "PKGj",
+        }
+    }
+    pub fn from_api(source_catalog: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|source| source.matches(source_catalog))
+    }
     pub fn matches(self, source_catalog: &str) -> bool {
         match self {
+            SourceCatalog::VitaDb => {
+                source_catalog.eq_ignore_ascii_case("vitadb")
+                    || source_catalog.eq_ignore_ascii_case("vitadb_official")
+                    || source_catalog.eq_ignore_ascii_case("vitadb-official")
+            }
+            SourceCatalog::VitaDbToo => {
+                source_catalog.eq_ignore_ascii_case("vitadbtoo")
+                    || source_catalog.eq_ignore_ascii_case("vitadb_too")
+            }
             SourceCatalog::Nps => source_catalog.eq_ignore_ascii_case("nps"),
-            SourceCatalog::VitaDbToo => !source_catalog.eq_ignore_ascii_case("nps"),
         }
     }
 }
@@ -286,7 +303,6 @@ impl AppEntry {
     pub fn size_label(&self) -> String {
         format_size(self.size_bytes)
     }
-    /// Comparable `YYYYMMDD` key parsed from the leading date of `updated_at`, or `0` if missing/unparseable.
     pub fn sort_epoch(&self) -> u32 {
         let bytes = self.updated_at.as_bytes();
         if bytes.len() < 10 || bytes[4] != b'-' || bytes[7] != b'-' {
@@ -303,5 +319,22 @@ impl AppEntry {
     }
     pub fn data_size_label(&self) -> String {
         format_size(self.data_size_bytes)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn source_catalog_matching() {
+        assert!(SourceCatalog::VitaDb.matches("vitadb"));
+        assert!(SourceCatalog::VitaDb.matches("vitadb_official"));
+        assert!(SourceCatalog::VitaDbToo.matches("vitadbtoo"));
+        assert!(SourceCatalog::VitaDbToo.matches("vitadb_too"));
+        assert!(SourceCatalog::Nps.matches("nps"));
+        assert!(!SourceCatalog::VitaDb.matches("vitadbtoo"));
+        assert!(!SourceCatalog::VitaDb.matches("nps"));
+        assert!(!SourceCatalog::VitaDb.matches("unknown"));
     }
 }

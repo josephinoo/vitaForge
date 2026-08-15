@@ -2,22 +2,51 @@ use anyhow::Result;
 use sdl2::pixels::PixelFormatEnum;
 use sdl2::rect::Rect;
 use sdl2::render::BlendMode;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
-use crate::app::icons::MAX_ICON_SIDE;
-const RETRIES_PER_FRAME: usize = 2;
-
+use crate::app::icons::{HERO_SIDE, MAX_ICON_SIDE};
 const MAX_UPLOAD_ATTEMPTS: u32 = 8;
-const BACKOFF_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
-// New streaming-texture creation cost 30-160ms on real hardware (vs Vita3K, where it barely
+const BACKOFF_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_millis(150);
 const NEW_TEXTURES_PER_FRAME: usize = 1;
-const ICON_FREE_POOL_CAP: usize = 40;
-const ICON_FREE_POOL_WARM_LOW: usize = 12;
+const MAX_UPLOAD_BYTES_PER_FRAME: usize = (HERO_SIDE as usize) * (HERO_SIDE as usize) * 4;
+const MAX_PENDING_SERVICED_PER_FRAME: usize = 2;
+pub const INITIAL_ICON_POOL_SIZE: usize = 64;
+pub const ICON_FREE_POOL_CAP: usize = 160;
+pub const ICON_FREE_POOL_WARM_LOW: usize = 16;
+const HERO_FREE_POOL_CAP: usize = 6;
+const MAX_PENDING_UPLOADS: usize = 48;
+struct FrameUploadBudget {
+    creates: usize,
+    bytes: usize,
+}
+impl FrameUploadBudget {
+    fn fresh() -> Self {
+        Self { creates: 0, bytes: 0 }
+    }
+    fn can_create(&self) -> bool {
+        self.creates < NEW_TEXTURES_PER_FRAME
+    }
+    fn can_upload_bytes(&self, n: usize) -> bool {
+        self.bytes == 0 || self.bytes.saturating_add(n) <= MAX_UPLOAD_BYTES_PER_FRAME
+    }
+    fn record_create(&mut self) {
+        self.creates += 1;
+    }
+    fn record_bytes(&mut self, n: usize) {
+        self.bytes = self.bytes.saturating_add(n);
+    }
+    fn busy(&self) -> bool {
+        self.creates > 0 || self.bytes > 0
+    }
+}
 #[derive(Default)]
 pub struct SdlEguiPainter {
     textures: HashMap<egui::TextureId, SdlEguiTexture>,
     pending: HashMap<egui::TextureId, PendingUpload>,
+    pending_order: VecDeque<egui::TextureId>,
+    dropped: Vec<egui::TextureId>,
     icon_free_pool: Vec<sdl2::render::Texture>,
+    hero_free_pool: Vec<sdl2::render::Texture>,
     vertices: Vec<sdl2::render::Vertex>,
     indices: Vec<i32>,
     scratch: Vec<u8>,
@@ -42,6 +71,30 @@ pub struct PaintStats {
     pub vertices_drawn: u32,
 }
 impl SdlEguiPainter {
+    pub fn prewarm(&mut self, canvas: &mut sdl2::render::Canvas<sdl2::video::Window>) {
+        for _ in 0..INITIAL_ICON_POOL_SIZE {
+            if let Ok(mut texture) =
+                canvas.create_texture_streaming(PixelFormatEnum::RGBA32, MAX_ICON_SIDE, MAX_ICON_SIDE)
+            {
+                texture.set_blend_mode(BlendMode::Blend);
+                self.icon_free_pool.push(texture);
+            }
+        }
+        for _ in 0..2 {
+            if let Ok(mut texture) =
+                canvas.create_texture_streaming(PixelFormatEnum::RGBA32, HERO_SIDE, HERO_SIDE)
+            {
+                texture.set_blend_mode(BlendMode::Blend);
+                self.hero_free_pool.push(texture);
+            }
+        }
+    }
+    pub fn pending_uploads(&self) -> usize {
+        self.pending.len()
+    }
+    pub fn take_dropped_textures(&mut self) -> Vec<egui::TextureId> {
+        std::mem::take(&mut self.dropped)
+    }
     pub fn paint(
         &mut self,
         canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
@@ -72,8 +125,7 @@ impl SdlEguiPainter {
             }
             let uv_scale = match self.textures.get(&mesh.texture_id) {
                 Some(t) => t.uv_scale,
-                None if mesh.texture_id != egui::TextureId::default() => continue,
-                None => egui::vec2(1.0, 1.0),
+                None => continue,
             };
             let same_batch = current_clip == Some(clip_rect) && current_texture_id == Some(mesh.texture_id);
             if !same_batch {
@@ -102,6 +154,13 @@ impl SdlEguiPainter {
                 && self.icon_free_pool.len() < ICON_FREE_POOL_CAP
             {
                 self.icon_free_pool.push(freed.texture);
+            } else if query.width == HERO_SIDE
+                && query.height == HERO_SIDE
+                && self.hero_free_pool.len() < HERO_FREE_POOL_CAP
+            {
+                self.hero_free_pool.push(freed.texture);
+            } else {
+                unsafe { freed.texture.destroy() };
             }
         }
         Ok(PaintStats { texture_apply_secs, geometry_secs, draw_calls, textures_uploaded, vertices_drawn })
@@ -109,8 +168,26 @@ impl SdlEguiPainter {
     fn is_new_creation(&self, texture_id: egui::TextureId, pos: Option<[usize; 2]>) -> bool {
         pos.is_none() || !self.textures.contains_key(&texture_id)
     }
+    fn is_font_atlas(texture_id: egui::TextureId) -> bool {
+        texture_id == egui::TextureId::default()
+    }
+    fn can_serve(&self, size: [usize; 2], budget: &FrameUploadBudget) -> bool {
+        if budget.can_create() {
+            return true;
+        }
+        if Self::is_icon_class_size(size) {
+            return !self.icon_free_pool.is_empty();
+        }
+        if Self::is_hero_class_size(size) {
+            return !self.hero_free_pool.is_empty();
+        }
+        false
+    }
     fn is_icon_class_size(size: [usize; 2]) -> bool {
         size[0] as u32 <= MAX_ICON_SIDE && size[1] as u32 <= MAX_ICON_SIDE
+    }
+    fn is_hero_class_size(size: [usize; 2]) -> bool {
+        size[0] as u32 <= HERO_SIDE && size[1] as u32 <= HERO_SIDE && !Self::is_icon_class_size(size)
     }
     fn flush_batch(
         &mut self,
@@ -140,38 +217,100 @@ impl SdlEguiPainter {
         textures_delta: &egui::TexturesDelta,
     ) -> u32 {
         let mut uploaded = 0u32;
-        let mut new_creations = 0usize;
-        if !self.pending.is_empty() {
-            let now = std::time::Instant::now();
-            let retry: Vec<egui::TextureId> = self
-                .pending
-                .iter()
-                .filter(|(_, upload)| upload.next_retry_at <= now)
-                .map(|(id, _)| *id)
-                .take(RETRIES_PER_FRAME.min(NEW_TEXTURES_PER_FRAME) + 1)
-                .collect();
-            for texture_id in retry {
-                let upload = self.pending.remove(&texture_id).expect("key came from the map");
-                if Self::is_icon_class_size(upload.size) {
-                    if !self.upload_icon(canvas, texture_id, upload.size, &upload.pixels) {
-                        new_creations += 1;
-                    }
-                } else {
-                    self.upload(canvas, texture_id, upload.size, upload.pos, &upload.pixels, upload.attempts);
-                    new_creations += 1;
+        let mut budget = FrameUploadBudget::fresh();
+        let mut scratch = std::mem::take(&mut self.scratch);
+        let mut serviced_this_frame = 0usize;
+
+        for (texture_id, delta) in &textures_delta.set {
+            if !Self::is_font_atlas(*texture_id) {
+                continue;
+            }
+            scratch.clear();
+            Self::fill_sdl_rgba(&delta.image, &mut scratch);
+            self.pending.remove(texture_id);
+            self.upload(canvas, *texture_id, delta.image.size(), delta.pos, &scratch, 0);
+            uploaded += 1;
+        }
+        if let Some(upload) = self.pending.remove(&egui::TextureId::default()) {
+            self.upload(
+                canvas,
+                egui::TextureId::default(),
+                upload.size,
+                upload.pos,
+                &upload.pixels,
+                upload.attempts,
+            );
+            uploaded += 1;
+        }
+
+        let now = std::time::Instant::now();
+        let mut not_serviced: Vec<egui::TextureId> = Vec::new();
+        for _ in 0..self.pending_order.len() {
+            if serviced_this_frame >= MAX_PENDING_SERVICED_PER_FRAME {
+                break;
+            }
+            let Some(texture_id) = self.pending_order.pop_front() else { break };
+            if Self::is_font_atlas(texture_id) {
+                continue; // handled above, unconditionally
+            }
+            let Some(upload) = self.pending.remove(&texture_id) else {
+                continue; // already uploaded or evicted — stale order entry
+            };
+            let pixel_bytes = upload.pixels.len();
+            if upload.next_retry_at > now
+                || !budget.can_upload_bytes(pixel_bytes)
+                || !self.can_serve(upload.size, &budget)
+            {
+                self.pending.insert(texture_id, upload);
+                not_serviced.push(texture_id);
+                continue;
+            }
+            serviced_this_frame += 1;
+            let outcome = if Self::is_hero_class_size(upload.size) {
+                self.try_upload_hero(canvas, texture_id, upload.size, &upload.pixels, &mut budget)
+            } else if Self::is_icon_class_size(upload.size) {
+                self.try_upload_icon(canvas, texture_id, upload.size, &upload.pixels, &mut budget)
+            } else {
+                self.upload(canvas, texture_id, upload.size, upload.pos, &upload.pixels, upload.attempts);
+                UploadOutcome::Done { created: true }
+            };
+            if let UploadOutcome::Done { created } = outcome {
+                if created {
+                    budget.record_create();
                 }
+                budget.record_bytes(pixel_bytes);
                 uploaded += 1;
             }
         }
-        let mut scratch = std::mem::take(&mut self.scratch);
+        for texture_id in not_serviced.into_iter().rev() {
+            self.pending_order.push_front(texture_id);
+        }
+
         for (texture_id, delta) in &textures_delta.set {
+            if Self::is_font_atlas(*texture_id) {
+                continue;
+            }
             scratch.clear();
             Self::fill_sdl_rgba(&delta.image, &mut scratch);
             let is_new = self.is_new_creation(*texture_id, delta.pos);
-            if is_new && Self::is_icon_class_size(delta.image.size()) {
-                let would_create = self.icon_free_pool.is_empty();
-                if would_create && new_creations >= NEW_TEXTURES_PER_FRAME {
-                    self.pending.insert(
+            let pixel_bytes = scratch.len();
+            if is_new && (serviced_this_frame >= MAX_PENDING_SERVICED_PER_FRAME || !budget.can_upload_bytes(pixel_bytes)) {
+                self.enqueue_pending(
+                    *texture_id,
+                    PendingUpload {
+                        size: delta.image.size(),
+                        pos: delta.pos,
+                        pixels: scratch.clone(),
+                        attempts: 0,
+                        next_retry_at: std::time::Instant::now(),
+                    },
+                );
+                continue;
+            }
+            if is_new && Self::is_hero_class_size(delta.image.size()) {
+                let would_create = self.hero_free_pool.is_empty();
+                if (would_create && !budget.can_create()) || !budget.can_upload_bytes(pixel_bytes) {
+                    self.enqueue_pending(
                         *texture_id,
                         PendingUpload {
                             size: delta.image.size(),
@@ -183,14 +322,49 @@ impl SdlEguiPainter {
                     );
                     continue;
                 }
-                if !self.upload_icon(canvas, *texture_id, delta.image.size(), &scratch) {
-                    new_creations += 1;
+                serviced_this_frame += 1;
+                match self.try_upload_hero(canvas, *texture_id, delta.image.size(), &scratch, &mut budget) {
+                    UploadOutcome::Done { created } => {
+                        if created {
+                            budget.record_create();
+                        }
+                        budget.record_bytes(pixel_bytes);
+                        uploaded += 1;
+                    }
+                    UploadOutcome::Deferred => {}
                 }
-                uploaded += 1;
                 continue;
             }
-            if is_new && new_creations >= NEW_TEXTURES_PER_FRAME {
-                self.pending.insert(
+            if is_new && Self::is_icon_class_size(delta.image.size()) {
+                let would_create = self.icon_free_pool.is_empty();
+                if (would_create && !budget.can_create()) || !budget.can_upload_bytes(pixel_bytes) {
+                    self.enqueue_pending(
+                        *texture_id,
+                        PendingUpload {
+                            size: delta.image.size(),
+                            pos: None,
+                            pixels: scratch.clone(),
+                            attempts: 0,
+                            next_retry_at: std::time::Instant::now(),
+                        },
+                    );
+                    continue;
+                }
+                serviced_this_frame += 1;
+                match self.try_upload_icon(canvas, *texture_id, delta.image.size(), &scratch, &mut budget) {
+                    UploadOutcome::Done { created } => {
+                        if created {
+                            budget.record_create();
+                        }
+                        budget.record_bytes(pixel_bytes);
+                        uploaded += 1;
+                    }
+                    UploadOutcome::Deferred => {}
+                }
+                continue;
+            }
+            if is_new && (!budget.can_create() || !budget.can_upload_bytes(pixel_bytes)) {
+                self.enqueue_pending(
                     *texture_id,
                     PendingUpload {
                         size: delta.image.size(),
@@ -203,13 +377,19 @@ impl SdlEguiPainter {
                 continue;
             }
             if is_new {
-                new_creations += 1;
+                budget.record_create();
+                serviced_this_frame += 1;
             }
+            budget.record_bytes(pixel_bytes);
             self.upload(canvas, *texture_id, delta.image.size(), delta.pos, &scratch, 0);
             uploaded += 1;
         }
         self.scratch = scratch;
-        if new_creations <= NEW_TEXTURES_PER_FRAME && self.icon_free_pool.len() < ICON_FREE_POOL_WARM_LOW {
+        if !budget.busy()
+            && self.pending.is_empty()
+            && textures_delta.set.is_empty()
+            && self.icon_free_pool.len() < ICON_FREE_POOL_WARM_LOW
+        {
             if let Ok(mut texture) =
                 canvas.create_texture_streaming(PixelFormatEnum::RGBA32, MAX_ICON_SIDE, MAX_ICON_SIDE)
             {
@@ -219,28 +399,87 @@ impl SdlEguiPainter {
         }
         uploaded
     }
-    fn upload_icon(
+    fn try_upload_hero(
         &mut self,
         canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
         texture_id: egui::TextureId,
         size: [usize; 2],
         pixels: &[u8],
-    ) -> bool {
+        budget: &mut FrameUploadBudget,
+    ) -> UploadOutcome {
+        if let Some(texture) = self.hero_free_pool.pop() {
+            self.finish_hero_upload(texture, texture_id, size, pixels);
+            return UploadOutcome::Done { created: false };
+        }
+        if !budget.can_create() {
+            self.defer_or_give_up(texture_id, size, None, pixels, 0);
+            return UploadOutcome::Deferred;
+        }
+        match canvas.create_texture_streaming(PixelFormatEnum::RGBA32, HERO_SIDE, HERO_SIDE) {
+            Ok(mut texture) => {
+                texture.set_blend_mode(BlendMode::Blend);
+                self.finish_hero_upload(texture, texture_id, size, pixels);
+                UploadOutcome::Done { created: true }
+            }
+            Err(err) => {
+                eprintln!("no room for a {HERO_SIDE}x{HERO_SIDE} hero texture, will retry: {err}");
+                self.defer_or_give_up(texture_id, size, None, pixels, 0);
+                UploadOutcome::Deferred
+            }
+        }
+    }
+    fn finish_hero_upload(
+        &mut self,
+        mut texture: sdl2::render::Texture,
+        texture_id: egui::TextureId,
+        size: [usize; 2],
+        pixels: &[u8],
+    ) {
+        let [width, height] = size;
+        if let Err(err) = texture.update(Rect::new(0, 0, width as u32, height as u32), pixels, width * 4) {
+            eprintln!("couldn't patch a pooled hero texture, will retry: {err}");
+            if self.hero_free_pool.len() < HERO_FREE_POOL_CAP {
+                self.hero_free_pool.push(texture);
+            } else {
+                unsafe { texture.destroy() };
+            }
+            self.defer_or_give_up(texture_id, size, None, pixels, 0);
+            return;
+        }
+        let cap = HERO_SIDE as f32;
+        let uv_scale = egui::vec2(width as f32 / cap, height as f32 / cap);
+        if let Some(previous) = self.textures.insert(texture_id, SdlEguiTexture { texture, uv_scale }) {
+            unsafe { previous.texture.destroy() };
+        }
+    }
+    fn try_upload_icon(
+        &mut self,
+        canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+        texture_id: egui::TextureId,
+        size: [usize; 2],
+        pixels: &[u8],
+        budget: &mut FrameUploadBudget,
+    ) -> UploadOutcome {
         if let Some(texture) = self.icon_free_pool.pop() {
             self.finish_icon_upload(texture, texture_id, size, pixels);
-            return true;
+            return UploadOutcome::Done { created: false };
+        }
+        if !budget.can_create() {
+            self.defer_or_give_up(texture_id, size, None, pixels, 0);
+            return UploadOutcome::Deferred;
         }
         match canvas.create_texture_streaming(PixelFormatEnum::RGBA32, MAX_ICON_SIDE, MAX_ICON_SIDE) {
             Ok(mut texture) => {
                 texture.set_blend_mode(BlendMode::Blend);
                 self.finish_icon_upload(texture, texture_id, size, pixels);
+                UploadOutcome::Done { created: true }
             }
             Err(err) => {
                 eprintln!("no room for a {MAX_ICON_SIDE}x{MAX_ICON_SIDE} icon texture, will retry: {err}");
                 self.defer_or_give_up(texture_id, size, None, pixels, 0);
+                UploadOutcome::Deferred
             }
         }
-        false
     }
     fn finish_icon_upload(
         &mut self,
@@ -254,13 +493,40 @@ impl SdlEguiPainter {
             eprintln!("couldn't patch a pooled icon texture, will retry: {err}");
             if self.icon_free_pool.len() < ICON_FREE_POOL_CAP {
                 self.icon_free_pool.push(texture);
+            } else {
+                unsafe { texture.destroy() };
             }
             self.defer_or_give_up(texture_id, size, None, pixels, 0);
             return;
         }
         let cap = MAX_ICON_SIDE as f32;
         let uv_scale = egui::vec2(width as f32 / cap, height as f32 / cap);
-        self.textures.insert(texture_id, SdlEguiTexture { texture, uv_scale });
+        if let Some(previous) = self.textures.insert(texture_id, SdlEguiTexture { texture, uv_scale }) {
+            unsafe { previous.texture.destroy() };
+        }
+    }
+    fn make_pending_room(&mut self, keep: egui::TextureId) {
+        while self.pending.len() >= MAX_PENDING_UPLOADS {
+            let victim = self
+                .pending
+                .iter()
+                .filter(|(id, _)| **id != keep && !Self::is_font_atlas(**id))
+                .max_by_key(|(_, upload)| upload.attempts)
+                .map(|(id, _)| *id);
+            let Some(victim) = victim else { break };
+            self.pending.remove(&victim);
+            self.dropped.push(victim);
+        }
+    }
+    fn enqueue_pending(&mut self, texture_id: egui::TextureId, upload: PendingUpload) {
+        self.make_pending_room(texture_id);
+        if self.pending.insert(texture_id, upload).is_none() {
+            self.pending_order.push_back(texture_id);
+        }
+        if self.pending_order.len() > MAX_PENDING_UPLOADS * 4 {
+            let live = std::mem::take(&mut self.pending_order);
+            self.pending_order = live.into_iter().filter(|id| self.pending.contains_key(id)).collect();
+        }
     }
     fn defer_or_give_up(
         &mut self,
@@ -271,11 +537,18 @@ impl SdlEguiPainter {
         attempts: u32,
     ) {
         let attempts = attempts + 1;
-        if attempts >= MAX_UPLOAD_ATTEMPTS {
+        if attempts >= MAX_UPLOAD_ATTEMPTS && !Self::is_font_atlas(texture_id) {
             eprintln!("giving up on a {}x{} texture after {attempts} attempts", size[0], size[1]);
+            self.pending.remove(&texture_id);
+            self.dropped.push(texture_id);
             return;
         }
-        self.pending.insert(
+        let attempts = if Self::is_font_atlas(texture_id) {
+            attempts.min(MAX_UPLOAD_ATTEMPTS.saturating_sub(1))
+        } else {
+            attempts
+        };
+        self.enqueue_pending(
             texture_id,
             PendingUpload {
                 size,
@@ -313,7 +586,11 @@ impl SdlEguiPainter {
                 self.defer_or_give_up(texture_id, size, pos, pixels, attempts);
                 return;
             }
-            self.textures.insert(texture_id, SdlEguiTexture { texture, uv_scale: egui::vec2(1.0, 1.0) });
+            if let Some(previous) =
+                self.textures.insert(texture_id, SdlEguiTexture { texture, uv_scale: egui::vec2(1.0, 1.0) })
+            {
+                unsafe { previous.texture.destroy() };
+            }
             return;
         }
         let Some([x, y]) = pos else {
@@ -333,7 +610,6 @@ impl SdlEguiPainter {
     fn fill_sdl_rgba(image: &egui::ImageData, out: &mut Vec<u8>) {
         match image {
             egui::ImageData::Color(image) => {
-
                 let bytes: &[u8] = unsafe {
                     std::slice::from_raw_parts(image.pixels.as_ptr() as *const u8, image.pixels.len() * 4)
                 };
@@ -399,6 +675,10 @@ impl SdlEguiPainter {
             Some(sdl2::rect::Rect::new(min_x, min_y, width, height))
         }
     }
+}
+enum UploadOutcome {
+    Done { created: bool },
+    Deferred,
 }
 #[cfg(test)]
 mod tests {

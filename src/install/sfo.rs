@@ -4,6 +4,7 @@ pub struct SfoIds {
     pub title_id: String,
     pub content_id: Option<String>,
     pub disc_id: Option<String>, // from usagi-pkgj's DISC_ID extraction for PSP install routing
+    pub app_ver: Option<String>,
 }
 fn u16_at(bytes: &[u8], offset: usize) -> Result<u16> {
     let slice = bytes.get(offset..offset + 2).context("sfo truncated")?;
@@ -28,6 +29,7 @@ pub fn read_ids(sfo: &[u8]) -> Result<SfoIds> {
     let mut title_id = None;
     let mut content_id = None;
     let mut disc_id = None;
+    let mut app_ver = None;
     for index in 0..entries {
         let entry = 20 + index * 16;
         let key_offset = u16_at(sfo, entry)? as usize;
@@ -48,8 +50,18 @@ pub fn read_ids(sfo: &[u8]) -> Result<SfoIds> {
                     disc_id = Some(value);
                 }
             }
+            "APP_VER" => {
+                let value = string_at(sfo, data_table + data_offset, value_len);
+                if !value.is_empty() {
+                    app_ver = Some(value);
+                }
+            }
             _ => {}
         }
     }
-    Ok(SfoIds { title_id: title_id.context("param.sfo has no TITLE_ID")?, content_id, disc_id })
+    Ok(SfoIds { title_id: title_id.context("param.sfo has no TITLE_ID")?, content_id, disc_id, app_ver })
+}
+pub fn read_app_ver(param_sfo: &std::path::Path) -> Option<String> {
+    let bytes = std::fs::read(param_sfo).ok()?;
+    read_ids(&bytes).ok()?.app_ver
 }

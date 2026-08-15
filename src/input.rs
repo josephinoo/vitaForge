@@ -18,6 +18,21 @@ pub enum TextTarget {
     Search,
     Comment,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StoreTab {
+    #[default]
+    Discover,
+    Library,
+    Updates,
+    Search,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiscoverRail {
+    Top,
+    New,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum AppCommand {
     Input(InputCommand),
@@ -29,17 +44,29 @@ pub enum AppCommand {
     SetSortOrder(crate::data::SortOrder),
     FlipSortDirection,
     SelectApp { index: usize },
+    SelectAppById(String),
+    SetStoreTab(StoreTab),
+    SeeAllRail(DiscoverRail),
+    BackToDiscoverHome,
+    MoreByAuthor(String),
+    OpenScreenshot(usize),
+    CloseScreenshot,
     BackToCatalog,
     InstallCurrent,
     DismissInstall,
+    CancelInstall,
     OpenSettings,
     CloseSettings,
     SetLanguage(crate::app::i18n::Language),
+    ClearIconCache,
+    ClearCatalogCache,
+    PurgeAllCache,
     ToggleLike,
     RateCurrent(u8),
     RequestCommentEntry,
     CloseCommentEntry,
     SubmitComment(String),
+    SelfUpdate,
 }
 impl From<InputCommand> for AppCommand {
     fn from(cmd: InputCommand) -> Self {
@@ -79,11 +106,6 @@ pub fn map_controller_button_event(event: &Event) -> Option<AppCommand> {
         Button::Start => return Some(AppCommand::OpenSettings),
         Button::X => return Some(AppCommand::ToggleLike),
         Button::Back => return Some(AppCommand::FlipSortDirection),
-        // D-pad directions are handled entirely by `held_stick_direction`
-        // below instead — SDL's button-down/up events fire exactly once per
-        // physical press with no OS-level auto-repeat, which is what made
-        // holding the D-pad feel like it required mashing it once per step
-        // (measured directly: real device/Vita3K logs showed 100% of
         Button::LeftShoulder => InputCommand::CategoryPrev,
         Button::RightShoulder => InputCommand::CategoryNext,
         _ => return None,

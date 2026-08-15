@@ -1,5 +1,7 @@
 use crate::shell::egui_painter::{PaintStats, SdlEguiPainter};
 use anyhow::{Context, Result};
+#[cfg(not(target_os = "vita"))]
+use sdl2::pixels::PixelFormatEnum;
 use sdl2::render::Canvas;
 use sdl2::video::Window;
 
@@ -37,7 +39,9 @@ impl VitaSurface {
             .set_logical_size(WIDTH, HEIGHT)
             .map_err(anyhow::Error::msg)
             .context("failed to set logical render size")?;
-        Ok(Self { canvas, egui_painter: SdlEguiPainter::default() })
+        let mut egui_painter = SdlEguiPainter::default();
+        egui_painter.prewarm(&mut canvas);
+        Ok(Self { canvas, egui_painter })
     }
     pub fn window(&self) -> &Window {
         self.canvas.window()
@@ -47,14 +51,30 @@ impl VitaSurface {
         self.canvas.set_draw_color(sdl2::pixels::Color::BLACK);
         self.canvas.clear();
     }
+    pub fn pending_texture_uploads(&self) -> usize {
+        self.egui_painter.pending_uploads()
+    }
+    pub fn take_dropped_textures(&mut self) -> Vec<egui::TextureId> {
+        self.egui_painter.take_dropped_textures()
+    }
     pub fn paint_egui(
         &mut self,
         pixels_per_point: f32,
         primitives: &[egui::ClippedPrimitive],
         textures_delta: &egui::TexturesDelta,
+        dump_path: Option<&str>,
     ) -> Result<FramePaintStats> {
         let PaintStats { texture_apply_secs, geometry_secs, draw_calls, textures_uploaded, vertices_drawn } =
             self.egui_painter.paint(&mut self.canvas, [WIDTH, HEIGHT], pixels_per_point, primitives, textures_delta)?;
+        #[cfg(not(target_os = "vita"))]
+        if let Some(path) = dump_path {
+            match self.dump_screenshot_from_target(path) {
+                Ok(()) => eprintln!("dumped screenshot to {path}"),
+                Err(err) => eprintln!("screenshot dump failed: {err:#}"),
+            }
+        }
+        #[cfg(target_os = "vita")]
+        let _ = dump_path;
         let present_started_at = std::time::Instant::now();
         self.canvas.present();
         let present_secs = present_started_at.elapsed().as_secs_f64();
@@ -66,5 +86,18 @@ impl VitaSurface {
             textures_uploaded,
             vertices_drawn,
         })
+    }
+
+    #[cfg(not(target_os = "vita"))]
+    fn dump_screenshot_from_target(&self, path: &str) -> Result<()> {
+        use image::{ImageBuffer, RgbaImage};
+        let pixels = self
+            .canvas
+            .read_pixels(None, PixelFormatEnum::ABGR8888)
+            .map_err(|e| anyhow::anyhow!("read_pixels: {e}"))?;
+        let img: RgbaImage = ImageBuffer::from_raw(WIDTH, HEIGHT, pixels)
+            .ok_or_else(|| anyhow::anyhow!("invalid screenshot buffer"))?;
+        img.save(path).map_err(|e| anyhow::anyhow!("save screenshot: {e}"))?;
+        Ok(())
     }
 }

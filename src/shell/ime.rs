@@ -1,13 +1,22 @@
-//! On-screen keyboard, dual implementation behind one API so the frame loop in
-//! `shell/mod.rs` never has to branch on target.
-//!
-//! On real hardware ([`inline`]) this is the Vita's *inline* IME (`sceImeOpen`), which
-//! draws its own overlay while the app keeps rendering underneath — unlike the full-screen
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ImePurpose {
+    Search,
+    Comment,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ImeResult {
+    Confirmed(String),
+    Canceled,
+}
+
 #[cfg(target_os = "vita")]
-mod inline;
+mod dialog;
 #[cfg(target_os = "vita")]
-pub use inline::{close, confirmed, feed_event, is_shown, open, take_text, update};
+pub use dialog::{close, feed_event, open, poll};
+
 #[cfg(not(target_os = "vita"))]
 mod sdl_fallback;
 #[cfg(not(target_os = "vita"))]
-pub use sdl_fallback::{close, confirmed, feed_event, is_shown, open, take_text, update};
+pub use sdl_fallback::{close, feed_event, open, poll};
