@@ -29,9 +29,6 @@ impl Language {
         }
         Language::English
     }
-    // Every field of `LocalizedStrings` is itself `&'static str` (leaked once in
-    // `resolve`), so a getter closure can hand one straight out — no unsafe needed to
-    // outlive the thread-local borrow.
     fn strings<R>(self, f: impl FnOnce(&LocalizedStrings) -> R) -> R {
         thread_local! {
             static EN: LocalizedStrings = LocalizedStrings::resolve(&build_bundle("en-US", EN_US_FTL));
@@ -197,6 +194,49 @@ impl Language {
     pub fn language_label(self) -> &'static str {
         self.strings(|s| s.language_label)
     }
+    pub fn settings_storage(self) -> &'static str {
+        self.strings(|s| s.settings_storage)
+    }
+    pub fn settings_version(self) -> &'static str {
+        self.strings(|s| s.settings_version)
+    }
+    pub fn settings_catalog(self) -> &'static str {
+        self.strings(|s| s.settings_catalog)
+    }
+    pub fn settings_icon_cache(self) -> &'static str {
+        self.strings(|s| s.settings_icon_cache)
+    }
+    pub fn settings_catalog_cache(self) -> &'static str {
+        self.strings(|s| s.settings_catalog_cache)
+    }
+    pub fn settings_hash_cache(self) -> &'static str {
+        self.strings(|s| s.settings_hash_cache)
+    }
+    pub fn settings_total(self) -> &'static str {
+        self.strings(|s| s.settings_total)
+    }
+    pub fn settings_clear_icons(self) -> &'static str {
+        self.strings(|s| s.settings_clear_icons)
+    }
+    pub fn settings_clear_catalog(self) -> &'static str {
+        self.strings(|s| s.settings_clear_catalog)
+    }
+    pub fn settings_purge_all(self) -> &'static str {
+        self.strings(|s| s.settings_purge_all)
+    }
+    pub fn settings_cleared_icons(self, size: &str) -> String {
+        let mut args = FluentArgs::new();
+        args.set("size", FluentValue::from(size));
+        self.with_bundle(|bundle| format_message(bundle, "settings-cleared-icons", Some(&args)))
+    }
+    pub fn settings_cleared_catalog(self) -> &'static str {
+        self.strings(|s| s.settings_cleared_catalog)
+    }
+    pub fn settings_purged_all(self, size: &str) -> String {
+        let mut args = FluentArgs::new();
+        args.set("size", FluentValue::from(size));
+        self.with_bundle(|bundle| format_message(bundle, "settings-purged-all", Some(&args)))
+    }
     pub fn by_author(self, author: &str) -> String {
         let mut args = FluentArgs::new();
         args.set("author", FluentValue::from(author));
@@ -214,8 +254,53 @@ impl Language {
     pub fn btn_category(self) -> &'static str {
         self.strings(|s| s.btn_category)
     }
+    pub fn btn_tabs(self) -> &'static str {
+        self.strings(|s| s.btn_tabs)
+    }
+    pub fn btn_clear(self) -> &'static str {
+        self.strings(|s| s.btn_clear)
+    }
+    pub fn tab_discover(self) -> &'static str {
+        self.strings(|s| s.tab_discover)
+    }
+    pub fn tab_library(self) -> &'static str {
+        self.strings(|s| s.tab_library)
+    }
+    pub fn tab_updates(self) -> &'static str {
+        self.strings(|s| s.tab_updates)
+    }
+    pub fn tab_search(self) -> &'static str {
+        self.strings(|s| s.tab_search)
+    }
+    pub fn rail_top(self) -> &'static str {
+        self.strings(|s| s.rail_top)
+    }
+    pub fn rail_new(self) -> &'static str {
+        self.strings(|s| s.rail_new)
+    }
+    pub fn see_all(self) -> &'static str {
+        self.strings(|s| s.see_all)
+    }
+    pub fn see_all_catalog(self) -> &'static str {
+        self.strings(|s| s.see_all_catalog)
+    }
+    pub fn see_all_back(self) -> &'static str {
+        self.strings(|s| s.see_all_back)
+    }
+    pub fn library_empty(self) -> &'static str {
+        self.strings(|s| s.library_empty)
+    }
+    pub fn updates_empty(self) -> &'static str {
+        self.strings(|s| s.updates_empty)
+    }
     pub fn loading_msg(self) -> &'static str {
         self.strings(|s| s.loading_msg)
+    }
+    pub fn cancel_btn(self) -> &'static str {
+        self.strings(|s| s.cancel_btn)
+    }
+    pub fn installed_version_value(self) -> &'static str {
+        self.strings(|s| s.installed_version_value)
     }
 }
 fn build_bundle(locale: &str, source: &str) -> FluentBundle<FluentResource> {
@@ -224,8 +309,6 @@ fn build_bundle(locale: &str, source: &str) -> FluentBundle<FluentResource> {
     let resource = FluentResource::try_new(source.to_owned())
         .unwrap_or_else(|(_, errs)| panic!("bad ftl syntax in {locale}: {errs:?}"));
     let mut bundle = FluentBundle::new(vec![langid]);
-    // Fluent wraps interpolated values in Unicode directional-isolation marks by default,
-    // which the bundled UI font has no glyph for — turn that off so `by-author`/`apps-count`
     bundle.set_use_isolating(false);
     bundle.add_resource(resource).unwrap_or_else(|errs| panic!("duplicate ftl id in {locale}: {errs:?}"));
     bundle
@@ -297,9 +380,35 @@ struct LocalizedStrings {
     btn_back: &'static str,
     btn_search: &'static str,
     btn_category: &'static str,
+    btn_tabs: &'static str,
+    btn_clear: &'static str,
+    tab_discover: &'static str,
+    tab_library: &'static str,
+    tab_updates: &'static str,
+    tab_search: &'static str,
+    rail_top: &'static str,
+    rail_new: &'static str,
+    see_all: &'static str,
+    see_all_catalog: &'static str,
+    see_all_back: &'static str,
+    library_empty: &'static str,
+    updates_empty: &'static str,
     loading_msg: &'static str,
     settings_title: &'static str,
     language_label: &'static str,
+    settings_storage: &'static str,
+    settings_version: &'static str,
+    settings_catalog: &'static str,
+    settings_icon_cache: &'static str,
+    settings_catalog_cache: &'static str,
+    settings_hash_cache: &'static str,
+    settings_total: &'static str,
+    settings_clear_icons: &'static str,
+    settings_clear_catalog: &'static str,
+    settings_purge_all: &'static str,
+    settings_cleared_catalog: &'static str,
+    cancel_btn: &'static str,
+    installed_version_value: &'static str,
 }
 impl LocalizedStrings {
     fn resolve(bundle: &FluentBundle<FluentResource>) -> Self {
@@ -364,9 +473,35 @@ impl LocalizedStrings {
             btn_back: r("btn-back"),
             btn_search: r("btn-search"),
             btn_category: r("btn-category"),
+            btn_tabs: r("btn-tabs"),
+            btn_clear: r("btn-clear"),
+            tab_discover: r("tab-discover"),
+            tab_library: r("tab-library"),
+            tab_updates: r("tab-updates"),
+            tab_search: r("tab-search"),
+            rail_top: r("rail-top"),
+            rail_new: r("rail-new"),
+            see_all: r("see-all"),
+            see_all_catalog: r("see-all-catalog"),
+            see_all_back: r("see-all-back"),
+            library_empty: r("library-empty"),
+            updates_empty: r("updates-empty"),
             loading_msg: r("loading-msg"),
             settings_title: r("settings-title"),
             language_label: r("language-label"),
+            settings_storage: r("settings-storage"),
+            settings_version: r("settings-version"),
+            settings_catalog: r("settings-catalog"),
+            settings_icon_cache: r("settings-icon-cache"),
+            settings_catalog_cache: r("settings-catalog-cache"),
+            settings_hash_cache: r("settings-hash-cache"),
+            settings_total: r("settings-total"),
+            settings_clear_icons: r("settings-clear-icons"),
+            settings_clear_catalog: r("settings-clear-catalog"),
+            settings_purge_all: r("settings-purge-all"),
+            settings_cleared_catalog: r("settings-cleared-catalog"),
+            cancel_btn: r("cancel-btn"),
+            installed_version_value: r("installed-version-value"),
         }
     }
 }
@@ -388,6 +523,10 @@ mod tests {
         assert_eq!(Language::Spanish.apps_count(42), "42 APPS");
         assert_eq!(Language::English.by_author("josephinoo"), "by josephinoo");
         assert_eq!(Language::Spanish.by_author("josephinoo"), "por josephinoo");
+        assert!(Language::English.settings_cleared_icons("2.0 MB").contains("2.0 MB"));
+        assert!(Language::Spanish.settings_purged_all("1.5 MB").contains("1.5 MB"));
+        assert!(!Language::English.settings_cleared_catalog().is_empty());
+        assert!(!Language::English.settings_purge_all().is_empty());
     }
     #[test]
     fn sort_label_covers_every_variant() {

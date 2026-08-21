@@ -13,7 +13,8 @@ use crate::data::AppEntry;
 use anyhow::{Context, Result, bail};
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use tokio::sync::{oneshot, watch};
 const WORK_DIR: &str = "ux0:data/vitaforge";
 const TEMP_VPK: &str = "ux0:data/vitaforge/tmp.vpk";
@@ -31,13 +32,14 @@ pub enum Progress {
     Downloading { received: u64, total: Option<u64> },
 
     Decrypting,
-    Extracting,
-    Installing,
+    Extracting { done: u32, total: u32 },
+    Installing { elapsed_secs: u32 },
 
     Queued,
     Done,
     Failed(String),
 }
+pub const CANCELLED_MESSAGE: &str = "cancelled";
 impl Progress {
     pub fn label(&self) -> String {
         match self {
@@ -55,21 +57,31 @@ impl Progress {
                 _ => format!("[1/3] Game data {:.1} MB", *received as f64 / (1024.0 * 1024.0)),
             },
             Progress::Decrypting => "[3/3] Decrypting…".to_owned(),
-            Progress::Extracting => "[3/3] Extracting…".to_owned(),
-            Progress::Installing => "[3/3] Installing…".to_owned(),
+            Progress::Extracting { done, total } if *total > 0 => {
+                format!("[3/3] Extracting {done}/{total} ({}%)", (*done as u64 * 100 / *total as u64).min(100))
+            }
+            Progress::Extracting { .. } => "[3/3] Extracting…".to_owned(),
+            Progress::Installing { elapsed_secs } if *elapsed_secs > 0 => {
+                format!("[3/3] Installing… ({elapsed_secs}s)")
+            }
+            Progress::Installing { .. } => "[3/3] Installing…".to_owned(),
             Progress::Queued => "Queued — check Notifications".to_owned(),
             Progress::Done => "Installed".to_owned(),
+            Progress::Failed(err) if err == CANCELLED_MESSAGE => "Cancelled".to_owned(),
             Progress::Failed(err) => format!("Failed: {err}"),
         }
     }
     pub fn is_finished(&self) -> bool {
         matches!(self, Progress::Queued | Progress::Done | Progress::Failed(_))
     }
+    pub fn is_cancellable(&self) -> bool {
+        !self.is_finished() && !matches!(self, Progress::Installing { .. })
+    }
     pub fn step(&self) -> usize {
         match self {
             Progress::Resolving | Progress::DownloadingData { .. } | Progress::Downloading { .. } => 1,
-            Progress::Decrypting | Progress::Extracting => 2,
-            Progress::Installing | Progress::Queued | Progress::Done | Progress::Failed(_) => 3,
+            Progress::Decrypting | Progress::Extracting { .. } => 2,
+            Progress::Installing { .. } | Progress::Queued | Progress::Done | Progress::Failed(_) => 3,
         }
     }
 }
@@ -127,11 +139,22 @@ pub fn log_file(msg: &str) {
         let _ = writeln!(f, "[LOG] {msg}");
     }
 }
-pub fn start(entry: AppEntry) -> watch::Receiver<Progress> {
+fn check_cancelled(cancel: &AtomicBool) -> Result<()> {
+    if cancel.load(Ordering::Relaxed) {
+        bail!(CANCELLED_MESSAGE);
+    }
+    Ok(())
+}
+pub fn start(entry: AppEntry) -> (watch::Receiver<Progress>, Arc<AtomicBool>) {
     log_file(&format!("Install requested for '{}' (platform: {:?}, url: '{}')", entry.name, entry.platform, entry.download_url));
     let (tx, rx) = watch::channel(Progress::Resolving);
+    let cancel = Arc::new(AtomicBool::new(false));
+    let cancel_worker = cancel.clone();
+    let _ = std::fs::remove_file(TEMP_VPK);
+    let _ = std::fs::remove_file(TEMP_DATA);
+    let _ = std::fs::remove_file(TEMP_PKG);
     tokio::spawn(async move {
-        let result = run(&entry, &tx).await;
+        let result = run(&entry, &tx, &cancel_worker).await;
         let final_state = match result {
             Ok(state) => {
                 log_file(&format!("Install completed successfully for '{}': {:?}", entry.name, state));
@@ -141,22 +164,24 @@ pub fn start(entry: AppEntry) -> watch::Receiver<Progress> {
                 log_file(&format!("Install FAILED for '{}': {err:#}", entry.name));
                 eprintln!("install failed: {err:#}");
                 let _ = std::fs::remove_dir_all(EXTRACT_DIR);
+                let _ = std::fs::remove_dir_all(DATA_STAGE_DIR);
                 let _ = std::fs::remove_file(TEMP_VPK);
+                let _ = std::fs::remove_file(TEMP_DATA);
+                let _ = std::fs::remove_file(TEMP_PKG);
                 installed::clear_pending_install(&installed::index_key(&entry));
                 Progress::Failed(format!("{err}"))
             }
         };
         let _ = tx.send(final_state);
     });
-    rx
+    (rx, cancel)
 }
-async fn run(entry: &AppEntry, tx: &watch::Sender<Progress>) -> Result<Progress> {
+async fn run(entry: &AppEntry, tx: &watch::Sender<Progress>, cancel: &Arc<AtomicBool>) -> Result<Progress> {
     match entry.platform {
-        crate::data::Platform::Vita => run_vita(entry, tx).await,
-        crate::data::Platform::Psp => run_psp(entry, tx).await,
-        crate::data::Platform::Plugin => run_plugin(entry, tx).await,
+        crate::data::Platform::Vita => run_vita(entry, tx, cancel).await,
+        crate::data::Platform::Psp => run_psp(entry, tx, cancel).await,
+        crate::data::Platform::Plugin => run_plugin(entry, tx, cancel).await,
         crate::data::Platform::NpsVita => run_nps_vita(entry, tx).await,
-        // PSP/PS1 (NPS) installs are disabled for now — the backend they depend on is blocked.
         crate::data::Platform::NpsPsp | crate::data::Platform::NpsPsx => {
             bail!("PSP/PS1 installs are temporarily unavailable")
         }
@@ -170,7 +195,6 @@ async fn run_nps_vita(entry: &AppEntry, tx: &watch::Sender<Progress>) -> Result<
     queue_bgdl_vita(entry, tx).await
 }
 async fn install_pbp_pkg(entry: &AppEntry, tx: &watch::Sender<Progress>, pkg_path: &Path, kind: pkg::PkgKind) -> Result<Progress> {
-    // Port of usagi-pkgj's pkgi_install_pspgame (install.cpp) — unified PSX/PSP extraction + disc-ID routing
     let _ = tx.send(Progress::Decrypting);
     let staging_dir = PathBuf::from(EXTRACT_DIR).join(format!("pbp_{:?}", kind));
     let pkg_path_owned = pkg_path.to_path_buf();
@@ -186,7 +210,6 @@ async fn install_pbp_pkg(entry: &AppEntry, tx: &watch::Sender<Progress>, pkg_pat
     let _ = std::fs::remove_file(pkg_path);
 
     let eboot_path = staging_dir.join("EBOOT.PBP");
-    // Read DISC_ID from embedded PARAM.SFO; fall back to title_id if absent or <9 chars (usagi rule)
     let disc_id = pbp::read_disc_id(&eboot_path).unwrap_or_else(|| entry.titleid.trim().to_string());
     let final_id = if disc_id.len() >= 9 { &disc_id[..9] } else { entry.titleid.trim() };
 
@@ -208,8 +231,6 @@ async fn install_pbp_pkg(entry: &AppEntry, tx: &watch::Sender<Progress>, pkg_pat
         let _ = std::fs::remove_dir_all(&staging_dir);
     }
 
-    // LiveArea bubble is a bonus for users who have NoPspEmuDrm_kern; Adrenaline reads
-    // straight from PSP_GAME_DIR and doesn't need it.
     if licensing::is_module_present("NoPspEmuDrm_kern") {
         let content_id = licensing::resolve_content_id(entry)?;
         let psp_license = licensing::create_fake_license(&content_id);
@@ -235,7 +256,7 @@ async fn queue_bgdl_vita(entry: &AppEntry, _tx: &watch::Sender<Progress>) -> Res
     installed::stamp_pending_install(&installed::index_key(entry), &entry.hash, None);
     Ok(Progress::Queued)
 }
-async fn run_psp(entry: &AppEntry, tx: &watch::Sender<Progress>) -> Result<Progress> {
+async fn run_psp(entry: &AppEntry, tx: &watch::Sender<Progress>, cancel: &Arc<AtomicBool>) -> Result<Progress> {
     let _ = tx.send(Progress::Resolving);
     if entry.download_url.is_empty() {
         bail!("no download link for this app");
@@ -243,7 +264,7 @@ async fn run_psp(entry: &AppEntry, tx: &watch::Sender<Progress>) -> Result<Progr
     if entry.platform.is_nps() {
         std::fs::create_dir_all(WORK_DIR).context("couldn't create the work folder")?;
         let pkg_path = Path::new(TEMP_PKG);
-        download(&entry.download_url, pkg_path, tx).await?;
+        download(&entry.download_url, pkg_path, tx, cancel).await?;
         let kind = match entry.platform {
             crate::data::Platform::NpsPsx => pkg::PkgKind::Psx,
             crate::data::Platform::NpsPsp => pkg::PkgKind::Psp,
@@ -252,12 +273,18 @@ async fn run_psp(entry: &AppEntry, tx: &watch::Sender<Progress>) -> Result<Progr
         return install_pbp_pkg(entry, tx, pkg_path, kind).await;
     }
     std::fs::create_dir_all(WORK_DIR).context("couldn't create the work folder")?;
-    download(&entry.download_url, Path::new(TEMP_VPK), tx).await?;
+    download(&entry.download_url, Path::new(TEMP_VPK), tx, cancel).await?;
     let dest = PathBuf::from(PSP_GAME_DIR).join(&entry.id);
-    let _ = tx.send(Progress::Extracting);
-    tokio::task::spawn_blocking(move || extract(Path::new(TEMP_VPK), &dest))
-        .await
-        .context("the extract worker crashed")??;
+    let _ = tx.send(Progress::Extracting { done: 0, total: 0 });
+    let tx_worker = tx.clone();
+    let cancel_worker = cancel.clone();
+    tokio::task::spawn_blocking(move || {
+        extract(Path::new(TEMP_VPK), &dest, &cancel_worker, |done, total| {
+            let _ = tx_worker.send(Progress::Extracting { done, total });
+        })
+    })
+    .await
+    .context("the extract worker crashed")??;
     let _ = std::fs::remove_file(TEMP_VPK);
     installed::stamp_pending_install(&installed::index_key(entry), &entry.hash, None);
     Ok(Progress::Done)
@@ -270,7 +297,7 @@ async fn stage_bgdl_icon(entry: &AppEntry) {
     let _ = std::fs::create_dir_all("ux0:data/vitaforge");
     let _ = std::fs::write("ux0:data/vitaforge/bgdl_icon.png", &bytes);
 }
-async fn run_plugin(entry: &AppEntry, tx: &watch::Sender<Progress>) -> Result<Progress> {
+async fn run_plugin(entry: &AppEntry, tx: &watch::Sender<Progress>, cancel: &Arc<AtomicBool>) -> Result<Progress> {
     let _ = tx.send(Progress::Resolving);
     if entry.download_url.is_empty() {
         bail!("no download link for this plugin");
@@ -283,10 +310,10 @@ async fn run_plugin(entry: &AppEntry, tx: &watch::Sender<Progress>) -> Result<Pr
         .unwrap_or("plugin.skprx");
     std::fs::create_dir_all(PLUGIN_DIR).context("couldn't create the plugins folder")?;
     let dest = PathBuf::from(PLUGIN_DIR).join(name);
-    download(&entry.download_url, &dest, tx).await?;
+    download(&entry.download_url, &dest, tx, cancel).await?;
     Ok(Progress::Done)
 }
-async fn run_vita(entry: &AppEntry, tx: &watch::Sender<Progress>) -> Result<Progress> {
+async fn run_vita(entry: &AppEntry, tx: &watch::Sender<Progress>, cancel: &Arc<AtomicBool>) -> Result<Progress> {
     let _ = tx.send(Progress::Resolving);
     let url = match entry.source.as_deref() {
         Some(repo) => match github::latest_release(repo).await {
@@ -305,13 +332,19 @@ async fn run_vita(entry: &AppEntry, tx: &watch::Sender<Progress>) -> Result<Prog
     let _ = std::fs::remove_dir_all(EXTRACT_DIR);
     let _ = std::fs::remove_dir_all(DATA_STAGE_DIR);
     if let Some(data_url) = entry.data_url.as_deref() {
-        stage_data(data_url, tx).await?;
+        stage_data(data_url, tx, cancel).await?;
     }
-    download(&url, Path::new(TEMP_VPK), tx).await?;
-    let _ = tx.send(Progress::Extracting);
-    tokio::task::spawn_blocking(|| extract(Path::new(TEMP_VPK), Path::new(EXTRACT_DIR)))
-        .await
-        .context("the extract worker crashed")??;
+    download(&url, Path::new(TEMP_VPK), tx, cancel).await?;
+    let _ = tx.send(Progress::Extracting { done: 0, total: 0 });
+    let tx_worker = tx.clone();
+    let cancel_worker = cancel.clone();
+    tokio::task::spawn_blocking(move || {
+        extract(Path::new(TEMP_VPK), Path::new(EXTRACT_DIR), &cancel_worker, |done, total| {
+            let _ = tx_worker.send(Progress::Extracting { done, total });
+        })
+    })
+    .await
+    .context("the extract worker crashed")??;
     let _ = std::fs::remove_file(TEMP_VPK);
     installed::stamp_pending_install(&installed::index_key(entry), &entry.hash, Some(Path::new(EXTRACT_DIR)));
     head::write(Path::new(EXTRACT_DIR))?;
@@ -320,14 +353,17 @@ async fn run_vita(entry: &AppEntry, tx: &watch::Sender<Progress>) -> Result<Prog
         for root in &["ux0:app", "ur0:app", "uma0:app"] {
             let path = format!("{root}/{titleid}");
             if installed::vita_fs::exists(&path) || Path::new(&path).exists() {
-                if let Err(err) = std::fs::remove_dir_all(&path) {
+                let path_owned = path.clone();
+                let removed = tokio::task::spawn_blocking(move || std::fs::remove_dir_all(&path_owned)).await;
+                if let Ok(Err(err)) = removed {
                     eprintln!("couldn't clear the previous install at {path}: {err}");
                 }
             }
         }
     }
-    let _ = tx.send(Progress::Installing);
-    tokio::task::spawn_blocking(|| promoter::promote_package(EXTRACT_DIR))
+    let _ = tx.send(Progress::Installing { elapsed_secs: 0 });
+    let tx_worker = tx.clone();
+    tokio::task::spawn_blocking(move || promoter::promote_package(EXTRACT_DIR, &tx_worker))
         .await
         .context("the install worker crashed")??;
     if Path::new(EXTRACT_DIR).exists() {
@@ -343,15 +379,21 @@ async fn run_vita(entry: &AppEntry, tx: &watch::Sender<Progress>) -> Result<Prog
     }
     Ok(Progress::Done)
 }
-async fn stage_data(url: &str, tx: &watch::Sender<Progress>) -> Result<()> {
+async fn stage_data(url: &str, tx: &watch::Sender<Progress>, cancel: &Arc<AtomicBool>) -> Result<()> {
     let dest = Path::new(TEMP_DATA);
-    download_with(url, dest, tx, |received, total| Progress::DownloadingData { received, total })
+    download_with(url, dest, tx, cancel, |received, total| Progress::DownloadingData { received, total })
         .await
         .context("couldn't download the required game data")?;
-    let _ = tx.send(Progress::Extracting);
-    tokio::task::spawn_blocking(|| extract(Path::new(TEMP_DATA), Path::new(DATA_STAGE_DIR)))
-        .await
-        .context("the data extract worker crashed")??;
+    let _ = tx.send(Progress::Extracting { done: 0, total: 0 });
+    let tx_worker = tx.clone();
+    let cancel_worker = cancel.clone();
+    tokio::task::spawn_blocking(move || {
+        extract(Path::new(TEMP_DATA), Path::new(DATA_STAGE_DIR), &cancel_worker, |done, total| {
+            let _ = tx_worker.send(Progress::Extracting { done, total });
+        })
+    })
+    .await
+    .context("the data extract worker crashed")??;
     let _ = std::fs::remove_file(TEMP_DATA);
     Ok(())
 }
@@ -378,23 +420,34 @@ fn merge_into(from: &Path, to: &Path) -> Result<()> {
     }
     Ok(())
 }
-async fn download(url: &str, dest: &Path, tx: &watch::Sender<Progress>) -> Result<()> {
-    download_with(url, dest, tx, |received, total| Progress::Downloading { received, total }).await
+async fn download(url: &str, dest: &Path, tx: &watch::Sender<Progress>, cancel: &Arc<AtomicBool>) -> Result<()> {
+    download_with(url, dest, tx, cancel, |received, total| Progress::Downloading { received, total }).await
 }
 async fn download_with(
     url: &str,
     dest: &Path,
     tx: &watch::Sender<Progress>,
+    cancel: &Arc<AtomicBool>,
     progress: fn(u64, Option<u64>) -> Progress,
 ) -> Result<()> {
     let mut sink = download::FileSink::open(dest)?;
     let mut reporter = download::ProgressReporter::new(tx, progress);
-    download::fetch_to(url, &mut sink, &mut reporter).await
+    download::fetch_to(url, &mut sink, &mut reporter, cancel).await
 }
-fn extract(archive: &Path, dest: &Path) -> Result<()> {
+fn extract(
+    archive: &Path,
+    dest: &Path,
+    cancel: &AtomicBool,
+    mut on_progress: impl FnMut(u32, u32),
+) -> Result<()> {
     let file = std::fs::File::open(archive).context("couldn't reopen the downloaded file")?;
-    let mut zip = zip::ZipArchive::new(file).context("the download isn't a valid vpk (zip)")?;
+    let buffered = std::io::BufReader::with_capacity(256 * 1024, file);
+    let mut zip = zip::ZipArchive::new(buffered).context("the download isn't a valid vpk (zip)")?;
+    let total = zip.len() as u32;
+    let mut last_reported = std::time::Instant::now();
+    let mut created_parent: Option<PathBuf> = None;
     for index in 0..zip.len() {
+        check_cancelled(cancel)?;
         let mut entry = zip.by_index(index)?;
         let Some(relative) = entry.enclosed_name() else { continue };
         let out_path: PathBuf = dest.join(relative);
@@ -402,12 +455,23 @@ fn extract(archive: &Path, dest: &Path) -> Result<()> {
             std::fs::create_dir_all(&out_path)?;
             continue;
         }
-        if let Some(parent) = out_path.parent() {
+        if let Some(parent) = out_path.parent()
+            && created_parent.as_deref() != Some(parent)
+        {
             std::fs::create_dir_all(parent)?;
+            created_parent = Some(parent.to_path_buf());
         }
-        let mut out = std::fs::File::create(&out_path)
+        let out = std::fs::File::create(&out_path)
             .with_context(|| format!("couldn't write {}", out_path.display()))?;
+        let mut out = std::io::BufWriter::with_capacity(256 * 1024, out);
         std::io::copy(&mut entry, &mut out)?;
+        use std::io::Write;
+        out.flush()?;
+        if last_reported.elapsed() >= std::time::Duration::from_millis(250) {
+            last_reported = std::time::Instant::now();
+            on_progress(index as u32 + 1, total);
+        }
     }
+    on_progress(total, total);
     Ok(())
 }

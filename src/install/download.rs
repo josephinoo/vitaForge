@@ -1,28 +1,29 @@
 use anyhow::{Context, Result, bail};
 use std::io::{Seek, SeekFrom, Write};
 use std::path::Path;
+use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
 pub trait ByteSink: Send {
     fn resume_offset(&self) -> u64;
     fn write(&mut self, chunk: &[u8]) -> Result<()>;
-    // Called when the server ignored our Range header and resent from byte 0.
     fn reset(&mut self) -> Result<()>;
 }
-// Never truncates on open, or every retry of a multi-GB download would restart from zero.
 pub struct FileSink {
-    file: std::fs::File,
+    file: std::io::BufWriter<std::fs::File>,
     written: u64,
 }
 impl FileSink {
     pub fn open(dest: &Path) -> Result<Self> {
-        let file = std::fs::OpenOptions::new()
+        let mut file = std::fs::OpenOptions::new()
             .create(true)
             .write(true)
             .read(true)
             .open(dest)
             .with_context(|| format!("couldn't open {}", dest.display()))?;
         let written = file.metadata().map(|m| m.len()).unwrap_or(0);
+        file.seek(SeekFrom::End(0))?;
+        let file = std::io::BufWriter::with_capacity(256 * 1024, file);
         Ok(Self { file, written })
     }
 }
@@ -36,10 +37,17 @@ impl ByteSink for FileSink {
         Ok(())
     }
     fn reset(&mut self) -> Result<()> {
-        self.file.set_len(0)?;
-        self.file.seek(SeekFrom::Start(0))?;
+        self.file.flush()?;
+        let inner = self.file.get_mut();
+        inner.set_len(0)?;
+        inner.seek(SeekFrom::Start(0))?;
         self.written = 0;
         Ok(())
+    }
+}
+impl Drop for FileSink {
+    fn drop(&mut self) {
+        let _ = self.file.flush();
     }
 }
 #[derive(Debug, PartialEq, Eq)]
@@ -104,17 +112,25 @@ impl<'a> ProgressReporter<'a> {
 }
 const MAX_ATTEMPTS: u32 = 5;
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
-pub async fn fetch_to(url: &str, sink: &mut dyn ByteSink, rep: &mut ProgressReporter<'_>) -> Result<()> {
+pub async fn fetch_to(
+    url: &str,
+    sink: &mut dyn ByteSink,
+    rep: &mut ProgressReporter<'_>,
+    cancel: &AtomicBool,
+) -> Result<()> {
     use futures_util::StreamExt;
     let mut last_err = anyhow::anyhow!("download not attempted");
     for attempt in 0u32..MAX_ATTEMPTS {
+        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            bail!(crate::install::CANCELLED_MESSAGE);
+        }
         if attempt > 0 {
             let backoff = Duration::from_secs(2u64.saturating_pow(attempt)).min(MAX_BACKOFF);
             tokio::time::sleep(backoff).await;
             eprintln!("retrying download (attempt {}): {url}", attempt + 1);
         }
         let start = sink.resume_offset();
-        let mut request = crate::net::client().get(url).header("User-Agent", "VitaForge");
+        let mut request = crate::net::client().get(url);
         if start > 0 {
             request = request.header("Range", format!("bytes={start}-"));
         }
@@ -154,6 +170,9 @@ pub async fn fetch_to(url: &str, sink: &mut dyn ByteSink, rep: &mut ProgressRepo
         let mut stream = response.bytes_stream();
         let mut attempt_failed = false;
         while let Some(chunk) = stream.next().await {
+            if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                bail!(crate::install::CANCELLED_MESSAGE);
+            }
             let chunk = match chunk {
                 Ok(chunk) => chunk,
                 Err(err) => {

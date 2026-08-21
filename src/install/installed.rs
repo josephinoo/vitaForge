@@ -18,8 +18,6 @@ const INSTALLED_CACHE_FILE: &str = "ux0:data/vitaforge/installed_cache.json";
 const HASH_CHUNK: usize = 64 * 1024;
 const HASH_BATCH: usize = 8;
 const HASH_GAP: Duration = Duration::from_millis(15);
-// Wider gap on the very first scan (empty ledger, every title needs a real MD5 pass) so the
-// render thread isn't starved while the catalog is still coming up.
 const FIRST_SCAN_HASH_GAP: Duration = Duration::from_millis(40);
 struct Wanted {
     key: String,
@@ -27,6 +25,7 @@ struct Wanted {
     psp: bool,
     hash: String,
     hash2: String,
+    catalog_version: String,
 }
 impl Wanted {
     fn from_entry(entry: &AppEntry) -> Option<Self> {
@@ -41,6 +40,7 @@ impl Wanted {
             psp,
             hash: entry.hash.clone(),
             hash2: entry.hash2.clone(),
+            catalog_version: entry.version.clone(),
         })
     }
     fn roots(&self) -> &'static [&'static str] {
@@ -67,12 +67,50 @@ pub enum InstallState {
     Outdated,
     Installed,
 }
+#[derive(Debug, Clone, Default)]
+pub struct InstalledVersionInfo {
+    pub app_ver: Option<String>,
+    pub installed_at: Option<String>, // "YYYY-MM-DD", formatted here so the UI stays date-library-free
+}
+fn installed_at(titleid: &str) -> Option<String> {
+    let modified = std::fs::metadata(hash_file_path(titleid)).ok()?.modified().ok()?;
+    let secs = modified.duration_since(std::time::SystemTime::UNIX_EPOCH).ok()?.as_secs();
+    Some(format_ymd(secs))
+}
+fn format_ymd(unix_secs: u64) -> String {
+    let days = (unix_secs / 86_400) as i64;
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!("{y:04}-{m:02}-{d:02}")
+}
 #[derive(Clone)]
 pub struct InstalledIndex {
     states: Arc<Mutex<HashMap<String, InstallState>>>,
     scanned_at: Arc<Mutex<Option<Instant>>>,
     scanning: Arc<AtomicBool>,
     summary: Arc<Mutex<String>>,
+    version_cache: Arc<Mutex<HashMap<String, Option<String>>>>,
+    counts: Arc<Mutex<(usize, usize)>>,
+}
+fn count_states(states: &HashMap<String, InstallState>) -> (usize, usize) {
+    let mut installed = 0;
+    let mut outdated = 0;
+    for state in states.values() {
+        match state {
+            InstallState::Installed => installed += 1,
+            InstallState::Outdated => outdated += 1,
+            InstallState::Absent => {}
+        }
+    }
+    (installed + outdated, outdated)
 }
 fn load_installed_cache() -> HashMap<String, InstallState> {
     let mut map = HashMap::new();
@@ -116,15 +154,21 @@ impl InstalledIndex {
         } else {
             format!("b{} · {} ready", env!("BUILD_STAMP"), cached_states.len())
         };
+        let counts = count_states(&cached_states);
         Self {
             states: Arc::new(Mutex::new(cached_states)),
             scanned_at: Arc::new(Mutex::new(None)),
             scanning: Arc::new(AtomicBool::new(false)),
             summary: Arc::new(Mutex::new(summary_text)),
+            version_cache: Arc::new(Mutex::new(HashMap::new())),
+            counts: Arc::new(Mutex::new(counts)),
         }
     }
     pub fn summary(&self) -> String {
         self.summary.lock().unwrap().clone()
+    }
+    pub fn counts(&self) -> (usize, usize) {
+        *self.counts.lock().unwrap()
     }
     pub fn state(&self, entry: &AppEntry) -> InstallState {
         self.state_by_key(&index_key(entry))
@@ -134,6 +178,29 @@ impl InstalledIndex {
             return InstallState::Absent;
         }
         self.states.lock().unwrap().get(key).copied().unwrap_or(InstallState::Absent)
+    }
+    pub fn installed_info(&self, ctx: &egui::Context, entry: &AppEntry) -> Option<InstalledVersionInfo> {
+        let key = index_key(entry);
+        if key.is_empty() || self.state_by_key(&key) == InstallState::Absent {
+            return None;
+        }
+        if let Some(app_ver) = self.version_cache.lock().unwrap().get(&key) {
+            return Some(InstalledVersionInfo { app_ver: app_ver.clone(), installed_at: installed_at(&key) });
+        }
+        self.version_cache.lock().unwrap().insert(key.clone(), None); // placeholder: lookup in flight
+        let psp = matches!(entry.platform, Platform::Psp | Platform::NpsPsp | Platform::NpsPsx);
+        let folder = if psp { entry.id.trim().to_owned() } else { key_of(&entry.titleid) };
+        let index = self.clone();
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let roots: &[&str] = if psp { PSP_ROOTS } else { APP_ROOTS };
+            let app_ver = roots.iter().find_map(|root| {
+                super::sfo::read_app_ver(&PathBuf::from(format!("{root}/{folder}/sce_sys/param.sfo")))
+            });
+            index.version_cache.lock().unwrap().insert(key, app_ver);
+            ctx.request_repaint();
+        });
+        Some(InstalledVersionInfo { app_ver: None, installed_at: installed_at(&index_key(entry)) })
     }
     pub fn force_refresh(&self, ctx: &egui::Context, entries: &[AppEntry]) {
         *self.scanned_at.lock().unwrap() = None;
@@ -192,6 +259,7 @@ impl InstalledIndex {
             } else {
                 states.extend(found);
             }
+            *self.counts.lock().unwrap() = count_states(&states);
             states.clone()
         };
         save_installed_cache(&snapshot);
@@ -202,6 +270,7 @@ impl InstalledIndex {
         }
         let mut states = self.states.lock().unwrap();
         states.insert(key.to_owned(), InstallState::Installed);
+        *self.counts.lock().unwrap() = count_states(&states);
         save_installed_cache(&states);
     }
 }
@@ -354,6 +423,36 @@ fn scan(
     if !batch.is_empty() {
         publish(batch, false);
     }
+    let mut version_batch = HashMap::new();
+    for entry in wanted {
+        if entry.hash.len() == HASH_LEN || entry.hash2.len() == HASH_LEN {
+            continue; // already covered by the hash-based comparison above
+        }
+        let Some(app_dir) = found.get(&entry.key) else { continue };
+        let Some(installed_ver) = super::sfo::read_app_ver(&app_dir.join("sce_sys/param.sfo")) else { continue };
+        if version_is_older(&installed_ver, &entry.catalog_version) {
+            version_batch.insert(entry.key.clone(), InstallState::Outdated);
+        }
+    }
+    if !version_batch.is_empty() {
+        publish(version_batch, false);
+    }
+}
+fn version_is_older(installed: &str, catalog: &str) -> bool {
+    fn parts(v: &str) -> Option<Vec<u64>> {
+        let nums: Vec<u64> = v
+            .trim()
+            .trim_start_matches(['v', 'V'])
+            .split(|c: char| !c.is_ascii_digit())
+            .filter(|s| !s.is_empty())
+            .filter_map(|s| s.parse::<u64>().ok())
+            .collect();
+        (!nums.is_empty()).then_some(nums)
+    }
+    match (parts(installed), parts(catalog)) {
+        (Some(a), Some(b)) => a < b,
+        _ => false,
+    }
 }
 fn locate(entry: &Wanted) -> Option<PathBuf> {
     for root in entry.roots() {
@@ -386,7 +485,6 @@ fn write_log(lines: &[String]) {
 fn key_of(titleid: &str) -> String {
     titleid.trim().to_uppercase()
 }
-// sceIo calls see mount points (ux0:, ur0:) that std::fs does not.
 #[cfg(target_os = "vita")]
 pub mod vita_fs {
     use std::ffi::CString;
@@ -415,13 +513,11 @@ pub mod vita_fs {
     pub fn exists(path: &str) -> bool {
         stat_code(path) >= 0
     }
-    // Raw code, not a bool: 0x80010002 = ENOENT (absent), 0x8001000D = EACCES (sandboxed).
     pub fn stat_code(path: &str) -> i32 {
         let Ok(path) = CString::new(path) else { return -1 };
         let mut stat: vitasdk_sys::SceIoStat = unsafe { std::mem::zeroed() };
         unsafe { vitasdk_sys::sceIoGetstat(path.as_ptr(), &mut stat) }
     }
-    // mode must be octal (0o777), not decimal 777.
     pub fn mkdir(path: &str, mode: i32) -> i32 {
         let Ok(path) = CString::new(path) else { return -1 };
         unsafe { vitasdk_sys::sceIoMkdir(path.as_ptr(), mode as vitasdk_sys::SceMode) }
@@ -555,4 +651,40 @@ fn md5_file(path: &Path) -> Option<String> {
         hasher.update(&buffer[..read]);
     }
     Some(format!("{:x}", hasher.finalize()))
+}
+#[cfg(test)]
+mod tests {
+    use super::{InstallState, count_states, format_ymd, version_is_older};
+    use std::collections::HashMap;
+    #[test]
+    fn count_states_counts_outdated_as_installed_too() {
+        let states = HashMap::from([
+            ("A".to_owned(), InstallState::Installed),
+            ("B".to_owned(), InstallState::Outdated),
+            ("C".to_owned(), InstallState::Installed),
+        ]);
+        assert_eq!(count_states(&states), (3, 1));
+    }
+    #[test]
+    fn format_ymd_matches_known_dates() {
+        assert_eq!(format_ymd(0), "1970-01-01");
+        assert_eq!(format_ymd(1_609_459_200), "2021-01-01");
+    }
+    #[test]
+    fn older_installed_version_is_detected() {
+        assert!(version_is_older("1.9", "1.10"));
+        assert!(version_is_older("v1.0.0", "v1.0.1"));
+    }
+    #[test]
+    fn newer_or_equal_installed_version_is_never_flagged() {
+        assert!(!version_is_older("1.10", "1.9"));
+        assert!(!version_is_older("2.0", "2.0"));
+        assert!(!version_is_older("3.0", "1.0"));
+    }
+    #[test]
+    fn unparseable_versions_never_produce_a_false_outdated() {
+        assert!(!version_is_older("custom-build", "1.0"));
+        assert!(!version_is_older("1.0", "latest"));
+        assert!(!version_is_older("", ""));
+    }
 }

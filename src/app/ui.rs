@@ -2,23 +2,26 @@ use super::i18n::Language;
 use super::icons::IconCache;
 use super::{App, AppState};
 use crate::data::{Category, Platform, SortDirection, SortOrder};
-use crate::input::AppCommand;
+use crate::input::{AppCommand, DiscoverRail, StoreTab};
 use crate::install::installed::{InstallState, InstalledIndex};
-const BG_DEEP: egui::Color32 = egui::Color32::from_rgb(0x06, 0x07, 0x0e);
-const BG_HEADER: egui::Color32 = egui::Color32::from_rgb(0x0a, 0x0c, 0x18);
-const BG_CARD: egui::Color32 = egui::Color32::from_rgb(0x18, 0x1c, 0x33);
-const BG_CARD_HOVER: egui::Color32 = egui::Color32::from_rgb(0x23, 0x2a, 0x49);
-const ACCENT_STEAM: egui::Color32 = egui::Color32::from_rgb(0x1a, 0x9f, 0xff);
-const ACCENT_CYAN: egui::Color32 = egui::Color32::from_rgb(0x38, 0xbd, 0xf8);
-const GREEN_PLAY: egui::Color32 = egui::Color32::from_rgb(0x47, 0xa0, 0x1d);
-const GREEN_PLAY_HOVER: egui::Color32 = egui::Color32::from_rgb(0x5c, 0xba, 0x2a);
-const SEPARATOR: egui::Color32 = egui::Color32::from_rgb(0x2c, 0x33, 0x52);
-const TEXT_WHITE: egui::Color32 = egui::Color32::from_rgb(0xf8, 0xfa, 0xfc);
-const TEXT_DIM: egui::Color32 = egui::Color32::from_rgb(0x94, 0xa3, 0xb8);
-const TEXT_FAINT: egui::Color32 = egui::Color32::from_rgb(0x64, 0x74, 0x8b);
-const STAR_GOLD: egui::Color32 = egui::Color32::from_rgb(0xfb, 0xbf, 0x24);
-const GLASS_ALPHA: f32 = 0.62;
-const GLASS_EDGE: egui::Color32 = egui::Color32::from_rgba_premultiplied(0x16, 0x18, 0x20, 0x16);
+const BG_DEEP: egui::Color32 = egui::Color32::from_rgb(0x0c, 0x0e, 0x10);
+const BG_HEADER: egui::Color32 = egui::Color32::from_rgb(0x14, 0x18, 0x1c);
+const BG_CARD: egui::Color32 = egui::Color32::from_rgb(0x1c, 0x22, 0x28);
+const BG_CARD_HOVER: egui::Color32 = egui::Color32::from_rgb(0x2a, 0x32, 0x3c);
+const ACCENT_STEAM: egui::Color32 = egui::Color32::from_rgb(0x00, 0x70, 0xd1);
+const ACCENT_CYAN: egui::Color32 = egui::Color32::from_rgb(0x3a, 0xa8, 0xb5);
+const GREEN_PLAY: egui::Color32 = egui::Color32::from_rgb(0x2f, 0x9e, 0x44);
+const GREEN_PLAY_HOVER: egui::Color32 = egui::Color32::from_rgb(0x3c, 0xb0, 0x54);
+const BLUE_PLAY: egui::Color32 = egui::Color32::from_rgb(0x00, 0x70, 0xd1);
+const BLUE_PLAY_HOVER: egui::Color32 = egui::Color32::from_rgb(0x1a, 0x8a, 0xe0);
+const SEPARATOR: egui::Color32 = egui::Color32::from_rgb(0x3a, 0x44, 0x50);
+const TEXT_WHITE: egui::Color32 = egui::Color32::from_rgb(0xf2, 0xef, 0xe8);
+const TEXT_DIM: egui::Color32 = egui::Color32::from_rgb(0x9a, 0xa3, 0xad);
+const TEXT_FAINT: egui::Color32 = egui::Color32::from_rgb(0x6b, 0x73, 0x80);
+const STAR_GOLD: egui::Color32 = egui::Color32::from_rgb(0xe6, 0xa8, 0x17);
+const STAR_GOLD_HOVER: egui::Color32 = egui::Color32::from_rgb(0xf0, 0xba, 0x2a);
+const GLASS_ALPHA: f32 = 0.78;
+const GLASS_EDGE: egui::Color32 = egui::Color32::from_rgba_premultiplied(0x2c, 0x34, 0x3c, 0x55);
 const FONT_MICRO: f32 = 9.0;
 const FONT_SMALL: f32 = 11.0;
 const FONT_BODY: f32 = 13.0;
@@ -31,18 +34,21 @@ fn font(size: f32) -> egui::FontId {
 fn glass(color: egui::Color32) -> egui::Color32 {
     color.gamma_multiply(GLASS_ALPHA)
 }
-const CARD_RADIUS: f32 = 10.0;
-const HINT_BAR_HEIGHT: f32 = 30.0;
+const CARD_RADIUS: f32 = 12.0;
+const HINT_BAR_HEIGHT: f32 = 36.0;
 const SEARCH_FIELD_WIDTH: f32 = 190.0;
 const SEARCH_FIELD_HEIGHT: f32 = 30.0;
 const SEARCH_CLEAR_SIZE: f32 = 18.0;
-pub const GRID_COLUMNS: usize = 5;
-const GRID_COL_SPACING: f32 = 14.0;
-const GRID_ROW_SPACING: f32 = 1.0;
-const SCREEN_MARGIN: f32 = 25.0;
+pub const GRID_COLUMNS: usize = 6;
+const ART_LOOKAHEAD: usize = 6;
+const GRID_COL_SPACING: f32 = 4.0;
+const GRID_ROW_SPACING: f32 = 4.0;
+const GRID_VISIBLE_ROWS: f32 = 2.0;
+const GRID_BOTTOM_PAD: f32 = 8.0;
+const SCREEN_MARGIN: f32 = 16.0;
 const FEATURED_BANNER_CARD_HEIGHT: f32 = 96.0;
 const FEATURED_BANNER_HEIGHT: f32 = FEATURED_BANNER_CARD_HEIGHT + 10.0 + 1.0 + 10.0;
-const SCROLLBAR_RESERVE: f32 = 30.0;
+const SCROLLBAR_RESERVE: f32 = 6.0;
 const PRESS_SHRINK: f32 = 2.5;
 static LOGO_TEXTURE: std::sync::OnceLock<egui::TextureHandle> = std::sync::OnceLock::new();
 fn logo_texture(ctx: &egui::Context) -> egui::TextureHandle {
@@ -127,11 +133,18 @@ fn paint_hero(ui: &egui::Ui, icons: &IconCache, entry: &crate::data::AppEntry) -
     false
 }
 pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
-    match &app.state {
+    let self_update = app.self_update.as_ref();
+    let self_update_progress = app
+        .install
+        .as_ref()
+        .filter(|job| job.app_id == super::SELF_UPDATE_ID)
+        .map(|job| &job.progress);
+    let commands = match &app.state {
         AppState::Loading => loading_screen(
             ctx,
             app.lang,
             app.install.as_ref().map(|j| &j.progress),
+            self_update,
         ),
         AppState::Catalog(catalog) => catalog_screen(
             ctx,
@@ -151,10 +164,19 @@ pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
             catalog.scroll_reset,
             catalog.is_commercial_view,
             &catalog.source_counts,
+            catalog.total_unique_count,
             &catalog.category_counts,
             catalog.featured_index,
+            catalog.tab,
+            catalog.discover_home,
+            catalog.discover_focus,
+            catalog.scroll_category_into_view,
+            &catalog.top_rail,
+            &catalog.recent_rail,
+            self_update,
+            self_update_progress,
         ),
-        AppState::Detail { app: entry, scroll_delta, comments, comments_loaded, comment_entry_requested, .. } => {
+        AppState::Detail { app: entry, scroll_delta, comments, comments_loaded, comment_entry_requested, lightbox, .. } => {
             let progress = app
                 .install
                 .as_ref()
@@ -172,12 +194,32 @@ pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
                 comments,
                 *comments_loaded,
                 *comment_entry_requested,
+                *lightbox,
             )
         }
-        AppState::Settings { selected, .. } => settings_screen(ctx, app.lang, *selected),
+        AppState::Settings { selected, previous } => settings_screen(
+            ctx,
+            app.lang,
+            *selected,
+            previous.apps.len(),
+            &app.cache_stats,
+            app.cache_notice.as_deref(),
+        ),
+    };
+    app.icons.maintain(ctx);
+    if app.icons.rate_limited_for().is_some() {
+        ctx.request_repaint_after(std::time::Duration::from_secs(1));
     }
+    commands
 }
-fn settings_screen(ctx: &egui::Context, lang: Language, selected: usize) -> Vec<AppCommand> {
+fn settings_screen(
+    ctx: &egui::Context,
+    lang: Language,
+    selected: usize,
+    catalog_count: usize,
+    stats: &crate::data::cache_manager::CacheStats,
+    cache_notice: Option<&str>,
+) -> Vec<AppCommand> {
     let mut commands = Vec::new();
     egui::TopBottomPanel::top("settings_header")
         .frame(egui::Frame::NONE.fill(glass(BG_HEADER)).inner_margin(egui::vec2(SCREEN_MARGIN, 8.0)))
@@ -188,13 +230,13 @@ fn settings_screen(ctx: &egui::Context, lang: Language, selected: usize) -> Vec<
                 }
             });
         });
-    button_hints(ctx, &[(Glyph::Circle, lang.btn_back()), (Glyph::Cross, lang.btn_open())], None);
+    button_hints(ctx, &[(Glyph::Circle, lang.btn_back()), (Glyph::Cross, lang.btn_open())], None, None);
     egui::CentralPanel::default()
         .frame(egui::Frame::NONE.inner_margin(SCREEN_MARGIN))
         .show(ctx, |ui| {
             paint_background(ui.painter(), ui.ctx().screen_rect());
             ui.label(egui::RichText::new(lang.settings_title()).size(FONT_TITLE).strong().color(TEXT_WHITE));
-            ui.add_space(20.0);
+            ui.add_space(16.0);
             ui.label(egui::RichText::new(lang.language_label()).size(FONT_BODY).color(TEXT_DIM));
             ui.add_space(8.0);
             if dropdown_row(ui, "English", selected == 0) {
@@ -203,14 +245,49 @@ fn settings_screen(ctx: &egui::Context, lang: Language, selected: usize) -> Vec<
             if dropdown_row(ui, "Español", selected == 1) {
                 commands.push(AppCommand::SetLanguage(Language::Spanish));
             }
+            ui.add_space(18.0);
+            ui.label(egui::RichText::new(lang.settings_storage()).size(FONT_BODY).color(TEXT_DIM));
+            ui.add_space(8.0);
+            let info_rows = [
+                (lang.settings_version(), format!("VitaForge {}", env!("CARGO_PKG_VERSION"))),
+                (lang.settings_catalog(), format!("{catalog_count}")),
+                (lang.settings_icon_cache(), crate::data::cache_manager::format_bytes(stats.icons_bytes)),
+                (lang.settings_catalog_cache(), crate::data::cache_manager::format_bytes(stats.catalog_bytes)),
+                (lang.settings_hash_cache(), crate::data::cache_manager::format_bytes(stats.hashes_bytes)),
+                (lang.settings_total(), crate::data::cache_manager::format_bytes(stats.total_bytes)),
+            ];
+            for (label, value) in info_rows {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(label).size(FONT_SMALL).color(TEXT_DIM));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(egui::RichText::new(value).size(FONT_SMALL).color(TEXT_WHITE));
+                    });
+                });
+            }
+            ui.add_space(12.0);
+            if dropdown_row(ui, lang.settings_clear_icons(), selected == 2) {
+                commands.push(AppCommand::ClearIconCache);
+            }
+            if dropdown_row(ui, lang.settings_clear_catalog(), selected == 3) {
+                commands.push(AppCommand::ClearCatalogCache);
+            }
+            if dropdown_row(ui, lang.settings_purge_all(), selected == 4) {
+                commands.push(AppCommand::PurgeAllCache);
+            }
+            if let Some(notice) = cache_notice {
+                ui.add_space(16.0);
+                ui.label(egui::RichText::new(notice).size(FONT_SMALL).color(GREEN_PLAY));
+            }
         });
     commands
 }
 fn loading_screen(
     ctx: &egui::Context,
-    _lang: Language,
+    lang: Language,
     install_progress: Option<&crate::install::Progress>,
+    self_update: Option<&super::SelfUpdateInfo>,
 ) -> Vec<AppCommand> {
+    let mut commands = Vec::new();
     egui::CentralPanel::default()
         .frame(egui::Frame::NONE)
         .show(ctx, |ui| {
@@ -220,10 +297,10 @@ fn loading_screen(
                 ui.with_layout(
                     egui::Layout::top_down(egui::Align::Center).with_cross_align(egui::Align::Center),
                     |ui| {
-                        let total_content_height = 270.0;
+                        let total_content_height = 360.0;
                         let pad_y = ((rect.height() - total_content_height) / 2.0).max(0.0);
                         ui.add_space(pad_y);
-                        let (icon_rect, _) = ui.allocate_exact_size(egui::vec2(96.0, 96.0), egui::Sense::hover());
+                        let (icon_rect, _) = ui.allocate_exact_size(egui::vec2(168.0, 168.0), egui::Sense::hover());
                         let logo = logo_texture(ui.ctx());
                         ui.painter().image(
                             logo.id(),
@@ -232,13 +309,23 @@ fn loading_screen(
                             egui::Color32::WHITE,
                         );
                         ui.add_space(18.0);
-                        ui.label(egui::RichText::new("VitaForge").size(FONT_HEADLINE).strong().color(TEXT_WHITE));
+                        ui.label(egui::RichText::new("VitaForge").size(FONT_HEADLINE).strong().color(ACCENT_STEAM));
+                        ui.label(
+                            egui::RichText::new(concat!("v", env!("CARGO_PKG_VERSION")))
+                                .size(FONT_SMALL)
+                                .color(TEXT_DIM),
+                        );
                         ui.label(egui::RichText::new("by josephinoo").size(FONT_SMALL).color(TEXT_FAINT));
-                        ui.label(egui::RichText::new("Catalog by DrDecki").size(FONT_MICRO).color(TEXT_FAINT));
                         ui.add_space(8.0);
                         if let Some(progress) = install_progress {
+                            let tag = self_update.map_or("", |u| u.tag.as_str());
+                            let title = if tag.is_empty() {
+                                "Installing...".to_owned()
+                            } else {
+                                format!("Updating VitaForge {tag}...")
+                            };
                             ui.label(
-                                egui::RichText::new("Installing...")
+                                egui::RichText::new(title)
                                     .color(STAR_GOLD)
                                     .size(FONT_LARGE)
                                     .strong(),
@@ -246,7 +333,17 @@ fn loading_screen(
                             ui.add_space(8.0);
                             ui.label(egui::RichText::new(progress.label()).color(TEXT_DIM).size(FONT_BODY));
                         } else {
-                            ui.label(egui::RichText::new("Bringing catalog information from databases...").color(TEXT_DIM).size(FONT_BODY));
+                            ui.label(
+                                egui::RichText::new("Bringing catalog information from databases...")
+                                    .color(TEXT_DIM)
+                                    .size(FONT_BODY),
+                            );
+                            if let Some(info) = self_update {
+                                ui.add_space(14.0);
+                                if self_update_pill(ui, lang, &info.tag) {
+                                    commands.push(AppCommand::SelfUpdate);
+                                }
+                            }
                         }
                         ui.add_space(16.0);
                         let (spinner_rect, _) =
@@ -266,8 +363,49 @@ fn loading_screen(
                 );
             });
         });
-    ctx.request_repaint_after(std::time::Duration::from_millis(100));
-    Vec::new()
+    ctx.request_repaint_after(std::time::Duration::from_millis(200));
+    commands
+}
+
+fn self_update_pill(ui: &mut egui::Ui, lang: Language, tag: &str) -> bool {
+    let tag = if tag.starts_with('v') || tag.starts_with('V') {
+        tag.to_owned()
+    } else {
+        format!("v{tag}")
+    };
+    let label = format!("{} {}", lang.update(), tag);
+    let galley = ui.fonts(|f| f.layout_no_wrap(label, font(FONT_SMALL), TEXT_WHITE));
+    let pad_x = 14.0;
+    let pad_y = 8.0;
+    let icon_w = 12.0;
+    let size = egui::vec2(galley.size().x + pad_x * 2.0 + icon_w + 6.0, galley.size().y + pad_y * 2.0);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    let hover = response.hovered();
+    let fill = if hover {
+        TEXT_WHITE.gamma_multiply(0.12)
+    } else {
+        egui::Color32::TRANSPARENT
+    };
+    ui.painter().rect_filled(rect, rect.height() / 2.0, fill);
+    ui.painter().rect_stroke(
+        rect,
+        rect.height() / 2.0,
+        egui::Stroke::new(1.5_f32, TEXT_WHITE),
+        egui::StrokeKind::Inside,
+    );
+    let icon_c = egui::pos2(rect.left() + pad_x + icon_w * 0.5, rect.center().y);
+    let tri = [
+        egui::pos2(icon_c.x - 5.0, icon_c.y - 3.0),
+        egui::pos2(icon_c.x + 5.0, icon_c.y - 3.0),
+        egui::pos2(icon_c.x, icon_c.y + 5.0),
+    ];
+    ui.painter().add(egui::Shape::convex_polygon(tri.to_vec(), TEXT_WHITE, egui::Stroke::NONE));
+    ui.painter().galley(
+        egui::pos2(rect.left() + pad_x + icon_w + 6.0, rect.center().y - galley.size().y * 0.5),
+        galley,
+        TEXT_WHITE,
+    );
+    response.clicked()
 }
 fn catalog_screen(
     ctx: &egui::Context,
@@ -287,101 +425,227 @@ fn catalog_screen(
     scroll_reset: bool,
     is_commercial_view: bool,
     source_counts: &[(crate::data::SourceCatalog, usize)],
+    total_unique_count: usize,
     category_counts: &[(Category, usize)],
     featured_index: Option<usize>,
+    tab: StoreTab,
+    discover_home: bool,
+    discover_focus: super::DiscoverFocus,
+    scroll_category_into_view: bool,
+    top_rail: &[usize],
+    recent_rail: &[usize],
+    self_update: Option<&super::SelfUpdateInfo>,
+    self_update_progress: Option<&crate::install::Progress>,
 ) -> Vec<AppCommand> {
     let mut commands = Vec::new();
-    button_hints(
+    let show_discover_rails = tab == StoreTab::Discover && discover_home && search_query.trim().is_empty();
+    let show_category_pills = matches!(tab, StoreTab::Discover | StoreTab::Search) && !show_discover_rails;
+    let shoulder_hint = if show_category_pills {
+        lang.btn_category()
+    } else {
+        lang.btn_tabs()
+    };
+    let hints = vec![
+        (Glyph::Cross, lang.btn_open()),
+        (Glyph::Circle, lang.btn_back()),
+        (Glyph::Triangle, lang.btn_search()),
+        (Glyph::Shoulders, shoulder_hint),
+    ];
+    commands.extend(button_hints(
         ctx,
-        &[
-            (Glyph::Cross, lang.btn_open()),
-            (Glyph::Circle, lang.btn_back()),
-            (Glyph::Triangle, lang.btn_search()),
-            (Glyph::Shoulders, lang.btn_category()),
-        ],
-        Some(installed.summary()),
-    );
+        &hints,
+        Some(status_note(installed, icons)),
+        Some(installed),
+    ));
     egui::CentralPanel::default()
-        .frame(egui::Frame::NONE.inner_margin(egui::vec2(SCREEN_MARGIN, 10.0)))
+        .frame(egui::Frame::NONE.inner_margin(egui::vec2(SCREEN_MARGIN, 8.0)))
         .show(ctx, |ui| {
             paint_background(ui.painter(), ui.ctx().screen_rect());
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("VitaForge").size(FONT_TITLE).strong().color(TEXT_WHITE));
+                ui.label(egui::RichText::new("VitaForge").size(FONT_TITLE).strong().color(ACCENT_STEAM));
                 ui.label(egui::RichText::new(concat!("v", env!("CARGO_PKG_VERSION"))).size(FONT_SMALL).color(TEXT_DIM));
                 ui.add_space(8.0);
                 ui.label(egui::RichText::new(lang.apps_count(filtered_indices.len())).color(TEXT_FAINT).size(FONT_SMALL));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let field = search_field(ui, search_query, lang.search_placeholder(), search_active);
-                    if field.cleared {
-                        commands.push(AppCommand::SetSearchQuery(String::new()));
+                if let Some(progress) = self_update_progress {
+                    ui.add_space(10.0);
+                    ui.label(
+                        egui::RichText::new(progress.label())
+                            .size(FONT_SMALL)
+                            .strong()
+                            .color(STAR_GOLD),
+                    );
+                } else if let Some(info) = self_update {
+                    ui.add_space(10.0);
+                    if self_update_pill(ui, lang, &info.tag) {
+                        commands.push(AppCommand::SelfUpdate);
                     }
-                    if field.open_requested {
-                        commands.push(AppCommand::RequestSearch);
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if tab == StoreTab::Search {
+                        let field = search_field(ui, search_query, lang.search_placeholder(), search_active);
+                        if field.cleared {
+                            commands.push(AppCommand::SetSearchQuery(String::new()));
+                        }
+                        if field.open_requested {
+                            commands.push(AppCommand::RequestSearch);
+                        }
                     }
                 });
             });
-            ui.add_space(10.0);
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
-                if pill_button(ui, lang.category_label(None), category_filter.is_none()) {
-                    commands.push(AppCommand::SetCategoryFilter(None));
-                }
-                for &(category, _count) in category_counts {
-                    if pill_button(ui, lang.category_label(Some(category)), category_filter == Some(category)) {
-                        commands.push(AppCommand::SetCategoryFilter(Some(category)));
-                    }
-                }
-            });
-            ui.add_space(8.0);
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
-                ui.label(
-                    egui::RichText::new(lang.sort_by_prefix()).size(FONT_SMALL).color(TEXT_FAINT),
-                );
-                ui.add_space(6.0);
-                for sort in SortOrder::ALL {
-                    let active = sort == sort_order;
-                    let direction = active.then_some(sort_direction);
-                    if sort_pill_button(ui, lang.sort_label(sort), active, direction) {
-                        commands.push(AppCommand::SetSortOrder(sort));
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(8.0, 0.0);
+                for (store_tab, label) in [
+                    (StoreTab::Discover, lang.tab_discover()),
+                    (StoreTab::Library, lang.tab_library()),
+                    (StoreTab::Updates, lang.tab_updates()),
+                    (StoreTab::Search, lang.tab_search()),
+                ] {
+                    if pill_button(ui, label, tab == store_tab) {
+                        commands.push(AppCommand::SetStoreTab(store_tab));
                     }
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if let Some(picked) = source_dropdown(ui, apps.len(), source_counts, source_filter) {
+                    if let Some(picked) = source_dropdown(ui, total_unique_count, source_counts, source_filter) {
                         commands.push(AppCommand::SetSourceFilter(picked));
                     }
                 });
             });
-            ui.add_space(12.0);
+            ui.add_space(6.0);
+
+            if show_discover_rails {
+                discover_home_ui(
+                    ui,
+                    icons,
+                    installed,
+                    lang,
+                    apps,
+                    featured_index,
+                    discover_focus,
+                    top_rail,
+                    recent_rail,
+                    is_commercial_view,
+                    &mut commands,
+                );
+                return;
+            }
+
+            if tab == StoreTab::Discover || tab == StoreTab::Search {
+                if !discover_home && tab == StoreTab::Discover {
+                    ui.horizontal(|ui| {
+                        let back = ui.add(
+                            egui::Button::new(
+                                egui::RichText::new(lang.see_all_back())
+                                    .size(FONT_SMALL)
+                                    .color(ACCENT_CYAN),
+                            )
+                            .frame(false),
+                        );
+                        if back.clicked() {
+                            commands.push(AppCommand::BackToDiscoverHome);
+                        }
+                    });
+                    ui.add_space(4.0);
+                }
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    egui::ScrollArea::horizontal()
+                        .id_salt("category_pills")
+                        .max_height(32.0)
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 6.0;
+                                let all_resp = pill_button(ui, lang.category_label(None), category_filter.is_none());
+                                if all_resp {
+                                    commands.push(AppCommand::SetCategoryFilter(None));
+                                }
+                                if scroll_category_into_view && category_filter.is_none() {
+                                    ui.scroll_to_cursor(Some(egui::Align::Center));
+                                }
+                                for &(category, _count) in category_counts {
+                                    let active = category_filter == Some(category);
+                                    if pill_button(ui, lang.category_label(Some(category)), active) {
+                                        commands.push(AppCommand::SetCategoryFilter(Some(category)));
+                                    }
+                                    if scroll_category_into_view && active {
+                                        ui.scroll_to_cursor(Some(egui::Align::Center));
+                                    }
+                                }
+                            });
+                        });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if let Some(picked) =
+                            sort_dropdown(ui, lang, sort_order, sort_direction)
+                        {
+                            commands.push(AppCommand::SetSortOrder(picked));
+                        }
+                    });
+                });
+                ui.add_space(6.0);
+            } else {
+                ui.add_space(4.0);
+            }
+
             if filtered_indices.is_empty() {
                 ui.vertical_centered(|ui| {
                     ui.add_space(40.0);
-                    ui.label(egui::RichText::new(lang.no_results()).size(FONT_LARGE).color(TEXT_DIM));
+                    let empty = match tab {
+                        StoreTab::Library => lang.library_empty(),
+                        StoreTab::Updates => lang.updates_empty(),
+                        _ => lang.no_results(),
+                    };
+                    ui.label(egui::RichText::new(empty).size(FONT_LARGE).color(TEXT_DIM));
                     ui.add_space(8.0);
-                    ui.label(egui::RichText::new(lang.no_results_sub()).size(FONT_BODY).color(TEXT_FAINT));
+                    if !matches!(tab, StoreTab::Library | StoreTab::Updates) {
+                        ui.label(egui::RichText::new(lang.no_results_sub()).size(FONT_BODY).color(TEXT_FAINT));
+                    }
                 });
                 return;
             }
 
-            let featured_entry = if search_query.trim().is_empty() && !is_commercial_view {
+            let featured_entry = if tab == StoreTab::Discover
+                && discover_home
+                && search_query.trim().is_empty()
+                && !is_commercial_view
+            {
                 featured_index.and_then(|idx| apps.get(idx))
             } else {
                 None
             };
             let banner_height = if featured_entry.is_some() { FEATURED_BANNER_HEIGHT } else { 0.0 };
-            let available = ui.available_width() - SCROLLBAR_RESERVE;
-            let aspect_ratio = if is_commercial_view { 1.5 } else { 1.0 };
-            let card_width = (available - GRID_COL_SPACING * (GRID_COLUMNS as f32 - 1.0)) / GRID_COLUMNS as f32;
-            let card_height = card_width * aspect_ratio;
-            let row_height = card_height + GRID_ROW_SPACING;
+            let viewport_h = (ui.available_height() - GRID_BOTTOM_PAD).max(80.0);
+            let available = (ui.available_width() - SCROLLBAR_RESERVE).max(0.0);
+            let aspect_ratio = 1.0;
+            let mut max_card_h = ((viewport_h / GRID_VISIBLE_ROWS) - GRID_ROW_SPACING).max(52.0);
+            let max_card_w =
+                (available - GRID_COL_SPACING * (GRID_COLUMNS as f32 - 1.0)) / GRID_COLUMNS as f32;
+            let mut card_width = max_card_w.min(max_card_h / aspect_ratio);
+            let mut card_height = card_width * aspect_ratio;
+            let mut row_height = card_height + GRID_ROW_SPACING;
+            let rows_that_fit = (viewport_h / row_height).floor().max(1.0);
+            let leftover_h = viewport_h - rows_that_fit * row_height;
+            if leftover_h > 0.0 && leftover_h < card_height * 0.35 {
+                let fit_h = ((viewport_h / rows_that_fit) - GRID_ROW_SPACING).max(52.0);
+                max_card_h = fit_h.min(max_card_h);
+                card_width = max_card_w.min(max_card_h / aspect_ratio);
+                card_height = card_width * aspect_ratio;
+                row_height = card_height + GRID_ROW_SPACING;
+            }
+            let gaps = (GRID_COLUMNS as f32 - 1.0).max(1.0);
+            let leftover =
+                (available - card_width * GRID_COLUMNS as f32 - GRID_COL_SPACING * gaps).max(0.0);
+            let col_spacing = GRID_COL_SPACING;
+            let row_inset = leftover * 0.5;
             let total_rows = filtered_indices.len().div_ceil(GRID_COLUMNS);
-            let mut scroll_area = egui::ScrollArea::vertical().id_salt("catalog_grid");
+            let mut scroll_area = egui::ScrollArea::vertical()
+                .id_salt("catalog_grid")
+                .max_height(viewport_h);
             if scroll_reset {
                 scroll_area = scroll_area.vertical_scroll_offset(0.0);
             }
             scroll_area.show_viewport(ui, |ui, viewport| {
-                ui.set_height(banner_height + row_height * total_rows as f32);
-   
+                ui.set_height(banner_height + row_height * total_rows as f32 + GRID_BOTTOM_PAD);
+
                 if scroll_to_selected && !scroll_reset && let Some(cursor) = selected {
                     let row = cursor / GRID_COLUMNS;
                     let row_top = ui.max_rect().top() + banner_height + row as f32 * row_height;
@@ -389,7 +653,7 @@ fn catalog_screen(
                     let target_top = if row == 0 { ui.max_rect().top() } else { row_top };
                     let row_rect = egui::Rect::from_x_y_ranges(
                         ui.max_rect().x_range(),
-                        target_top..=(row_top + row_height),
+                        target_top..=(row_top + row_height + GRID_BOTTOM_PAD),
                     );
                     ui.scroll_to_rect(row_rect, None);
                 }
@@ -401,7 +665,7 @@ fn catalog_screen(
                         ui.max_rect().top()..=(ui.max_rect().top() + banner_height),
                     );
                     ui.allocate_new_ui(egui::UiBuilder::new().max_rect(banner_rect), |ui| {
-                        let banner = featured_banner(ui, icons, lang, entry);
+                        let banner = featured_banner(ui, icons, lang, entry, false);
                         if banner.clicked
                             && let Some(pos) = featured_index
                                 .and_then(|real_idx| filtered_indices.iter().position(|&i| i == real_idx))
@@ -433,23 +697,13 @@ fn catalog_screen(
                 ui.allocate_new_ui(egui::UiBuilder::new().max_rect(grid_rect), |ui| {
                     ui.skip_ahead_auto_ids(min_row);
                     let row_range = min_row..max_row;
-                    let prefetch_start = row_range.end;
-                    let prefetch_end = (prefetch_start + 1).min(total_rows);
-                    for prefetch_row in prefetch_start..prefetch_end {
-                        for column in 0..GRID_COLUMNS {
-                            let item_index = prefetch_row * GRID_COLUMNS + column;
-                            if let Some(&real_index) = filtered_indices.get(item_index) {
-                                if let Some(entry) = apps.get(real_index) {
-                                    if let Some(url) = tile_art_url(entry) {
-                                        let _ = icons.get(ui.ctx(), url);
-                                    }
-                                }
-                            }
-                        }
-                    }
                     let mut art_wakeup: Option<std::time::Duration> = None;
                     for grid_row in row_range {
                         ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 0.0;
+                            if row_inset > 0.0 {
+                                ui.add_space(row_inset);
+                            }
                             for column in 0..GRID_COLUMNS {
                                 let item_index = grid_row * GRID_COLUMNS + column;
                                 let Some(&real_index) = filtered_indices.get(item_index) else { break };
@@ -469,19 +723,189 @@ fn catalog_screen(
                                     commands.push(AppCommand::SelectApp { index: item_index });
                                 }
                                 if column + 1 < GRID_COLUMNS {
-                                    ui.add_space(GRID_COL_SPACING);
+                                    ui.add_space(col_spacing);
                                 }
+                            }
+                            if row_inset > 0.0 {
+                                ui.add_space(row_inset);
                             }
                         });
                         ui.add_space(GRID_ROW_SPACING);
                     }
+                    let prefetch_start = min_row.saturating_sub(1) * GRID_COLUMNS;
+                    let prefetch_end = ((max_row + 1) * GRID_COLUMNS + ART_LOOKAHEAD)
+                        .min(filtered_indices.len());
+                    let mut warm = Vec::new();
+                    for item_index in prefetch_start..prefetch_end {
+                        if let Some(&real_index) = filtered_indices.get(item_index)
+                            && let Some(entry) = apps.get(real_index)
+                            && let Some(url) = tile_art_url(entry)
+                        {
+                            warm.push(url.to_owned());
+                        }
+                    }
+                    icons.prefetch_urls(ui.ctx(), warm);
                     if let Some(delay) = art_wakeup {
                         ui.ctx().request_repaint_after(delay);
                     }
                 });
             });
+            ui.add_space(GRID_BOTTOM_PAD);
         });
     commands
+}
+
+fn discover_home_ui(
+    ui: &mut egui::Ui,
+    icons: &IconCache,
+    installed: &InstalledIndex,
+    lang: Language,
+    apps: &[crate::data::AppEntry],
+    featured_index: Option<usize>,
+    discover_focus: super::DiscoverFocus,
+    top_rail: &[usize],
+    recent_rail: &[usize],
+    is_commercial_view: bool,
+    commands: &mut Vec<AppCommand>,
+) {
+    let mut warm = Vec::new();
+    if let Some(entry) = featured_index.and_then(|idx| apps.get(idx))
+        && let Some(url) = tile_art_url(entry)
+    {
+        warm.push(url.to_owned());
+    }
+    for indices in [top_rail, recent_rail] {
+        for &real_index in indices.iter().take(16) {
+            if let Some(entry) = apps.get(real_index)
+                && let Some(url) = tile_art_url(entry)
+            {
+                warm.push(url.to_owned());
+            }
+        }
+    }
+    icons.prefetch_urls(ui.ctx(), warm);
+    egui::ScrollArea::vertical()
+        .id_salt("discover_home")
+        .show(ui, |ui| {
+            let is_featured = matches!(discover_focus, super::DiscoverFocus::Featured);
+            if !is_commercial_view
+                && let Some(entry) = featured_index.and_then(|idx| apps.get(idx))
+            {
+                let banner_resp = ui.scope(|ui| {
+                    let banner = featured_banner(ui, icons, lang, entry, is_featured);
+                    if banner.clicked {
+                        commands.push(AppCommand::SelectAppById(entry.id.clone()));
+                    }
+                }).response;
+                if is_featured {
+                    banner_resp.scroll_to_me(Some(egui::Align::TOP));
+                }
+                ui.add_space(12.0);
+            }
+            let top_selected = match discover_focus {
+                super::DiscoverFocus::Top(i) => Some(i),
+                _ => None,
+            };
+            let top_resp = ui.scope(|ui| {
+                rail_section(
+                    ui,
+                    icons,
+                    installed,
+                    lang,
+                    lang.rail_top(),
+                    DiscoverRail::Top,
+                    apps,
+                    top_rail,
+                    top_selected,
+                    is_commercial_view,
+                    commands,
+                );
+            }).response;
+            if top_selected.is_some() && !is_featured {
+                if featured_index.is_none() || is_commercial_view {
+                    top_resp.scroll_to_me(Some(egui::Align::TOP));
+                }
+            }
+            ui.add_space(14.0);
+            let new_selected = match discover_focus {
+                super::DiscoverFocus::New(i) => Some(i),
+                _ => None,
+            };
+            let new_resp = ui.scope(|ui| {
+                rail_section(
+                    ui,
+                    icons,
+                    installed,
+                    lang,
+                    lang.rail_new(),
+                    DiscoverRail::New,
+                    apps,
+                    recent_rail,
+                    new_selected,
+                    is_commercial_view,
+                    commands,
+                );
+            }).response;
+            if new_selected.is_some() {
+                new_resp.scroll_to_me(Some(egui::Align::Center));
+            }
+            ui.add_space(16.0);
+            if pill_button(ui, lang.see_all_catalog(), false) {
+                commands.push(AppCommand::SeeAllRail(DiscoverRail::Top));
+            }
+            ui.add_space(GRID_BOTTOM_PAD + 8.0);
+        });
+}
+
+fn rail_section(
+    ui: &mut egui::Ui,
+    icons: &IconCache,
+    installed: &InstalledIndex,
+    lang: Language,
+    title: &str,
+    rail: DiscoverRail,
+    apps: &[crate::data::AppEntry],
+    indices: &[usize],
+    selected_index: Option<usize>,
+    _is_commercial_view: bool,
+    commands: &mut Vec<AppCommand>,
+) {
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(title).size(FONT_LARGE).strong().color(TEXT_WHITE));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if pill_button(ui, lang.see_all(), false) {
+                commands.push(AppCommand::SeeAllRail(rail));
+            }
+        });
+    });
+    ui.add_space(8.0);
+    if indices.is_empty() {
+        ui.label(egui::RichText::new("—").size(FONT_BODY).color(TEXT_FAINT));
+        return;
+    }
+    let tile = egui::vec2(96.0, 96.0);
+    egui::ScrollArea::horizontal()
+        .id_salt(title)
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 10.0;
+                for (rail_i, &real_index) in indices.iter().take(16).enumerate() {
+                    let Some(entry) = apps.get(real_index) else { continue };
+                    let focused = selected_index == Some(rail_i);
+                    let card = ui
+                        .push_id(("rail", title, entry.id.as_str()), |ui| {
+                            cover_card(ui, icons, installed, entry, tile.x, tile.y, focused)
+                        })
+                        .inner;
+                    if focused {
+                        ui.scroll_to_cursor(Some(egui::Align::Center));
+                    }
+                    if card.clicked {
+                        commands.push(AppCommand::SelectAppById(entry.id.clone()));
+                    }
+                }
+            });
+        });
 }
 pub struct CardResponse {
     pub clicked: bool,
@@ -523,6 +947,53 @@ fn source_dropdown(
             let row_label = format!("{} ({count})", source.label());
             if dropdown_row(ui, &row_label, source_filter == Some(source)) {
                 picked = Some(Some(source));
+            }
+        }
+    });
+    picked
+}
+fn sort_dropdown(
+    ui: &mut egui::Ui,
+    lang: Language,
+    sort_order: SortOrder,
+    sort_direction: SortDirection,
+) -> Option<SortOrder> {
+    let popup_id = ui.make_persistent_id("sort_dropdown");
+    let label = lang.sort_label(sort_order);
+    let galley = ui.fonts(|f| f.layout_no_wrap(label.to_owned(), font(FONT_SMALL), TEXT_WHITE));
+    let size = egui::vec2((galley.size().x + 40.0).max(110.0), 26.0);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    let hover_t = if response.hovered() { 1.0_f32 } else { 0.0_f32 };
+    let open = ui.memory(|mem| mem.is_popup_open(popup_id));
+    ui.painter().rect_filled(rect, rect.height() / 2.0, BG_CARD.lerp_to_gamma(BG_CARD_HOVER, hover_t));
+    ui.painter().rect_stroke(
+        rect,
+        rect.height() / 2.0,
+        egui::Stroke::new(1.0_f32, if open { ACCENT_CYAN } else { SEPARATOR }),
+        egui::StrokeKind::Inside,
+    );
+    ui.painter().galley(
+        egui::pos2(rect.left() + 12.0, rect.center().y - galley.size().y / 2.0),
+        galley,
+        TEXT_WHITE,
+    );
+    sort_direction_triangle(
+        ui.painter(),
+        egui::pos2(rect.right() - 22.0, rect.center().y),
+        sort_direction,
+        TEXT_DIM,
+    );
+    chevron(ui.painter(), egui::pos2(rect.right() - 10.0, rect.center().y), open);
+    if response.clicked() {
+        ui.memory_mut(|mem| mem.toggle_popup(popup_id));
+    }
+    let mut picked = None;
+    egui::popup_below_widget(ui, popup_id, &response, egui::PopupCloseBehavior::CloseOnClick, |ui| {
+        ui.set_min_width(170.0);
+        ui.spacing_mut().item_spacing.y = 2.0;
+        for sort in SortOrder::ALL {
+            if dropdown_row(ui, lang.sort_label(sort), sort == sort_order) {
+                picked = Some(sort);
             }
         }
     });
@@ -577,27 +1048,6 @@ fn sort_direction_triangle(painter: &egui::Painter, center: egui::Pos2, directio
         egui::Stroke::NONE,
     ));
 }
-fn sort_pill_button(ui: &mut egui::Ui, label: &str, active: bool, direction: Option<SortDirection>) -> bool {
-    let text_color = if active { BG_DEEP } else { TEXT_WHITE };
-    let galley = ui.fonts(|f| f.layout_no_wrap(label.to_owned(), font(FONT_SMALL), text_color));
-    let triangle_space = if direction.is_some() { 14.0 } else { 0.0 };
-    let size = egui::vec2(galley.size().x + 22.0 + triangle_space, 28.0);
-    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
-    let hover_t = if response.hovered() { 1.0_f32 } else { 0.0_f32 };
-    if active {
-        ui.painter().rect_filled(rect, rect.height() / 2.0, TEXT_WHITE);
-    } else {
-        ui.painter().rect_filled(rect, rect.height() / 2.0, BG_CARD.lerp_to_gamma(BG_CARD_HOVER, hover_t));
-        ui.painter().rect_stroke(rect, rect.height() / 2.0, egui::Stroke::new(1.0_f32, SEPARATOR), egui::StrokeKind::Inside);
-    }
-    let text_pos = rect.center() - egui::vec2(galley.size().x / 2.0 + triangle_space / 2.0, galley.size().y / 2.0);
-    ui.painter().galley(text_pos, galley.clone(), text_color);
-    if let Some(dir) = direction {
-        let tri_center = egui::pos2(rect.right() - 12.0, rect.center().y);
-        sort_direction_triangle(ui.painter(), tri_center, dir, text_color);
-    }
-    response.clicked()
-}
 fn chevron(painter: &egui::Painter, center: egui::Pos2, open: bool) {
     let stroke = egui::Stroke::new(1.6_f32, TEXT_DIM);
     let (side_y, mid_y) = if open { (2.0, -2.0) } else { (-2.0, 2.0) };
@@ -621,33 +1071,40 @@ fn cover_card(
     let press_t = if response.is_pointer_button_down_on() { 1.0_f32 } else { 0.0_f32 };
     let focus_t = if focused { 1.0_f32 } else { 0.0_f32 };
     let zoom = hover_t.max(focus_t);
-    let inset = 6.0 - zoom * 4.5 + press_t * PRESS_SHRINK;
-    let rect = full_rect.shrink(inset);
+    let inset = 1.5 - zoom * 1.0 + press_t * PRESS_SHRINK;
+    let rect = full_rect.shrink(inset.max(0.0));
     draw_cover(ui, icons, rect, entry);
     tile_label(ui, rect, &entry.name);
+    tile_source_badge(ui, rect, entry);
     if entry.platform != Platform::Vita {
         tile_platform_badge(ui, rect, entry.platform);
     }
     install_marker(ui.painter(), rect, installed.state(entry));
     if focused {
-        ui.painter().rect_stroke(rect, CARD_RADIUS, egui::Stroke::new(2.5_f32, TEXT_WHITE), egui::StrokeKind::Inside);
+        ui.painter().rect_stroke(rect, CARD_RADIUS, egui::Stroke::new(2.5_f32, ACCENT_CYAN), egui::StrokeKind::Inside);
     } else {
         ui.painter().rect_stroke(rect, CARD_RADIUS, egui::Stroke::new(1.0_f32, SEPARATOR), egui::StrokeKind::Inside);
     }
     CardResponse { clicked: response.clicked() }
 }
-fn featured_banner(ui: &mut egui::Ui, icons: &IconCache, lang: Language, entry: &crate::data::AppEntry) -> CardResponse {
+fn featured_banner(
+    ui: &mut egui::Ui,
+    icons: &IconCache,
+    lang: Language,
+    entry: &crate::data::AppEntry,
+    focused: bool,
+) -> CardResponse {
     let width = ui.available_width();
     let height = FEATURED_BANNER_CARD_HEIGHT;
     let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
-    let hover_t = if response.hovered() { 1.0_f32 } else { 0.0_f32 };
+    let hover_t = if response.hovered() || focused { 1.0_f32 } else { 0.0_f32 };
     ui.painter().rect_filled(rect, CARD_RADIUS, BG_CARD.lerp_to_gamma(BG_CARD_HOVER, hover_t));
-    ui.painter().rect_stroke(
-        rect,
-        CARD_RADIUS,
-        egui::Stroke::new(1.0_f32, ACCENT_CYAN.gamma_multiply(0.45)),
-        egui::StrokeKind::Inside,
-    );
+    let stroke = if focused {
+        egui::Stroke::new(2.5_f32, ACCENT_CYAN)
+    } else {
+        egui::Stroke::new(1.0_f32, ACCENT_CYAN.gamma_multiply(0.45))
+    };
+    ui.painter().rect_stroke(rect, CARD_RADIUS, stroke, egui::StrokeKind::Inside);
     let padding = 10.0;
     let cover_height = height - padding * 2.0;
     let cover_width = if entry.platform.is_commercial() { cover_height * (2.0 / 3.0) } else { cover_height };
@@ -670,6 +1127,10 @@ fn featured_banner(ui: &mut egui::Ui, icons: &IconCache, lang: Language, entry: 
                 ui.painter().galley(badge_rect.center() - galley.size() / 2.0, galley, ACCENT_CYAN);
                 ui.add_space(6.0);
                 category_badge(ui, entry.category);
+                if let Some(source) = crate::data::SourceCatalog::from_api(&entry.source_catalog) {
+                    ui.add_space(4.0);
+                    source_chip(ui, source);
+                }
             });
             ui.add_space(8.0);
             ui.label(egui::RichText::new(&entry.name).size(FONT_LARGE).strong().color(TEXT_WHITE));
@@ -693,13 +1154,7 @@ fn featured_banner(ui: &mut egui::Ui, icons: &IconCache, lang: Language, entry: 
     );
     CardResponse { clicked: response.clicked() }
 }
-fn tile_art_url(entry: &crate::data::AppEntry) -> Option<&str> {
-    if entry.platform.is_commercial() {
-        entry.cover_url.as_deref().or(entry.icon_url.as_deref())
-    } else {
-        entry.icon_url.as_deref().or(entry.cover_url.as_deref())
-    }
-}
+use super::tile_art_url;
 fn cover_fit_uv(texture_size: egui::Vec2, rect: egui::Rect) -> egui::Rect {
     if texture_size.x <= 0.0 || texture_size.y <= 0.0 {
         return egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
@@ -716,41 +1171,13 @@ fn cover_fit_uv(texture_size: egui::Vec2, rect: egui::Rect) -> egui::Rect {
         egui::Rect::from_min_max(egui::pos2(0.0, margin), egui::pos2(1.0, 1.0 - margin))
     }
 }
-fn contain_fit_rect(texture_size: egui::Vec2, outer_rect: egui::Rect) -> egui::Rect {
-    if texture_size.x <= 0.0 || texture_size.y <= 0.0 {
-        return outer_rect;
-    }
-    let texture_ratio = texture_size.x / texture_size.y;
-    let outer_ratio = outer_rect.width() / outer_rect.height();
-    let size = if texture_ratio > outer_ratio {
-        egui::vec2(outer_rect.width(), outer_rect.width() / texture_ratio)
-    } else {
-        egui::vec2(outer_rect.height() * texture_ratio, outer_rect.height())
-    };
-    egui::Rect::from_center_size(outer_rect.center(), size)
-}
-fn draw_card_plate(ui: &mut egui::Ui, rect: egui::Rect, color: egui::Color32) {
-    ui.painter().rect_filled(rect, CARD_RADIUS, BG_DEEP);
-    ui.painter().rect_stroke(rect, CARD_RADIUS, egui::Stroke::new(1.0_f32, color.gamma_multiply(0.5)), egui::StrokeKind::Inside);
-}
 fn draw_cover(ui: &mut egui::Ui, icons: &IconCache, rect: egui::Rect, entry: &crate::data::AppEntry) {
-    let color = category_color(entry.category);
+    ui.painter().rect_filled(rect, CARD_RADIUS, BG_CARD);
+
     let art = tile_art_url(entry);
     if let Some(url) = art {
         if let Some(texture) = icons.get(ui.ctx(), url) {
             let texture_size = texture.size_vec2();
-            if !entry.platform.is_commercial() {
-                draw_card_plate(ui, rect, color);
-                let inset = rect.width().min(rect.height()) * 0.08;
-                let inner = contain_fit_rect(texture_size, rect.shrink(inset));
-                ui.painter().add(
-                    egui::epaint::RectShape::filled(inner, CARD_RADIUS * 0.6, TEXT_WHITE).with_texture(
-                        texture.id(),
-                        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                    ),
-                );
-                return;
-            }
             ui.painter().add(
                 egui::epaint::RectShape::filled(rect, CARD_RADIUS, TEXT_WHITE)
                     .with_texture(texture.id(), cover_fit_uv(texture_size, rect)),
@@ -758,62 +1185,53 @@ fn draw_cover(ui: &mut egui::Ui, icons: &IconCache, rect: egui::Rect, entry: &cr
             return;
         }
     }
-    draw_card_plate(ui, rect, color);
-    if art.is_some_and(|url| icons.is_loading(url, super::icons::MAX_ICON_SIDE)) {
-        let time = ui.input(|i| i.time);
-        let angle = time * 4.0;
-        let center = rect.center();
-        let radius = rect.width().min(rect.height()) * 0.18;
-        let n_dots = 8;
-        for i in 0..n_dots {
-            let dot_angle = angle + (i as f64 * std::f64::consts::TAU / n_dots as f64);
-            let pos = center + egui::vec2(dot_angle.cos() as f32, dot_angle.sin() as f32) * radius;
-            let alpha = (i as f32 / n_dots as f32).powf(1.5);
-            ui.painter().circle_filled(pos, 2.0, color.gamma_multiply(0.2 + 0.8 * alpha));
-        }
-        return;
-    }
-    let letter = entry.name.chars().next().unwrap_or('?').to_uppercase().to_string();
+
+    let color = category_color(entry.category);
+    let letter = entry
+        .name
+        .chars()
+        .find(|c| !c.is_whitespace())
+        .unwrap_or('?')
+        .to_uppercase()
+        .to_string();
+    let loading = art.is_some_and(|url| icons.is_loading(url, super::icons::MAX_ICON_SIDE));
     ui.painter().text(
         rect.center(),
         egui::Align2::CENTER_CENTER,
         letter,
-        font((rect.width().min(rect.height()) * 0.42).round()),
-        TEXT_WHITE,
+        font((rect.width().min(rect.height()) * 0.38).round()),
+        TEXT_WHITE.gamma_multiply(if loading { 0.7 } else { 1.0 }),
     );
+    if loading {
+        let bar_w = rect.width() * 0.42;
+        let bar_h = 3.0;
+        let bar = egui::Rect::from_center_size(
+            egui::pos2(rect.center().x, rect.bottom() - 14.0),
+            egui::vec2(bar_w, bar_h),
+        );
+        ui.painter().rect_filled(bar, 2.0, color.gamma_multiply(0.25));
+        let fill = egui::Rect::from_min_size(bar.left_top(), egui::vec2(bar_w * 0.6, bar_h));
+        ui.painter().rect_filled(fill, 2.0, color.gamma_multiply(0.9));
+    }
 }
 fn tile_label(ui: &mut egui::Ui, rect: egui::Rect, name: &str) {
-    let scrim_height = 42.0;
+    let scrim_height = (rect.height() * 0.34).clamp(36.0, 52.0);
     let scrim = egui::Rect::from_min_max(
         egui::pos2(rect.left(), rect.bottom() - scrim_height),
         rect.right_bottom(),
     );
-    let transparent = egui::Color32::from_black_alpha(0);
-    let dark = egui::Color32::from_black_alpha(200);
-    let gradient_bottom = scrim.bottom() - CARD_RADIUS;
     let mut mesh = egui::Mesh::default();
-    mesh.colored_vertex(scrim.left_top(), transparent);
-    mesh.colored_vertex(scrim.right_top(), transparent);
-    mesh.colored_vertex(egui::pos2(scrim.right(), gradient_bottom), dark);
-    mesh.colored_vertex(egui::pos2(scrim.left(), gradient_bottom), dark);
-    mesh.add_triangle(0, 1, 2);
-    mesh.add_triangle(0, 2, 3);
+    let top = egui::Color32::from_black_alpha(0);
+    let bot = egui::Color32::from_black_alpha(210);
+    let tl = mesh.vertices.len() as u32;
+    mesh.colored_vertex(scrim.left_top(), top);
+    mesh.colored_vertex(scrim.right_top(), top);
+    mesh.colored_vertex(scrim.right_bottom(), bot);
+    mesh.colored_vertex(scrim.left_bottom(), bot);
+    mesh.add_triangle(tl, tl + 1, tl + 2);
+    mesh.add_triangle(tl, tl + 2, tl + 3);
     ui.painter().add(egui::Shape::mesh(mesh));
-    let cap = egui::Rect::from_min_max(
-        egui::pos2(scrim.left(), gradient_bottom),
-        scrim.right_bottom(),
-    );
-    ui.painter().add(egui::epaint::RectShape::filled(
-        cap,
-        egui::CornerRadius {
-            nw: 0,
-            ne: 0,
-            sw: CARD_RADIUS as u8,
-            se: CARD_RADIUS as u8,
-        },
-        dark,
-    ));
-    let side_margin = 9.0;
+    let side_margin = 8.0;
     let available_width = (rect.width() - side_margin * 2.0).max(0.0);
     let mut job = egui::text::LayoutJob::simple(
         name.to_owned(),
@@ -821,12 +1239,53 @@ fn tile_label(ui: &mut egui::Ui, rect: egui::Rect, name: &str) {
         TEXT_WHITE,
         available_width,
     );
-    job.wrap.max_rows = 1;
-    job.wrap.break_anywhere = true;
+    job.wrap.max_rows = 2;
+    job.wrap.break_anywhere = false;
     job.wrap.overflow_character = Some('…');
     let galley = ui.fonts(|f| f.layout_job(job));
-    let pos = egui::pos2(rect.left() + side_margin, rect.bottom() - 10.0 - galley.size().y);
+    let pos = egui::pos2(
+        rect.left() + side_margin,
+        rect.bottom() - 8.0 - galley.size().y,
+    );
     ui.painter().galley(pos, galley, TEXT_WHITE);
+}
+fn tile_source_badge(ui: &mut egui::Ui, rect: egui::Rect, entry: &crate::data::AppEntry) {
+    let Some(source) = crate::data::SourceCatalog::from_api(&entry.source_catalog) else {
+        return;
+    };
+    let text = source.short_label();
+    let (fg, bg) = source_chip_colors(source);
+    let galley = ui.fonts(|f| f.layout_no_wrap(text.to_owned(), font(FONT_MICRO), fg));
+    let size = egui::vec2(galley.size().x + 10.0, 14.0);
+    let y = if entry.platform != Platform::Vita { 24.0 } else { 7.0 };
+    let badge = egui::Rect::from_min_size(rect.left_top() + egui::vec2(7.0, y), size);
+    ui.painter().rect_filled(badge, 4.0, bg);
+    ui.painter().galley(badge.center() - galley.size() / 2.0, galley, fg);
+}
+fn source_chip_colors(source: crate::data::SourceCatalog) -> (egui::Color32, egui::Color32) {
+    match source {
+        crate::data::SourceCatalog::VitaDb => (
+            egui::Color32::from_rgb(0x7d, 0xd3, 0xfc),
+            egui::Color32::from_rgba_unmultiplied(0x0e, 0xa5, 0xe9, 55),
+        ),
+        crate::data::SourceCatalog::VitaDbToo => (
+            egui::Color32::from_rgb(0xd8, 0xb4, 0xfe),
+            egui::Color32::from_rgba_unmultiplied(0xa8, 0x55, 0xf7, 55),
+        ),
+        crate::data::SourceCatalog::Nps => (
+            egui::Color32::from_rgb(0x6e, 0xe7, 0xb7),
+            egui::Color32::from_rgba_unmultiplied(0x10, 0xb9, 0x81, 55),
+        ),
+    }
+}
+fn source_chip(ui: &mut egui::Ui, source: crate::data::SourceCatalog) {
+    let (fg, bg) = source_chip_colors(source);
+    let galley = ui.fonts(|f| f.layout_no_wrap(source.short_label().to_owned(), font(FONT_MICRO), fg));
+    let size = egui::vec2(galley.size().x + 10.0, 16.0);
+    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+    ui.painter().rect_filled(rect, 4.0, bg);
+    ui.painter().rect_stroke(rect, 4.0, egui::Stroke::new(1.0_f32, fg.gamma_multiply(0.55)), egui::StrokeKind::Inside);
+    ui.painter().galley(rect.center() - galley.size() / 2.0, galley, fg);
 }
 fn tile_platform_badge(ui: &mut egui::Ui, rect: egui::Rect, platform: Platform) {
     let text = platform.label_short();
@@ -880,45 +1339,91 @@ fn category_badge(ui: &mut egui::Ui, category: Category) {
     ui.painter().rect_filled(rect, 4.0, color.gamma_multiply(0.3));
     ui.painter().galley(rect.center() - galley.size() / 2.0, galley, TEXT_WHITE);
 }
-fn cross_glyph(painter: &egui::Painter, center: egui::Pos2, radius: f32, color: egui::Color32) {
-    let arm = radius * 0.62;
-    let stroke = egui::Stroke::new(2.0_f32, color);
-    painter.line_segment([center + egui::vec2(-arm, -arm), center + egui::vec2(arm, arm)], stroke);
-    painter.line_segment([center + egui::vec2(arm, -arm), center + egui::vec2(-arm, arm)], stroke);
-}
-fn circle_glyph(painter: &egui::Painter, center: egui::Pos2, radius: f32, color: egui::Color32) {
-    painter.circle_stroke(center, radius * 0.66, egui::Stroke::new(2.0_f32, color));
-}
-fn triangle_glyph(painter: &egui::Painter, center: egui::Pos2, radius: f32, color: egui::Color32) {
-    let arm = radius * 0.65;
-    let p1 = center + egui::vec2(0.0, -arm);
-    let p2 = center + egui::vec2(-arm * 0.9, arm * 0.8);
-    let p3 = center + egui::vec2(arm * 0.9, arm * 0.8);
-    let stroke = egui::Stroke::new(2.0_f32, color);
-    painter.line_segment([p1, p2], stroke);
-    painter.line_segment([p2, p3], stroke);
-    painter.line_segment([p3, p1], stroke);
-}
+#[derive(Clone, Copy)]
 enum Glyph {
     Cross,
     Circle,
     Triangle,
+    Square,
     Shoulders,
 }
-fn button_hints(ctx: &egui::Context, hints: &[(Glyph, &str)], note: Option<String>) {
+static BUTTON_TEXTURES: std::sync::OnceLock<[egui::TextureHandle; 4]> = std::sync::OnceLock::new();
+fn button_texture(ctx: &egui::Context, glyph: Glyph) -> Option<egui::TextureHandle> {
+    let textures = BUTTON_TEXTURES.get_or_init(|| {
+        let decode = |name: &str, bytes: &[u8]| {
+            let decoded = image::load_from_memory(bytes)
+                .unwrap_or_else(|err| panic!("assets/buttons/{name} is bundled at compile time and must decode: {err}"))
+                .to_rgba8();
+            let size = [decoded.width() as usize, decoded.height() as usize];
+            let color_image = egui::ColorImage::from_rgba_unmultiplied(size, decoded.as_raw());
+            ctx.load_texture(name, color_image, egui::TextureOptions::LINEAR)
+        };
+        [
+            decode("ps-button-x", include_bytes!("../../assets/buttons/ps-button-x.png")),
+            decode("ps-button-c", include_bytes!("../../assets/buttons/ps-button-c.png")),
+            decode("ps-button-t", include_bytes!("../../assets/buttons/ps-button-t.png")),
+            decode("ps-button-s", include_bytes!("../../assets/buttons/ps-button-s.png")),
+        ]
+    });
+    match glyph {
+        Glyph::Cross => Some(textures[0].clone()),
+        Glyph::Circle => Some(textures[1].clone()),
+        Glyph::Triangle => Some(textures[2].clone()),
+        Glyph::Square => Some(textures[3].clone()),
+        Glyph::Shoulders => None,
+    }
+}
+fn status_note(installed: &InstalledIndex, icons: &IconCache) -> String {
+    if let Some(left) = icons.rate_limited_for() {
+        let secs = left.as_secs();
+        return if secs >= 60 {
+            format!("server rate limit · art resumes in {}m {:02}s", secs / 60, secs % 60)
+        } else {
+            format!("server rate limit · art resumes in {}s", secs.max(1))
+        };
+    }
+    let (installed_count, outdated_count) = installed.counts();
+    let mut parts = vec![installed.summary()];
+    parts.push(format!("{installed_count} installed"));
+    if outdated_count > 0 {
+        parts.push(format!("{outdated_count} updates"));
+    }
+    if let Some((used, total)) = super::sysinfo::storage("ux0:") {
+        let gb = |bytes: u64| bytes as f64 / (1024.0 * 1024.0 * 1024.0);
+        parts.push(format!("{:.1}/{:.1} GB", gb(used), gb(total)));
+    }
+    parts.join(" · ")
+}
+fn button_hints(
+    ctx: &egui::Context,
+    hints: &[(Glyph, &str)],
+    note: Option<String>,
+    installed: Option<&InstalledIndex>,
+) -> Vec<AppCommand> {
+    let mut commands = Vec::new();
     egui::TopBottomPanel::bottom("hints")
         .exact_height(HINT_BAR_HEIGHT)
-        .frame(egui::Frame::NONE.fill(glass(BG_HEADER)).inner_margin(egui::vec2(SCREEN_MARGIN, 0.0)))
+        .frame(egui::Frame::NONE.fill(glass(BG_HEADER)).inner_margin(egui::vec2(SCREEN_MARGIN, 6.0)))
         .show(ctx, |ui| {
             if let Some(note) = note {
                 let rect = ui.max_rect();
+                let note_rect = egui::Rect::from_min_size(rect.left_top(), egui::vec2(rect.width() * 0.55, rect.height()));
+                let response = ui.interact(note_rect, ui.id().with("status_note"), egui::Sense::click());
                 ui.painter().text(
                     rect.left_center(),
                     egui::Align2::LEFT_CENTER,
                     note,
                     font(FONT_MICRO),
-                    TEXT_DIM,
+                    if response.hovered() { ACCENT_CYAN } else { TEXT_DIM },
                 );
+                if response.clicked() {
+                    let outdated = installed.map(|i| i.counts().1).unwrap_or(0);
+                    if outdated > 0 {
+                        commands.push(AppCommand::SetStoreTab(StoreTab::Updates));
+                    } else {
+                        commands.push(AppCommand::SetStoreTab(StoreTab::Library));
+                    }
+                }
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 for (glyph, label) in hints {
@@ -926,9 +1431,9 @@ fn button_hints(ctx: &egui::Context, hints: &[(Glyph, &str)], note: Option<Strin
                     ui.add_space(4.0);
                     match glyph {
                         Glyph::Shoulders => {
-                            let (rect, _) = ui.allocate_exact_size(egui::vec2(38.0, 18.0), egui::Sense::hover());
-                            ui.painter().rect_filled(rect, 4.0, BG_CARD);
-                            ui.painter().rect_stroke(rect, 4.0, egui::Stroke::new(1.0_f32, SEPARATOR), egui::StrokeKind::Inside);
+                            let (rect, _) = ui.allocate_exact_size(egui::vec2(40.0, 20.0), egui::Sense::hover());
+                            ui.painter().rect_filled(rect, 5.0, BG_CARD);
+                            ui.painter().rect_stroke(rect, 5.0, egui::Stroke::new(1.0_f32, SEPARATOR), egui::StrokeKind::Inside);
                             ui.painter().text(
                                 rect.center(),
                                 egui::Align2::CENTER_CENTER,
@@ -939,17 +1444,13 @@ fn button_hints(ctx: &egui::Context, hints: &[(Glyph, &str)], note: Option<Strin
                         }
                         _ => {
                             let (rect, _) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
-                            let (glyph_color, radius) = match glyph {
-                                Glyph::Cross => (egui::Color32::from_rgb(0x38, 0xbd, 0xf8), 8.0),
-                                Glyph::Circle => (egui::Color32::from_rgb(0xf8, 0x71, 0x71), 8.0),
-                                Glyph::Triangle => (egui::Color32::from_rgb(0x34, 0xd3, 0x99), 8.0),
-                                Glyph::Shoulders => unreachable!(),
-                            };
-                            match glyph {
-                                Glyph::Cross => cross_glyph(ui.painter(), rect.center(), radius, glyph_color),
-                                Glyph::Circle => circle_glyph(ui.painter(), rect.center(), radius, glyph_color),
-                                Glyph::Triangle => triangle_glyph(ui.painter(), rect.center(), radius, glyph_color),
-                                Glyph::Shoulders => unreachable!(),
+                            if let Some(texture) = button_texture(ui.ctx(), *glyph) {
+                                ui.painter().image(
+                                    texture.id(),
+                                    rect,
+                                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                                    egui::Color32::WHITE,
+                                );
                             }
                         }
                     }
@@ -957,6 +1458,7 @@ fn button_hints(ctx: &egui::Context, hints: &[(Glyph, &str)], note: Option<Strin
                 }
             });
         });
+    commands
 }
 fn rating_stars(ui: &mut egui::Ui, rating: f32) {
     const FILLED: [&str; 6] = ["", "★", "★★", "★★★", "★★★★", "★★★★★"];
@@ -1023,8 +1525,8 @@ fn source_badge(ui: &mut egui::Ui, label: &str) {
     });
     let size = egui::vec2(galley.size().x + 10.0, 14.0);
     let rect = ui.allocate_exact_size(size, egui::Sense::hover()).0;
-    ui.painter().rect_filled(rect, 4.0, egui::Color32::from_rgb(0x6d, 0x28, 0xd9).gamma_multiply(0.35)); 
-    ui.painter().rect_stroke(rect, 4.0, egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(0xa7, 0x8b, 0xfa).gamma_multiply(0.8)), egui::StrokeKind::Inside);
+    ui.painter().rect_filled(rect, 4.0, BG_CARD_HOVER);
+    ui.painter().rect_stroke(rect, 4.0, egui::Stroke::new(1.0_f32, ACCENT_CYAN), egui::StrokeKind::Inside);
     ui.painter().galley(rect.center() - galley.size() / 2.0, galley, TEXT_WHITE);
 }
 fn warning_glyph(painter: &egui::Painter, center: egui::Pos2, radius: f32, color: egui::Color32) {
@@ -1096,6 +1598,7 @@ fn detail_screen(
     comments: &[crate::data::api::Comment],
     comments_loaded: bool,
     comment_entry_requested: bool,
+    lightbox: Option<usize>,
 ) -> Vec<AppCommand> {
     let mut commands = Vec::new();
     let state = installed.state(entry);
@@ -1113,13 +1616,14 @@ fn detail_screen(
             });
         });
     if busy {
-        button_hints(ctx, &[], None);
+        commands.extend(button_hints(ctx, &[], None, None));
     } else {
-        button_hints(
+        commands.extend(button_hints(
             ctx,
             &[(Glyph::Circle, lang.btn_back()), (Glyph::Cross, lang.btn_open())],
-            Some(installed.summary()),
-        );
+            Some(status_note(installed, icons)),
+            Some(installed),
+        ));
     }
 
     if let Some(job) = install {
@@ -1152,8 +1656,46 @@ fn detail_screen(
                                         .size(13.0)
                                         .color(TEXT_DIM),
                                 );
+                                if job.is_cancellable() {
+                                    ui.add_space(14.0);
+                                    if cancel_button(ui, lang.cancel_btn()) {
+                                        commands.push(AppCommand::CancelInstall);
+                                    }
+                                }
                             });
                         });
+                });
+        }
+    }
+
+    if let Some(shot_idx) = lightbox {
+        if let Some(url) = entry.screenshot_urls.get(shot_idx) {
+            egui::Area::new(egui::Id::new("screenshot_lightbox"))
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                .order(egui::Order::Foreground)
+                .show(ctx, |ui| {
+                    let screen = ui.ctx().screen_rect();
+                    let (bg, bg_resp) = ui.allocate_exact_size(screen.size(), egui::Sense::click());
+                    ui.painter().rect_filled(bg, 0.0, egui::Color32::from_black_alpha(200));
+                    if bg_resp.clicked() {
+                        commands.push(AppCommand::CloseScreenshot);
+                    }
+                    let frame = egui::Rect::from_center_size(screen.center(), egui::vec2(720.0, 405.0));
+                    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(frame), |ui| {
+                        let (rect, _) = ui.allocate_exact_size(frame.size(), egui::Sense::hover());
+                        draw_screenshot(ui, icons, rect, url, entry.category, true);
+                    });
+                    ui.allocate_new_ui(
+                        egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(
+                            egui::pos2(screen.right() - 120.0, screen.top() + 16.0),
+                            egui::vec2(100.0, 36.0),
+                        )),
+                        |ui| {
+                            if back_button(ui, lang.back()) {
+                                commands.push(AppCommand::CloseScreenshot);
+                            }
+                        },
+                    );
                 });
         }
     }
@@ -1162,7 +1704,7 @@ fn detail_screen(
         .frame(egui::Frame::NONE.inner_margin(SCREEN_MARGIN))
         .show(ctx, |ui| {
             if paint_hero(ui, icons, entry) {
-                ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
+                ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
             }
             egui::ScrollArea::vertical()
                 .id_salt(&entry.id)
@@ -1192,8 +1734,7 @@ fn detail_screen(
                                         .frame(false),
                                     );
                                     if author_btn.clicked() {
-                                        commands.push(AppCommand::SetSearchQuery(entry.author.clone()));
-                                        commands.push(AppCommand::BackToCatalog);
+                                        commands.push(AppCommand::MoreByAuthor(entry.author.clone()));
                                     }
                                     ui.add_space(6.0);
                                     category_badge(ui, entry.category);
@@ -1208,6 +1749,14 @@ fn detail_screen(
                                     for label in &entry.source_labels {
                                         ui.add_space(4.0);
                                         source_badge(ui, label);
+                                    }
+                                    if entry.source_labels.is_empty() {
+                                        if let Some(source) =
+                                            crate::data::SourceCatalog::from_api(&entry.source_catalog)
+                                        {
+                                            ui.add_space(4.0);
+                                            source_chip(ui, source);
+                                        }
                                     }
                                 });
                                 ui.add_space(4.0);
@@ -1236,6 +1785,8 @@ fn detail_screen(
                                     warning_pill(ui, text);
                                 }
                             });
+                            ui.add_space(8.0);
+                            version_info_block(ui, lang, installed, entry, state);
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 match install {
                                     None => {
@@ -1259,7 +1810,25 @@ fn detail_screen(
                         });
                     });
                 ui.add_space(20.0);
-                screenshots_row(ui, icons, entry);
+                screenshots_row(ui, icons, entry, &mut commands);
+                if !entry.changelog.trim().is_empty() {
+                    ui.add_space(16.0);
+                    egui::Frame::NONE
+                        .fill(glass(BG_CARD))
+                        .corner_radius(CARD_RADIUS)
+                        .stroke(egui::Stroke::new(1.0_f32, ACCENT_CYAN.gamma_multiply(0.45)))
+                        .inner_margin(14.0)
+                        .show(ui, |ui| {
+                            section_label(ui, lang.changelog());
+                            ui.add_space(6.0);
+                            ui.label(
+                                egui::RichText::new(entry.changelog.trim())
+                                    .size(FONT_BODY)
+                                    .color(TEXT_WHITE),
+                            );
+                        });
+                    ui.add_space(16.0);
+                }
                 section_label(ui, lang.description());
                 ui.add_space(8.0);
                 let body = if entry.long_description.trim().is_empty() {
@@ -1277,12 +1846,6 @@ fn detail_screen(
                     section_label(ui, lang.requirements());
                     ui.add_space(8.0);
                     text_panel(ui, entry.requirements.trim(), STAR_GOLD);
-                    ui.add_space(22.0);
-                }
-                if !entry.changelog.trim().is_empty() {
-                    section_label(ui, lang.changelog());
-                    ui.add_space(8.0);
-                    text_panel(ui, entry.changelog.trim(), TEXT_DIM);
                     ui.add_space(22.0);
                 }
                 if !entry.overview.is_empty() {
@@ -1459,6 +2022,7 @@ fn search_field(ui: &mut egui::Ui, query: &str, placeholder: &str, active: bool)
     }
     SearchFieldResponse { open_requested: response.clicked() && !cleared, cleared }
 }
+
 fn back_button(ui: &mut egui::Ui, label: &str) -> bool {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(100.0, 38.0), egui::Sense::click());
     let press_t = if response.is_pointer_button_down_on() { 1.0_f32 } else { 0.0_f32 };
@@ -1547,7 +2111,7 @@ fn install_status(ui: &mut egui::Ui, progress: &crate::install::Progress) -> boo
     let galley = ui.fonts(|f| f.layout_no_wrap(text.clone(), font(FONT_SMALL), TEXT_WHITE));
     let width = (galley.size().x + 28.0).min(240.0);
     let sense = if finished { egui::Sense::click() } else { egui::Sense::hover() };
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 36.0), sense);
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 38.0), sense);
     let (fill, text_color) = match progress {
         Progress::Done => (GREEN_PLAY.gamma_multiply(0.25), GREEN_PLAY_HOVER),
         Progress::Queued => (egui::Color32::from_rgb(0x3a, 0x30, 0x14), egui::Color32::from_rgb(0xf5, 0xb8, 0x42)),
@@ -1568,6 +2132,46 @@ fn install_status(ui: &mut egui::Ui, progress: &crate::install::Progress) -> boo
     }
     response.clicked()
 }
+fn version_info_block(
+    ui: &mut egui::Ui,
+    lang: Language,
+    installed: &InstalledIndex,
+    entry: &crate::data::AppEntry,
+    state: InstallState,
+) {
+    let catalog_date = entry.updated_at.get(..10).unwrap_or(entry.updated_at.as_str());
+    ui.vertical(|ui| {
+        ui.add_space(2.0);
+        ui.label(
+            egui::RichText::new(format!("{}: {} · {}", lang.version(), entry.version, catalog_date))
+                .size(FONT_SMALL)
+                .color(TEXT_DIM),
+        );
+        if state != InstallState::Absent {
+            let info = installed.installed_info(ui.ctx(), entry).unwrap_or_default();
+            let installed_line = match (&info.app_ver, &info.installed_at) {
+                (Some(ver), _) => format!("{}: {ver}", lang.installed_version_value()),
+                (None, Some(date)) => format!("{}: {date}", lang.installed_version_value()),
+                (None, None) => format!("{}: —", lang.installed_version_value()),
+            };
+            ui.label(egui::RichText::new(installed_line).size(FONT_SMALL).color(TEXT_FAINT));
+        }
+    });
+}
+fn cancel_button(ui: &mut egui::Ui, label: &str) -> bool {
+    let galley = ui.fonts(|f| f.layout_no_wrap(label.to_owned(), font(FONT_SMALL), TEXT_WHITE));
+    let desired = egui::vec2(galley.size().x + 24.0, 30.0);
+    let (rect, response) = ui.allocate_exact_size(desired, egui::Sense::click());
+    let (fill, stroke) = if response.hovered() {
+        (egui::Color32::from_rgb(0x3a, 0x1c, 0x1c), egui::Color32::from_rgb(0xff, 0x6b, 0x6b))
+    } else {
+        (BG_CARD_HOVER, SEPARATOR)
+    };
+    ui.painter().rect_filled(rect, 6.0, fill);
+    ui.painter().rect_stroke(rect, 6.0, egui::Stroke::new(1.0_f32, stroke), egui::StrokeKind::Inside);
+    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, label, font(FONT_SMALL), TEXT_WHITE);
+    response.clicked()
+}
 fn play_install_button(ui: &mut egui::Ui, label: &str, state: InstallState) -> bool {
     let desired = egui::vec2(130.0, 38.0);
     let (rect, response) = ui.allocate_exact_size(desired, egui::Sense::click());
@@ -1575,8 +2179,8 @@ fn play_install_button(ui: &mut egui::Ui, label: &str, state: InstallState) -> b
     let hover_t = if response.hovered() { 1.0_f32 } else { 0.0_f32 };
     let rect = rect.shrink(press_t * (PRESS_SHRINK * 0.6));
     let (base, hover) = match state {
-        InstallState::Outdated => (STAR_GOLD, STAR_GOLD.gamma_multiply(1.15)),
-        InstallState::Absent | InstallState::Installed => (GREEN_PLAY, GREEN_PLAY_HOVER),
+        InstallState::Outdated => (STAR_GOLD, STAR_GOLD_HOVER),
+        InstallState::Absent | InstallState::Installed => (BLUE_PLAY, BLUE_PLAY_HOVER),
     };
     let bg = base.lerp_to_gamma(hover, hover_t);
     ui.painter().rect_filled(rect, 6.0, bg);
@@ -1590,16 +2194,30 @@ fn play_install_button(ui: &mut egui::Ui, label: &str, state: InstallState) -> b
     response.clicked()
 }
 const SCREENSHOT_SIZE: egui::Vec2 = egui::vec2(240.0, 135.0);
-fn screenshots_row(ui: &mut egui::Ui, icons: &IconCache, entry: &crate::data::AppEntry) {
+fn screenshots_row(
+    ui: &mut egui::Ui,
+    icons: &IconCache,
+    entry: &crate::data::AppEntry,
+    commands: &mut Vec<AppCommand>,
+) {
     if entry.screenshot_urls.is_empty() {
         return;
     }
     egui::ScrollArea::horizontal().id_salt("screenshots").show(ui, |ui| {
         ui.horizontal(|ui| {
-            for url in &entry.screenshot_urls {
-                let (rect, _response) = ui.allocate_exact_size(SCREENSHOT_SIZE, egui::Sense::hover());
-                let nearby = rect.left() < ui.clip_rect().right() + SCREENSHOT_SIZE.x;
-                draw_screenshot(ui, icons, rect, url, entry.category, nearby);
+            let mut load_budget = 2usize;
+            for (index, url) in entry.screenshot_urls.iter().enumerate() {
+                let (rect, response) = ui.allocate_exact_size(SCREENSHOT_SIZE, egui::Sense::click());
+                let nearby = rect.right() > ui.clip_rect().left() && rect.left() < ui.clip_rect().right();
+                let already = icons.peek(url).is_some();
+                let fetch = nearby && (already || load_budget > 0);
+                if fetch && !already {
+                    load_budget = load_budget.saturating_sub(1);
+                }
+                draw_screenshot(ui, icons, rect, url, entry.category, fetch);
+                if response.clicked() {
+                    commands.push(AppCommand::OpenScreenshot(index));
+                }
                 ui.add_space(10.0);
             }
         });
@@ -1642,7 +2260,7 @@ fn draw_screenshot(
             let alpha = (i as f32 / n_dots as f32).powf(1.5);
             ui.painter().circle_filled(pos, 2.5, color.gamma_multiply(0.2 + 0.8 * alpha));
         }
-        ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
     } else {
         ui.painter().text(
             rect.center(),
@@ -1654,61 +2272,61 @@ fn draw_screenshot(
     }
 
 }
-// TODO  PSP, PS1, Tool, Other - CORE
 
 fn category_color(category: Category) -> egui::Color32 {
     match category {
-        Category::Emulator => egui::Color32::from_rgb(0xf5, 0x9e, 0x0b),
-        Category::Original => egui::Color32::from_rgb(0x3b, 0x82, 0xf6),
-        Category::PsVitaGame => egui::Color32::from_rgb(0xec, 0x48, 0x99),
-        Category::Ps1Game => egui::Color32::from_rgb(0xea, 0xb3, 0x08),
-        Category::PspGame => egui::Color32::from_rgb(0x8b, 0x5c, 0xf6),
-        Category::Utility => egui::Color32::from_rgb(0x10, 0xb9, 0x81),
-        Category::Port => egui::Color32::from_rgb(0xa8, 0x55, 0xf7),
-        Category::Tool => egui::Color32::from_rgb(0x22, 0xd3, 0xee),
-        Category::Plugin => egui::Color32::from_rgb(0x06, 0xb6, 0xd4),
-        Category::Other => egui::Color32::from_rgb(0x64, 0x74, 0x8b),
+        Category::Emulator => egui::Color32::from_rgb(0xd9, 0x8e, 0x24),
+        Category::Original => egui::Color32::from_rgb(0x3b, 0x7c, 0xbf),
+        Category::PsVitaGame => egui::Color32::from_rgb(0xc4, 0x5c, 0x7a),
+        Category::Ps1Game => egui::Color32::from_rgb(0xc9, 0xa2, 0x27),
+        Category::PspGame => egui::Color32::from_rgb(0x4a, 0x7c, 0x59),
+        Category::Utility => egui::Color32::from_rgb(0x2f, 0x9e, 0x7a),
+        Category::Port => egui::Color32::from_rgb(0x5b, 0x8d, 0xef),
+        Category::Tool => egui::Color32::from_rgb(0x3a, 0xa8, 0xb5),
+        Category::Plugin => egui::Color32::from_rgb(0x2a, 0x9a, 0xa8),
+        Category::Other => egui::Color32::from_rgb(0x6b, 0x73, 0x80),
     }
 }
 fn draw_icon(ui: &mut egui::Ui, icons: &IconCache, rect: egui::Rect, entry: &crate::data::AppEntry) {
     let color = category_color(entry.category);
     let corner_r = rect.width() * 0.22;
+    let plate = color.lerp_to_gamma(BG_DEEP, 0.62);
+    ui.painter().rect_filled(rect, corner_r, plate);
     let art = tile_art_url(entry);
     if let Some(url) = art {
         if let Some(texture) = icons.get(ui.ctx(), url) {
             ui.painter().add(
                 egui::epaint::RectShape::filled(rect, corner_r, TEXT_WHITE).with_texture(
                     texture.id(),
-                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                    cover_fit_uv(texture.size_vec2(), rect),
                 ),
             );
             return;
         }
     }
-    ui.painter().rect_filled(rect, corner_r, BG_DEEP);
-    ui.painter().rect_stroke(rect, corner_r, egui::Stroke::new(1.5_f32, color), egui::StrokeKind::Inside);
-    if art.is_some_and(|url| icons.is_loading(url, super::icons::MAX_ICON_SIDE)) {
-        let time = ui.input(|i| i.time);
-        let angle = time * 4.0;
-        let center = rect.center();
-        let radius = rect.width() * 0.18;
-        let n_dots = 8;
-        for i in 0..n_dots {
-            let dot_angle = angle + (i as f64 * std::f64::consts::TAU / n_dots as f64);
-            let pos = center + egui::vec2(dot_angle.cos() as f32, dot_angle.sin() as f32) * radius;
-            let alpha = (i as f32 / n_dots as f32).powf(1.5);
-            ui.painter().circle_filled(pos, 2.0, color.gamma_multiply(0.2 + 0.8 * alpha));
-        }
-        ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
-        return;
-    }
-    let letter = entry.name.chars().next().unwrap_or('?').to_uppercase().to_string();
+    let letter = entry
+        .name
+        .chars()
+        .find(|c| !c.is_whitespace())
+        .unwrap_or('?')
+        .to_uppercase()
+        .to_string();
+    let loading = art.is_some_and(|url| icons.is_loading(url, super::icons::MAX_ICON_SIDE));
+    let pulse = if loading {
+        let t = ui.input(|i| i.time);
+        0.55 + 0.35 * ((t * 3.0).sin() as f32 * 0.5 + 0.5)
+    } else {
+        1.0
+    };
     ui.painter().text(
         rect.center(),
         egui::Align2::CENTER_CENTER,
         letter,
         font((rect.width() * 0.42).round()),
-        TEXT_WHITE,
+        TEXT_WHITE.gamma_multiply(pulse),
     );
+    if loading {
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(80));
+    }
 }
 

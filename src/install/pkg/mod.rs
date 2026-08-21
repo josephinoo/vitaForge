@@ -53,7 +53,6 @@ fn extract_pbp_pkg(pkg_path: &Path, dest_dir: &Path, expected: PkgKind) -> Resul
         }
         let mut name_bytes = read_at(&mut file, hdr.enc_offset + item.name_offset, item.name_size as usize)?;
         cipher.decrypt_at(item.name_offset, &mut name_bytes);
-        // Signature/hash items in the table don't have textual names — skip rather than fail.
         let Ok(name) = String::from_utf8(name_bytes) else { continue };
         let dest = match name.as_str() {
             "USRDIR/CONTENT/EBOOT.PBP" => {
@@ -74,8 +73,6 @@ pub fn extract_psx(pkg_path: &Path, dest_dir: &Path) -> Result<PkgHeader> {
     extract_pbp_pkg(pkg_path, dest_dir, PkgKind::Psx)
 }
 pub fn extract_psp(pkg_path: &Path, dest_dir: &Path) -> Result<PkgHeader> {
-    // Unified path with PS1: both use identical AES decryption + USRDIR/CONTENT/EBOOT.PBP extraction
-    // (usagi-pkgj uses same pkgi_install_pspgame for both; PSP-specific logic deferred to disc-ID routing)
     extract_pbp_pkg(pkg_path, dest_dir, PkgKind::Psp)
 }
 fn copy_item_data(
@@ -87,19 +84,26 @@ fn copy_item_data(
     dest: &Path,
 ) -> Result<()> {
     const CHUNK: u64 = 1 << 20;
-    let mut out = std::fs::File::create(dest).with_context(|| format!("couldn't write {}", dest.display()))?;
+    let out = std::fs::File::create(dest).with_context(|| format!("couldn't write {}", dest.display()))?;
+    let mut out = std::io::BufWriter::with_capacity(256 * 1024, out);
     let mut remaining = item.data_size;
     let mut offset = item.data_offset;
+    let mut buf = vec![0u8; CHUNK as usize];
     while remaining > 0 {
-        let take = remaining.min(CHUNK);
-        let mut buf = read_at(file, hdr.enc_offset + offset, take as usize)?;
+        let take = (remaining.min(CHUNK)) as usize;
+        let slice = &mut buf[..take];
+        file.seek(SeekFrom::Start(hdr.enc_offset + offset))?;
+        file.read_exact(slice)?;
         if decrypt {
-            cipher.decrypt_at(offset, &mut buf);
+            cipher.decrypt_at(offset, slice);
         }
-        std::io::Write::write_all(&mut out, &buf)?;
-        offset += take;
-        remaining -= take;
+        use std::io::Write;
+        out.write_all(slice)?;
+        offset += take as u64;
+        remaining -= take as u64;
     }
+    use std::io::Write;
+    out.flush()?;
     Ok(())
 }
 #[cfg(test)]

@@ -1,8 +1,5 @@
 #[link(name = "SDL2", kind = "static")]
 unsafe extern "C" {}
-// SDL2's accelerated Canvas on Vita is backed by vitaGL; without these three linked in,
-// hardware-accelerated rendering can end up in an undefined state once another app (e.g.
-// Adrenaline) takes the GPU and this app resumes. Vita-only static libs, not present on host.
 #[cfg(target_os = "vita")]
 #[link(name = "vitaGL", kind = "static")]
 #[link(name = "vita2d", kind = "static")]
@@ -24,15 +21,11 @@ use surface::{FramePaintStats, HEIGHT, VitaSurface, WIDTH};
 const UI_SCALE: f32 = 1.3;
 const ACTIVE_FRAME_TIME: Duration = Duration::from_millis(16);
 const INPUT_POLL_INTERVAL: Duration = Duration::from_millis(4);
-// Tightened from 350ms/110ms — L/R felt sluggish to kick in even at full render speed.
 const STICK_REPEAT_DELAY: Duration = Duration::from_millis(200);
 const STICK_REPEAT_INTERVAL: Duration = Duration::from_millis(70);
-const IME_OPEN_GRACE: Duration = Duration::from_millis(500);
-const IME_PAINT_INTERVAL: Duration = Duration::from_millis(250);
-const FRAME_STATS_INTERVAL: Duration = Duration::from_secs(2);
+const FRAME_STATS_INTERVAL: Duration = Duration::from_secs(5);
 const SLOW_FRAME_THRESHOLD: Duration = Duration::from_millis(20);
 const FRAME_LOG_DIR: &str = "ux0:data/vitaforge";
-// eprintln! goes nowhere on real hardware (no attached console), so mirror it to disk too.
 const FRAME_LOG_FILE: &str = "ux0:data/vitaforge/frame_stats.log";
 fn log_line(line: &str) {
     eprintln!("{line}");
@@ -65,7 +58,6 @@ struct FrameStats {
     last_repeat_at: Option<Instant>,
     repeats: u32,
     max_repeat_gap: Duration,
-    // a synchronous write per slow frame was itself a source of frame gaps.
     pending_log: Vec<String>,
 }
 impl FrameStats {
@@ -186,10 +178,8 @@ impl FrameStats {
     }
 }
 struct ImeSession {
-    opened_at: Instant,
-    seen_open: bool,
     target: TextTarget,
-    last_paint: Instant,
+    query_before: String,
 }
 pub fn run(mut app: App) -> Result<()> {
     let sdl = sdl2::init().map_err(anyhow::Error::msg)?;
@@ -219,21 +209,6 @@ pub fn run(mut app: App) -> Result<()> {
         let mut direct_commands = Vec::new();
         let screen_points = (WIDTH as f32 / UI_SCALE, HEIGHT as f32 / UI_SCALE);
         for event in event_pump.poll_iter() {
-            if ime.is_some() {
-                ime::feed_event(&event);
-                continue;
-            }
-            if let Some(command) = map_keyboard_event(&event) {
-                direct_commands.push(command);
-                frame_stats.note_keyboard_command();
-            }
-            if let Some(egui_event) = map_pointer_event(&event, screen_points, UI_SCALE, &mut pointer_pos) {
-                egui_events.push(egui_event);
-            }
-            if let Some(command) = map_controller_button_event(&event) {
-                direct_commands.push(command);
-                frame_stats.note_controller_button_command();
-            }
             match event {
                 sdl2::event::Event::Quit { .. }
                 | sdl2::event::Event::AppWillEnterBackground { .. }
@@ -251,72 +226,48 @@ pub fn run(mut app: App) -> Result<()> {
                 sdl2::event::Event::ControllerDeviceRemoved { .. } => controller = None,
                 _ => {}
             }
-        }
-        if let Some(session) = &mut ime {
-            ime::update();
-            let shown = ime::is_shown(&video, surface.window());
-            session.seen_open |= shown;
-            let finished = if session.seen_open {
-                !shown || ime::confirmed()
-            } else {
-                ime::confirmed() || session.opened_at.elapsed() >= IME_OPEN_GRACE
-            };
-            if !finished {
-                if let Err(err) = app.tick(&egui_ctx) {
-                    eprintln!("tick failed while the keyboard was open: {err:#}");
-                }
-                if session.last_paint.elapsed() >= IME_PAINT_INTERVAL {
-                    session.last_paint = Instant::now();
-                    let raw_input = egui::RawInput {
-                        screen_rect: Some(egui::Rect::from_min_size(
-                            egui::Pos2::ZERO,
-                            egui::vec2(WIDTH as f32 / UI_SCALE, HEIGHT as f32 / UI_SCALE),
-                        )),
-                        viewport_id: egui::ViewportId::ROOT,
-                        viewports: std::iter::once((
-                            egui::ViewportId::ROOT,
-                            egui::ViewportInfo { native_pixels_per_point: Some(UI_SCALE), ..Default::default() },
-                        ))
-                        .collect(),
-                        time: Some(start_time.elapsed().as_secs_f64()),
-                        predicted_dt: ACTIVE_FRAME_TIME.as_secs_f32(),
-                        ..Default::default()
-                    };
-                    let full_output = egui_ctx.run(raw_input, |ctx| {
-                        let _ = build_ui(ctx, &app);
-                    });
-                    let clipped_primitives =
-                        egui_ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
-                    surface.draw_scene();
-                    if let Err(err) = surface.paint_egui(
-                        full_output.pixels_per_point,
-                        &clipped_primitives,
-                        &full_output.textures_delta,
-                    ) {
-                        eprintln!("couldn't paint behind the keyboard: {err:#}");
-                    }
-                } else {
-                    sleep(INPUT_POLL_INTERVAL);
-                }
+            if ime.is_some() {
+                ime::feed_event(&event);
                 continue;
             }
-            let session = ime.take().expect("checked above that a session is open");
-            let confirmed = ime::confirmed();
-            let text = ime::take_text();
-            ime::close(&video);
-            if confirmed && let Some(text) = text {
-                match session.target {
-                    TextTarget::Search => app.handle_command(AppCommand::SetSearchQuery(text))?,
-                    TextTarget::Comment => app.handle_command(AppCommand::SubmitComment(text))?,
+            if let Some(command) = map_keyboard_event(&event) {
+                direct_commands.push(command);
+                frame_stats.note_keyboard_command();
+            }
+            if let Some(egui_event) = map_pointer_event(&event, screen_points, UI_SCALE, &mut pointer_pos) {
+                egui_events.push(egui_event);
+            }
+            if let Some(command) = map_controller_button_event(&event) {
+                direct_commands.push(command);
+                frame_stats.note_controller_button_command();
+            }
+        }
+        if ime.is_some() {
+            if let Some(result) = ime::poll() {
+                let session = ime.take().expect("IME session was open");
+                ime::close(&video);
+                match result {
+                    ime::ImeResult::Confirmed(text) => match session.target {
+                        TextTarget::Search => app.handle_command(AppCommand::SetSearchQuery(text))?,
+                        TextTarget::Comment => {
+                            if !text.is_empty() {
+                                app.handle_command(AppCommand::SubmitComment(text))?;
+                            }
+                        }
+                    },
+                    ime::ImeResult::Canceled if session.target == TextTarget::Search => {
+                        app.handle_command(AppCommand::SetSearchQuery(session.query_before))?;
+                    }
+                    ime::ImeResult::Canceled => {}
                 }
+                match session.target {
+                    TextTarget::Search => app.handle_command(AppCommand::CloseSearch)?,
+                    TextTarget::Comment => app.handle_command(AppCommand::CloseCommentEntry)?,
+                }
+                held_direction = None;
+                held_since = Instant::now();
+                last_repeat_at = Instant::now();
             }
-            match session.target {
-                TextTarget::Search => app.handle_command(AppCommand::CloseSearch)?,
-                TextTarget::Comment => app.handle_command(AppCommand::CloseCommentEntry)?,
-            }
-            held_direction = None;
-            held_since = Instant::now();
-            last_repeat_at = Instant::now();
         }
         let current_state_kind = std::mem::discriminant(&app.state);
         if current_state_kind != last_state_kind {
@@ -325,29 +276,34 @@ pub fn run(mut app: App) -> Result<()> {
             held_since = Instant::now();
             last_repeat_at = Instant::now();
         }
-        match held_stick_direction(controller.as_ref()) {
-            Some(direction) if held_direction == Some(direction) => {
-                if held_since.elapsed() >= STICK_REPEAT_DELAY
-                    && last_repeat_at.elapsed() >= STICK_REPEAT_INTERVAL
-                {
+        if ime.is_none() {
+            match held_stick_direction(controller.as_ref()) {
+                Some(direction) if held_direction == Some(direction) => {
+                    if held_since.elapsed() >= STICK_REPEAT_DELAY
+                        && last_repeat_at.elapsed() >= STICK_REPEAT_INTERVAL
+                    {
+                        direct_commands.push(direction.into());
+                        last_repeat_at = Instant::now();
+                        frame_stats.note_repeat();
+                    }
+                }
+                Some(direction) => {
                     direct_commands.push(direction.into());
+                    held_direction = Some(direction);
+                    held_since = Instant::now();
                     last_repeat_at = Instant::now();
                     frame_stats.note_repeat();
                 }
+                None => held_direction = None,
             }
-            Some(direction) => {
-                direct_commands.push(direction.into());
-                held_direction = Some(direction);
-                held_since = Instant::now();
-                last_repeat_at = Instant::now();
-                frame_stats.note_repeat();
-            }
-            None => held_direction = None,
         }
         frame_stats.note_commands(direct_commands.len());
+        let had_input = !egui_events.is_empty() || !direct_commands.is_empty();
         for command in direct_commands {
             app.handle_command(command)?;
         }
+        let pending_gpu = surface.pending_texture_uploads();
+        app.icons.set_gpu_backlog(pending_gpu);
         let tick_started_at = Instant::now();
         app.tick(&egui_ctx)?;
         let tick_elapsed = tick_started_at.elapsed();
@@ -356,6 +312,19 @@ pub fn run(mut app: App) -> Result<()> {
             crate::app::AppState::Detail { comment_entry_requested: true, .. } => Some(TextTarget::Comment),
             _ => None,
         };
+        let app_busy = app.install_busy()
+            || matches!(app.state, crate::app::AppState::Loading)
+            || text_target.is_some();
+        #[cfg(not(target_os = "vita"))]
+        static SCREENSHOT_DUMPED: std::sync::atomic::AtomicBool =
+            std::sync::atomic::AtomicBool::new(false);
+        #[cfg(not(target_os = "vita"))]
+        let dump_force_paint = std::env::var_os("VITAFORGE_DUMP_SCREENSHOT").is_some()
+            && matches!(app.state, crate::app::AppState::Catalog(_))
+            && !SCREENSHOT_DUMPED.load(std::sync::atomic::Ordering::Relaxed);
+        #[cfg(target_os = "vita")]
+        let dump_force_paint = false;
+        let _ = dump_force_paint;
         let raw_input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -386,14 +355,75 @@ pub fn run(mut app: App) -> Result<()> {
         let clipped_primitives = egui_ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
         let tessellate_elapsed = tessellate_started_at.elapsed();
         surface.draw_scene();
-        // paint_egui ends in canvas.present(), which blocks on vsync and paces the loop.
-        let paint_stats: FramePaintStats =
-            surface.paint_egui(full_output.pixels_per_point, &clipped_primitives, &full_output.textures_delta)?;
+        #[cfg(not(target_os = "vita"))]
+        let dump_path = {
+            static DUMP_ARMED: std::sync::atomic::AtomicBool =
+                std::sync::atomic::AtomicBool::new(false);
+            if matches!(app.state, crate::app::AppState::Catalog(_))
+                && std::env::var_os("VITAFORGE_DUMP_SCREENSHOT").is_some()
+                && !SCREENSHOT_DUMPED.load(std::sync::atomic::Ordering::Relaxed)
+            {
+                if !DUMP_ARMED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    let _ = app.handle_command(crate::input::AppCommand::SetStoreTab(
+                        crate::input::StoreTab::Search,
+                    ));
+                    if let crate::app::AppState::Catalog(catalog) = &mut app.state {
+                        catalog.search_requested = false;
+                    }
+                    egui_ctx.request_repaint();
+                    None
+                } else if !SCREENSHOT_DUMPED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    std::env::var("VITAFORGE_DUMP_SCREENSHOT").ok()
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+        #[cfg(target_os = "vita")]
+        let dump_path: Option<String> = None;
+        let paint_stats: FramePaintStats = surface.paint_egui(
+            full_output.pixels_per_point,
+            &clipped_primitives,
+            &full_output.textures_delta,
+            dump_path.as_deref(),
+        )?;
+        app.icons.set_gpu_backlog(surface.pending_texture_uploads());
+        let dropped = surface.take_dropped_textures();
+        if !dropped.is_empty() {
+            app.icons.forget_textures(&egui_ctx, &dropped);
+            egui_ctx.request_repaint();
+        }
         frame_stats.record(tick_elapsed, build_ui_elapsed, tessellate_elapsed, paint_stats);
         crate::install::process_pending_bgdl();
-        if let Some(target) = text_target {
-            ime::open(&video, surface.window());
-            ime = Some(ImeSession { opened_at: Instant::now(), seen_open: false, target, last_paint: Instant::now() });
+        #[cfg(target_os = "vita")]
+        unsafe {
+            vitasdk_sys::sceKernelPowerTick(vitasdk_sys::SCE_KERNEL_POWER_TICK_DEFAULT);
+        }
+        if ime.is_none()
+            && let Some(target) = text_target
+        {
+            let purpose = match target {
+                TextTarget::Search => ime::ImePurpose::Search,
+                TextTarget::Comment => ime::ImePurpose::Comment,
+            };
+            let query_before = match &app.state {
+                crate::app::AppState::Catalog(catalog) => catalog.search_query.clone(),
+                _ => String::new(),
+            };
+            let initial = match target {
+                TextTarget::Search => query_before.as_str(),
+                TextTarget::Comment => "",
+            };
+            if ime::open(&video, surface.window(), purpose, initial) {
+                ime = Some(ImeSession { target, query_before });
+            } else {
+                match target {
+                    TextTarget::Search => app.handle_command(AppCommand::CloseSearch)?,
+                    TextTarget::Comment => app.handle_command(AppCommand::CloseCommentEntry)?,
+                }
+            }
         }
     }
 }

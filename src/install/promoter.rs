@@ -40,8 +40,9 @@ mod sys {
 
             Some(ret >= 0 && res == 1)
         }
-        pub fn promote(&self, dir: &str) -> Result<()> {
+        pub fn promote(&self, dir: &str, mut on_tick: impl FnMut(u32)) -> Result<()> {
             let path = CString::new(dir)?;
+            let started_at = std::time::Instant::now();
             unsafe {
                 let ret = scePromoterUtilityPromotePkg(path.as_ptr(), 0);
                 if ret < 0 {
@@ -56,6 +57,7 @@ mod sys {
                     if state == 0 {
                         break;
                     }
+                    on_tick(started_at.elapsed().as_secs() as u32);
                     sceKernelDelayThread(200_000);
                 }
                 let mut result: i32 = 0;
@@ -78,10 +80,12 @@ mod sys {
     }
 }
 #[cfg(target_os = "vita")]
-pub fn promote_package(dir: &str) -> Result<()> {
+pub fn promote_package(dir: &str, tx: &tokio::sync::watch::Sender<super::Progress>) -> Result<()> {
     let _guard = PROMOTER.lock().map_err(|_| anyhow::anyhow!("the promoter lock is poisoned"))?;
     let session = sys::Session::open()?;
-    session.promote(dir)
+    session.promote(dir, |elapsed_secs| {
+        let _ = tx.send(super::Progress::Installing { elapsed_secs });
+    })
 }
 #[cfg(target_os = "vita")]
 pub fn installed_titles(titleids: &[String]) -> Option<Vec<String>> {
@@ -102,7 +106,7 @@ pub fn installed_titles(titleids: &[String]) -> Option<Vec<String>> {
     Some(found)
 }
 #[cfg(not(target_os = "vita"))]
-pub fn promote_package(_dir: &str) -> Result<()> {
+pub fn promote_package(_dir: &str, _tx: &tokio::sync::watch::Sender<super::Progress>) -> Result<()> {
     anyhow::bail!("installing only works on the vita itself")
 }
 #[cfg(not(target_os = "vita"))]

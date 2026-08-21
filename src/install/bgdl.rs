@@ -15,14 +15,12 @@ pub const BGDL_TYPE_PSM: u32 = 0x06;
 pub const BGDL_TYPE_GAME: u32 = 0x16;
 #[allow(dead_code)]
 pub const BGDL_TYPE_DLC: u32 = 0x17;
-// How much of the fake license the daemon reads, per content type (bgdl.cpp:319-338).
 #[cfg(target_os = "vita")]
 const RIF_SIZE: usize = 512;
 #[cfg(target_os = "vita")]
 const PSP_RIF_SIZE: usize = 0x98;
 #[cfg(target_os = "vita")]
 const PSM_RIF_SIZE: usize = 1024;
-// Daemon silently stops accepting work past this many queued entries (bgdl.cpp:306-316).
 #[cfg(target_os = "vita")]
 const MAX_QUEUED: usize = 32;
 #[cfg(target_os = "vita")]
@@ -126,9 +124,6 @@ type SceDownloadChangeState = extern "C" fn(
 #[cfg(target_os = "vita")]
 #[repr(C)]
 struct SceDownloadClass {
-    // Heap-allocated and leaked so the address stays stable for the whole
-    // process — SceShellSvc is handed this pointer during `init()` and may
-    // retain it internally, so it must not move once initialization starts.
     init_header: *mut ShellSvcInitStruct,
     class_header: *mut SceDownloadClassHeader,
     init: Option<SceDownloadInit>,
@@ -165,7 +160,6 @@ fn get_download_class() -> Result<&'static SceDownloadClass> {
         if load_res < 0 {
             eprintln!("sceKernelLoadStartModule(libshellsvc.suprx) returned {load_res:#010x}");
         }
-        // Same two exports usagi-pkgj resolves (bgdl.cpp:289-298).
         let mod_name = CString::new("SceShellSvc").unwrap();
         let mut func_4e255c31_addr: usize = 0;
         let mut func_b282b430_addr: usize = 0;
@@ -223,7 +217,6 @@ fn get_download_class() -> Result<&'static SceDownloadClass> {
             unk2: 0,
             func_table: std::ptr::null_mut(),
             unk3: 0,
-            // u32-sized for alignment (bgdl.cpp:168-170 allocates raw bytes); leaked, pointers outlive this call.
             buf_c4: vec![0u32; (res as usize).div_ceil(4)].leak().as_mut_ptr(),
             buf_10000: vec![0u32; 0x1000 / 4].leak().as_mut_ptr(),
         });
@@ -264,8 +257,6 @@ fn get_download_class() -> Result<&'static SceDownloadClass> {
 pub fn start_bgdl(_title: &str, _url: &str, _rif: Option<&[u8]>, _bgdl_type: u32) -> Result<()> {
     bail!("BGDL is not supported on the host simulator.")
 }
-// One-shot dump of what this process can see/do on the memory card, via raw sceIo*
-// (std::fs doesn't resolve ux0: mounts). 0x8001000D = EACCES, 0x80010002 = ENOENT.
 #[cfg(target_os = "vita")]
 fn probe_fs() {
     const PATHS: &[&str] = &[
@@ -314,7 +305,8 @@ pub fn start_bgdl(title: &str, url: &str, rif: Option<&[u8]>, bgdl_type: u32) ->
             "couldn't read ux0:bgdl/t ({code:#010x}); skipping the queue-depth check"
         )),
     }
-    let license_path = "ux0:bgdl/temp.dat";
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let license_path = format!("ux0:bgdl/temp_{nanos}.dat");
     let rif_str = if let Some(rif_data) = rif {
         let max = match bgdl_type {
             BGDL_TYPE_PSP => PSP_RIF_SIZE,
@@ -322,11 +314,11 @@ pub fn start_bgdl(title: &str, url: &str, rif: Option<&[u8]>, bgdl_type: u32) ->
             _ => RIF_SIZE,
         };
         let rif_data = &rif_data[..rif_data.len().min(max)];
-        vita_save_file(license_path, rif_data).context("Failed to write temporary license file")?;
+        vita_save_file(&license_path, rif_data).context("Failed to write temporary license file")?;
         log_bgdl(&format!("wrote {} license bytes to {license_path}", rif_data.len()));
         license_path
     } else {
-        ""
+        String::new()
     };
     let sce_download_obj = get_download_class()?;
     unsafe {
@@ -370,10 +362,15 @@ pub fn start_bgdl(title: &str, url: &str, rif: Option<&[u8]>, bgdl_type: u32) ->
         };
         copy_cstr(url, &mut (*addr_dc0).url);
         if !rif_str.is_empty() {
-            copy_cstr(rif_str, &mut (*addr_dc0).license_path);
+            copy_cstr(&rif_str, &mut (*addr_dc0).license_path);
         }
         copy_cstr(title, &mut (*addr_dc0).title);
-        copy_cstr("ux0:bgdl/icon0.png", &mut (*addr_dc0).icon_path);
+        let icon_path = if std::path::Path::new("ux0:data/vitaforge/bgdl_icon.png").exists() {
+            "ux0:data/vitaforge/bgdl_icon.png"
+        } else {
+            "ux0:bgdl/icon0.png"
+        };
+        copy_cstr(icon_path, &mut (*addr_dc0).icon_path);
         (*addr_dc0).type_[0] = bgdl_type;
         (*addr_dc0).type_[1] = bgdl_type;
         let p_ptr_to_dc0_ptr = (*init).ptr_to_dc0_ptr;
