@@ -1083,8 +1083,7 @@ fn cover_card(
     let anim_id = egui::Id::new(("cover_card", entry.id.as_str()));
     let hover_t = ctx.animate_bool(anim_id.with("hover"), response.hovered());
     let press_t = ctx.animate_bool(anim_id.with("press"), response.is_pointer_button_down_on());
-    let focus_t = ctx.animate_bool(anim_id.with("focus"), focused);
-    let zoom = hover_t.max(focus_t);
+    let zoom = if focused { 1.0 } else { hover_t };
     let inset = 1.5 - zoom * 1.0 + press_t * PRESS_SHRINK;
     let rect = full_rect.shrink(inset.max(0.0));
     draw_cover(ui, icons, rect, entry);
@@ -1113,7 +1112,8 @@ fn featured_banner(
     let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
     let anim_id = egui::Id::new(("featured_banner", entry.id.as_str())).with("hover");
     let hover_t = ui.ctx().animate_bool(anim_id, response.hovered() || focused);
-    ui.painter().rect_filled(rect, CARD_RADIUS, BG_CARD.lerp_to_gamma(BG_CARD_HOVER, hover_t));
+    let active_t = if focused { 1.0 } else { hover_t };
+    ui.painter().rect_filled(rect, CARD_RADIUS, BG_CARD.lerp_to_gamma(BG_CARD_HOVER, active_t));
     let stroke = if focused {
         egui::Stroke::new(2.5_f32, ACCENT_CYAN)
     } else {
@@ -1159,7 +1159,7 @@ fn featured_banner(
         egui::pos2(rect.right() - padding - button_width, rect.center().y - button_size.y / 2.0),
         button_size,
     );
-    ui.painter().rect_filled(button_rect, button_size.y / 2.0, GREEN_PLAY.lerp_to_gamma(GREEN_PLAY_HOVER, hover_t));
+    ui.painter().rect_filled(button_rect, button_size.y / 2.0, GREEN_PLAY.lerp_to_gamma(GREEN_PLAY_HOVER, active_t));
     ui.painter().text(
         button_rect.center(),
         egui::Align2::CENTER_CENTER,
