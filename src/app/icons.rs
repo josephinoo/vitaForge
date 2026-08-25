@@ -5,6 +5,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
+
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 const CACHE_DIR: &str = "ux0:data/vitaforge/cache";
 const MAX_CONCURRENT_FETCHES: usize = 6;
 const MAX_CONCURRENT_DECODES: usize = 2;
@@ -15,6 +20,7 @@ pub const MAX_SCREENSHOT_SIDE: u32 = 480;
 pub const HERO_SIDE: u32 = 480;
 const MAX_RESIDENT_BYTES: usize = 24 * 1024 * 1024;
 const MAX_RESIDENT_READY: usize = 160;
+const RECENT_USE_TICKS: u64 = 128;
 const MAX_META_ENTRIES: usize = 2048;
 const MAX_GPU_BACKLOG_FOR_SPAWN: usize = 24;
 const RETRY_AFTER: Duration = Duration::from_secs(5);
@@ -111,12 +117,12 @@ impl IconCache {
         self.gpu_backlog.store(n, Ordering::Relaxed);
     }
     fn tick(&self) -> u64 {
-        let mut clock = self.clock.lock().unwrap();
+        let mut clock = lock(&self.clock);
         *clock += 1;
         *clock
     }
     pub fn rate_limited_for(&self) -> Option<Duration> {
-        let mut guard = self.rate_limited_until.lock().unwrap();
+        let mut guard = lock(&self.rate_limited_until);
         let left = (*guard)?.saturating_duration_since(Instant::now());
         if left.is_zero() {
             *guard = None;
@@ -126,7 +132,7 @@ impl IconCache {
     }
     fn note_rate_limit(&self, after: Duration) {
         let until = Instant::now() + after.min(MAX_BACKOFF);
-        let mut guard = self.rate_limited_until.lock().unwrap();
+        let mut guard = lock(&self.rate_limited_until);
         if guard.is_none_or(|previous| previous < until) {
             *guard = Some(until);
         }
@@ -135,8 +141,8 @@ impl IconCache {
         if let Some(left) = self.rate_limited_for() {
             return Err(left);
         }
-        *self.last_live_request.lock().unwrap() = Instant::now();
-        let mut gate = self.gate.lock().unwrap();
+        *lock(&self.last_live_request) = Instant::now();
+        let mut gate = lock(&self.gate);
         let now = Instant::now();
         let start = (*gate).max(now);
         let wait = start - now;
@@ -148,17 +154,17 @@ impl IconCache {
     }
     fn back_off(&self, after: Duration) {
         self.note_rate_limit(after);
-        let mut gate = self.gate.lock().unwrap();
+        let mut gate = lock(&self.gate);
         *gate = (*gate).max(Instant::now() + after.min(MAX_BACKOFF));
     }
     fn try_reserve_precache_slot(&self) -> Result<Duration, Duration> {
         if let Some(left) = self.rate_limited_for() {
             return Err(left);
         }
-        if self.last_live_request.lock().unwrap().elapsed() < LIVE_PRIORITY_WINDOW {
+        if lock(&self.last_live_request).elapsed() < LIVE_PRIORITY_WINDOW {
             return Err(LIVE_PRIORITY_WINDOW);
         }
-        let mut gate = self.precache_gate.lock().unwrap();
+        let mut gate = lock(&self.precache_gate);
         let now = Instant::now();
         let start = (*gate).max(now);
         let wait = start - now;
@@ -169,7 +175,7 @@ impl IconCache {
         Ok(wait)
     }
     pub fn is_loading(&self, url: &str, max_side: u32) -> bool {
-        let entries = self.entries.lock().unwrap();
+        let entries = lock(&self.entries);
         match entries.get(&max_side).and_then(|bucket| bucket.get(url)) {
             Some(IconState::Loading) => true,
             Some(IconState::Throttled { until, attempts }) => {
@@ -180,7 +186,7 @@ impl IconCache {
         }
     }
     pub fn repaint_delay(&self, url: &str, max_side: u32) -> Option<Duration> {
-        let entries = self.entries.lock().unwrap();
+        let entries = lock(&self.entries);
         match entries.get(&max_side).and_then(|bucket| bucket.get(url)) {
             Some(IconState::Loading) => Some(Duration::ZERO),
             Some(IconState::Throttled { until, .. }) => {
@@ -198,7 +204,7 @@ impl IconCache {
         self.get_sized(ctx, url, HERO_SIDE)
     }
     pub fn peek(&self, url: &str) -> Option<egui::TextureHandle> {
-        let mut entries = self.entries.lock().unwrap();
+        let mut entries = lock(&self.entries);
         let bucket = entries.get_mut(&MAX_ICON_SIDE)?;
         match bucket.get_mut(url)? {
             IconState::Ready { texture, last_used, .. } => {
@@ -209,9 +215,9 @@ impl IconCache {
         }
     }
     pub fn get_sized(&self, ctx: &egui::Context, url: &str, max_side: u32) -> Option<egui::TextureHandle> {
-        let mut entries = self.entries.lock().unwrap();
+        let mut entries = lock(&self.entries);
         let now = {
-            let mut clock = self.clock.lock().unwrap();
+            let mut clock = lock(&self.clock);
             *clock += 1;
             *clock
         };
@@ -259,7 +265,7 @@ impl IconCache {
         tokio::spawn(async move {
             let outcome = load_icon(&url, max_side, &cache, skip_disk).await;
             let stamp = cache.tick();
-            let mut entries = cache.entries.lock().unwrap();
+            let mut entries = lock(&cache.entries);
             let bucket = entries.entry(max_side).or_default();
             match outcome {
                 LoadOutcome::Ready(color_image) => {
@@ -270,7 +276,7 @@ impl IconCache {
                     bucket.insert(url, IconState::Ready { texture, last_used: stamp, byte_size });
                     cache.ready_count.fetch_add(1, Ordering::Relaxed);
                     cache.resident_bytes.fetch_add(byte_size, Ordering::Relaxed);
-                    let protect = stamp.saturating_sub(1);
+                    let protect = stamp.saturating_sub(RECENT_USE_TICKS);
                     prune_meta(&mut entries);
                     evict_stale(
                         &mut entries,
@@ -324,7 +330,7 @@ impl IconCache {
                 break;
             }
             {
-                let entries = self.entries.lock().unwrap();
+                let entries = lock(&self.entries);
                 if entries
                     .get(&MAX_ICON_SIDE)
                     .is_some_and(|bucket| bucket.contains_key(&url))
@@ -348,7 +354,7 @@ impl IconCache {
         if ids.is_empty() {
             return;
         }
-        let mut entries = self.entries.lock().unwrap();
+        let mut entries = lock(&self.entries);
         let stale: Vec<(u32, String, usize)> = entries
             .iter()
             .flat_map(|(&max_side, bucket)| {
@@ -375,7 +381,7 @@ impl IconCache {
     }
 
     pub fn clear_resident(&self, ctx: &egui::Context) {
-        let mut entries = self.entries.lock().unwrap();
+        let mut entries = lock(&self.entries);
         for (&max_side, bucket) in entries.iter() {
             for (url, state) in bucket.iter() {
                 if matches!(state, IconState::Ready { .. }) {
@@ -394,8 +400,8 @@ impl IconCache {
         if ready <= MAX_RESIDENT_READY && bytes <= MAX_RESIDENT_BYTES {
             return;
         }
-        let protect = *self.clock.lock().unwrap();
-        let mut entries = self.entries.lock().unwrap();
+        let protect = lock(&self.clock).saturating_sub(RECENT_USE_TICKS);
+        let mut entries = lock(&self.entries);
         prune_meta(&mut entries);
         evict_stale(&mut entries, ctx, protect, &self.ready_count, &self.resident_bytes);
     }
@@ -419,7 +425,7 @@ impl IconCache {
                     continue;
                 }
                 {
-                    let entries = cache.entries.lock().unwrap();
+                    let entries = lock(&cache.entries);
                     if matches!(
                         entries.get(&MAX_ICON_SIDE).and_then(|bucket| bucket.get(&url)),
                         Some(IconState::Ready { .. })
@@ -595,6 +601,12 @@ fn evict_stale(
         to_remove.push((max_side, url));
     }
 
+    if !to_remove.is_empty() {
+        crate::install::log_file(&format!(
+            "icon evict: dropping {} textures (protect_after={protect_after}, ready={ready}, bytes={resident_bytes})",
+            to_remove.len()
+        ));
+    }
     for (max_side, url) in to_remove {
         if let Some(bucket) = entries.get_mut(&max_side) {
             bucket.remove(&url);

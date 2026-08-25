@@ -299,6 +299,15 @@ impl Language {
     pub fn cancel_btn(self) -> &'static str {
         self.strings(|s| s.cancel_btn)
     }
+    pub fn data_prompt_title(self) -> &'static str {
+        self.strings(|s| s.data_prompt_title)
+    }
+    pub fn data_prompt_body(self) -> &'static str {
+        self.strings(|s| s.data_prompt_body)
+    }
+    pub fn data_prompt_accept(self) -> &'static str {
+        self.strings(|s| s.data_prompt_accept)
+    }
     pub fn installed_version_value(self) -> &'static str {
         self.strings(|s| s.installed_version_value)
     }
@@ -408,6 +417,9 @@ struct LocalizedStrings {
     settings_purge_all: &'static str,
     settings_cleared_catalog: &'static str,
     cancel_btn: &'static str,
+    data_prompt_title: &'static str,
+    data_prompt_body: &'static str,
+    data_prompt_accept: &'static str,
     installed_version_value: &'static str,
 }
 impl LocalizedStrings {
@@ -501,6 +513,9 @@ impl LocalizedStrings {
             settings_purge_all: r("settings-purge-all"),
             settings_cleared_catalog: r("settings-cleared-catalog"),
             cancel_btn: r("cancel-btn"),
+            data_prompt_title: r("data-prompt-title"),
+            data_prompt_body: r("data-prompt-body"),
+            data_prompt_accept: r("data-prompt-accept"),
             installed_version_value: r("installed-version-value"),
         }
     }

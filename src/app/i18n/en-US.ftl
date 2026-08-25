@@ -93,3 +93,6 @@ see-all-catalog = Browse all
 see-all-back = Back to Discover
 library-empty = No installed apps yet
 updates-empty = Everything is up to date
+data-prompt-title = Extra game data needed
+data-prompt-body = This app needs an extra data download before it will run.
+data-prompt-accept = DOWNLOAD

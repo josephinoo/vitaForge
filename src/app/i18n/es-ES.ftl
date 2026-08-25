@@ -93,3 +93,6 @@ see-all-catalog = Ver catálogo
 see-all-back = Volver a Descubrir
 library-empty = Aún no hay apps instaladas
 updates-empty = Todo está actualizado
+data-prompt-title = Necesita datos adicionales
+data-prompt-body = Esta app necesita descargar datos extra para poder funcionar.
+data-prompt-accept = DESCARGAR

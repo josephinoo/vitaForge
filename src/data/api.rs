@@ -105,6 +105,12 @@ struct RawApp {
     #[serde(default)]
     zrif: Option<String>,
     #[serde(default)]
+    data_url: Option<String>,
+    #[serde(default)]
+    data_extract_path: Option<String>,
+    #[serde(default)]
+    data_size: Option<String>,
+    #[serde(default)]
     source_catalog: Option<String>,
     #[serde(default)]
     source_labels: Vec<String>,
@@ -237,8 +243,13 @@ impl RawApp {
             source_labels: self.source_labels,
             hash: String::new(),
             hash2: String::new(),
-            data_url: None,
-            data_size_bytes: 0,
+            data_url: self.data_url.and_then(non_empty),
+            data_extract_path: self.data_extract_path.and_then(non_empty),
+            data_size_bytes: self
+                .data_size
+                .as_deref()
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(0),
             size_bytes,
             downloads: self.install_count,
             rating: self.average_rating,
@@ -614,6 +625,7 @@ mod tests {
             hash: String::new(),
             hash2: String::new(),
             data_url: None,
+            data_extract_path: None,
             data_size_bytes: 0,
             size_bytes: 0,
             downloads: 0,

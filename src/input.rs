@@ -55,6 +55,7 @@ pub enum AppCommand {
     InstallCurrent,
     DismissInstall,
     CancelInstall,
+    CancelDataPrompt,
     OpenSettings,
     CloseSettings,
     SetLanguage(crate::app::i18n::Language),

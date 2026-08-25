@@ -4,25 +4,25 @@ use super::{App, AppState};
 use crate::data::{Category, Platform, SortDirection, SortOrder};
 use crate::input::{AppCommand, DiscoverRail, StoreTab};
 use crate::install::installed::{InstallState, InstalledIndex};
-const BG_DEEP: egui::Color32 = egui::Color32::from_rgb(0x0c, 0x0e, 0x10);
-const BG_HEADER: egui::Color32 = egui::Color32::from_rgb(0x14, 0x18, 0x1c);
-const BG_CARD: egui::Color32 = egui::Color32::from_rgb(0x1c, 0x22, 0x28);
-const BG_CARD_HOVER: egui::Color32 = egui::Color32::from_rgb(0x2a, 0x32, 0x3c);
-const ACCENT_STEAM: egui::Color32 = egui::Color32::from_rgb(0x00, 0x70, 0xd1);
-const ACCENT_CYAN: egui::Color32 = egui::Color32::from_rgb(0x3a, 0xa8, 0xb5);
-const GREEN_PLAY: egui::Color32 = egui::Color32::from_rgb(0x2f, 0x9e, 0x44);
-const GREEN_PLAY_HOVER: egui::Color32 = egui::Color32::from_rgb(0x3c, 0xb0, 0x54);
-const BLUE_PLAY: egui::Color32 = egui::Color32::from_rgb(0x00, 0x70, 0xd1);
-const BLUE_PLAY_HOVER: egui::Color32 = egui::Color32::from_rgb(0x1a, 0x8a, 0xe0);
-const SEPARATOR: egui::Color32 = egui::Color32::from_rgb(0x3a, 0x44, 0x50);
-const TEXT_WHITE: egui::Color32 = egui::Color32::from_rgb(0xf2, 0xef, 0xe8);
-const TEXT_DIM: egui::Color32 = egui::Color32::from_rgb(0x9a, 0xa3, 0xad);
-const TEXT_FAINT: egui::Color32 = egui::Color32::from_rgb(0x6b, 0x73, 0x80);
-const STAR_GOLD: egui::Color32 = egui::Color32::from_rgb(0xe6, 0xa8, 0x17);
-const STAR_GOLD_HOVER: egui::Color32 = egui::Color32::from_rgb(0xf0, 0xba, 0x2a);
+const BG_DEEP: egui::Color32 = egui::Color32::from_rgb(0x00, 0x00, 0x00);
+const BG_HEADER: egui::Color32 = egui::Color32::from_rgb(0x1c, 0x1c, 0x1e);
+const BG_CARD: egui::Color32 = egui::Color32::from_rgb(0x1c, 0x1c, 0x1e);
+const BG_CARD_HOVER: egui::Color32 = egui::Color32::from_rgb(0x2c, 0x2c, 0x2e);
+const ACCENT_STEAM: egui::Color32 = egui::Color32::from_rgb(0x0a, 0x84, 0xff);
+const ACCENT_CYAN: egui::Color32 = egui::Color32::from_rgb(0x6a, 0xc4, 0xdc);
+const GREEN_PLAY: egui::Color32 = egui::Color32::from_rgb(0x30, 0xd1, 0x58);
+const GREEN_PLAY_HOVER: egui::Color32 = egui::Color32::from_rgb(0x4c, 0xdd, 0x70);
+const BLUE_PLAY: egui::Color32 = egui::Color32::from_rgb(0x0a, 0x84, 0xff);
+const BLUE_PLAY_HOVER: egui::Color32 = egui::Color32::from_rgb(0x33, 0x96, 0xff);
+const SEPARATOR: egui::Color32 = egui::Color32::from_rgb(0x38, 0x38, 0x3a);
+const TEXT_WHITE: egui::Color32 = egui::Color32::from_rgb(0xff, 0xff, 0xff);
+const TEXT_DIM: egui::Color32 = egui::Color32::from_rgb(0x8e, 0x8e, 0x93);
+const TEXT_FAINT: egui::Color32 = egui::Color32::from_rgb(0x48, 0x48, 0x4a);
+const STAR_GOLD: egui::Color32 = egui::Color32::from_rgb(0xff, 0xd6, 0x0a);
+const STAR_GOLD_HOVER: egui::Color32 = egui::Color32::from_rgb(0xff, 0xe0, 0x66);
 const GLASS_ALPHA: f32 = 0.78;
-const GLASS_EDGE: egui::Color32 = egui::Color32::from_rgba_premultiplied(0x2c, 0x34, 0x3c, 0x55);
-const FONT_MICRO: f32 = 9.0;
+const GLASS_EDGE: egui::Color32 = egui::Color32::from_rgba_premultiplied(0x2c, 0x2c, 0x2e, 0x55);
+const FONT_MICRO: f32 = 10.0;
 const FONT_SMALL: f32 = 11.0;
 const FONT_BODY: f32 = 13.0;
 const FONT_LARGE: f32 = 15.0;
@@ -34,7 +34,11 @@ fn font(size: f32) -> egui::FontId {
 fn glass(color: egui::Color32) -> egui::Color32 {
     color.gamma_multiply(GLASS_ALPHA)
 }
-const CARD_RADIUS: f32 = 12.0;
+const RADIUS_XS: f32 = 4.0;
+const RADIUS_SM: f32 = 6.0;
+const RADIUS_MD: f32 = 8.0;
+const RADIUS_LG: f32 = 10.0;
+const CARD_RADIUS: f32 = 14.0;
 const HINT_BAR_HEIGHT: f32 = 36.0;
 const SEARCH_FIELD_WIDTH: f32 = 190.0;
 const SEARCH_FIELD_HEIGHT: f32 = 30.0;
@@ -70,6 +74,7 @@ pub fn apply_theme(ctx: &egui::Context) {
     style.spacing.scroll.bar_inner_margin = 0.0;
     style.spacing.button_padding = egui::vec2(10.0, 6.0);
     style.interaction.interact_radius = 8.0;
+    style.animation_time = 0.12;
     ctx.set_style(style);
     let mut visuals = egui::Visuals::dark();
     visuals.panel_fill = BG_DEEP;
@@ -77,6 +82,14 @@ pub fn apply_theme(ctx: &egui::Context) {
     visuals.selection.bg_fill = ACCENT_STEAM.gamma_multiply(0.35);
     visuals.selection.stroke = egui::Stroke::new(1.5_f32, ACCENT_STEAM);
     visuals.hyperlink_color = ACCENT_CYAN;
+    let control_radius = egui::CornerRadius::same(RADIUS_MD as u8);
+    visuals.widgets.noninteractive.corner_radius = control_radius;
+    visuals.widgets.inactive.corner_radius = control_radius;
+    visuals.widgets.hovered.corner_radius = control_radius;
+    visuals.widgets.active.corner_radius = control_radius;
+    visuals.widgets.open.corner_radius = control_radius;
+    visuals.window_corner_radius = egui::CornerRadius::same(CARD_RADIUS as u8);
+    visuals.menu_corner_radius = egui::CornerRadius::same(RADIUS_LG as u8);
     ctx.set_visuals(visuals);
     ctx.options_mut(|opts| {
         opts.input_options.max_click_duration = 5.0;
@@ -176,7 +189,7 @@ pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
             self_update,
             self_update_progress,
         ),
-        AppState::Detail { app: entry, scroll_delta, comments, comments_loaded, comment_entry_requested, lightbox, .. } => {
+        AppState::Detail { app: entry, scroll_delta, comments, comments_loaded, comment_entry_requested, lightbox, data_prompt, .. } => {
             let progress = app
                 .install
                 .as_ref()
@@ -195,6 +208,7 @@ pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
                 *comments_loaded,
                 *comment_entry_requested,
                 *lightbox,
+                *data_prompt,
             )
         }
         AppState::Settings { selected, previous } => settings_screen(
@@ -822,9 +836,7 @@ fn discover_home_ui(
                 );
             }).response;
             if top_selected.is_some() && !is_featured {
-                if featured_index.is_none() || is_commercial_view {
-                    top_resp.scroll_to_me(Some(egui::Align::TOP));
-                }
+                top_resp.scroll_to_me(None);
             }
             ui.add_space(14.0);
             let new_selected = match discover_focus {
@@ -847,7 +859,7 @@ fn discover_home_ui(
                 );
             }).response;
             if new_selected.is_some() {
-                new_resp.scroll_to_me(Some(egui::Align::Center));
+                new_resp.scroll_to_me(None);
             }
             ui.add_space(16.0);
             if pill_button(ui, lang.see_all_catalog(), false) {
@@ -1004,9 +1016,9 @@ fn dropdown_row(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 30.0), egui::Sense::click());
     let hover_t = if response.hovered() { 1.0_f32 } else { 0.0_f32 };
     if active {
-        ui.painter().rect_filled(rect, 5.0, ACCENT_STEAM.gamma_multiply(0.22));
+        ui.painter().rect_filled(rect, RADIUS_XS, ACCENT_STEAM.gamma_multiply(0.22));
     } else if hover_t > 0.0 {
-        ui.painter().rect_filled(rect, 5.0, BG_CARD_HOVER.gamma_multiply(hover_t));
+        ui.painter().rect_filled(rect, RADIUS_XS, BG_CARD_HOVER.gamma_multiply(hover_t));
     }
     let text_color = if active { ACCENT_CYAN } else { TEXT_WHITE };
     ui.painter().text(
@@ -1067,9 +1079,11 @@ fn cover_card(
     focused: bool,
 ) -> CardResponse {
     let (full_rect, response) = ui.allocate_exact_size(egui::vec2(card_width, card_height), egui::Sense::click());
-    let hover_t = if response.hovered() { 1.0_f32 } else { 0.0_f32 };
-    let press_t = if response.is_pointer_button_down_on() { 1.0_f32 } else { 0.0_f32 };
-    let focus_t = if focused { 1.0_f32 } else { 0.0_f32 };
+    let ctx = ui.ctx().clone();
+    let anim_id = egui::Id::new(("cover_card", entry.id.as_str()));
+    let hover_t = ctx.animate_bool(anim_id.with("hover"), response.hovered());
+    let press_t = ctx.animate_bool(anim_id.with("press"), response.is_pointer_button_down_on());
+    let focus_t = ctx.animate_bool(anim_id.with("focus"), focused);
     let zoom = hover_t.max(focus_t);
     let inset = 1.5 - zoom * 1.0 + press_t * PRESS_SHRINK;
     let rect = full_rect.shrink(inset.max(0.0));
@@ -1097,7 +1111,8 @@ fn featured_banner(
     let width = ui.available_width();
     let height = FEATURED_BANNER_CARD_HEIGHT;
     let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
-    let hover_t = if response.hovered() || focused { 1.0_f32 } else { 0.0_f32 };
+    let anim_id = egui::Id::new(("featured_banner", entry.id.as_str())).with("hover");
+    let hover_t = ui.ctx().animate_bool(anim_id, response.hovered() || focused);
     ui.painter().rect_filled(rect, CARD_RADIUS, BG_CARD.lerp_to_gamma(BG_CARD_HOVER, hover_t));
     let stroke = if focused {
         egui::Stroke::new(2.5_f32, ACCENT_CYAN)
@@ -1123,7 +1138,7 @@ fn featured_banner(
                 let galley = ui.fonts(|f| f.layout_no_wrap(label.to_owned(), font(FONT_MICRO), ACCENT_CYAN));
                 let size = egui::vec2(galley.size().x + 10.0, 16.0);
                 let (badge_rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
-                ui.painter().rect_filled(badge_rect, 4.0, ACCENT_CYAN.gamma_multiply(0.25));
+                ui.painter().rect_filled(badge_rect, RADIUS_XS, ACCENT_CYAN.gamma_multiply(0.25));
                 ui.painter().galley(badge_rect.center() - galley.size() / 2.0, galley, ACCENT_CYAN);
                 ui.add_space(6.0);
                 category_badge(ui, entry.category);
@@ -1259,7 +1274,7 @@ fn tile_source_badge(ui: &mut egui::Ui, rect: egui::Rect, entry: &crate::data::A
     let size = egui::vec2(galley.size().x + 10.0, 14.0);
     let y = if entry.platform != Platform::Vita { 24.0 } else { 7.0 };
     let badge = egui::Rect::from_min_size(rect.left_top() + egui::vec2(7.0, y), size);
-    ui.painter().rect_filled(badge, 4.0, bg);
+    ui.painter().rect_filled(badge, RADIUS_XS, bg);
     ui.painter().galley(badge.center() - galley.size() / 2.0, galley, fg);
 }
 fn source_chip_colors(source: crate::data::SourceCatalog) -> (egui::Color32, egui::Color32) {
@@ -1283,8 +1298,8 @@ fn source_chip(ui: &mut egui::Ui, source: crate::data::SourceCatalog) {
     let galley = ui.fonts(|f| f.layout_no_wrap(source.short_label().to_owned(), font(FONT_MICRO), fg));
     let size = egui::vec2(galley.size().x + 10.0, 16.0);
     let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
-    ui.painter().rect_filled(rect, 4.0, bg);
-    ui.painter().rect_stroke(rect, 4.0, egui::Stroke::new(1.0_f32, fg.gamma_multiply(0.55)), egui::StrokeKind::Inside);
+    ui.painter().rect_filled(rect, RADIUS_XS, bg);
+    ui.painter().rect_stroke(rect, RADIUS_XS, egui::Stroke::new(1.0_f32, fg.gamma_multiply(0.55)), egui::StrokeKind::Inside);
     ui.painter().galley(rect.center() - galley.size() / 2.0, galley, fg);
 }
 fn tile_platform_badge(ui: &mut egui::Ui, rect: egui::Rect, platform: Platform) {
@@ -1297,7 +1312,7 @@ fn tile_platform_badge(ui: &mut egui::Ui, rect: egui::Rect, platform: Platform) 
     } else {
         egui::Color32::from_black_alpha(170)
     };
-    ui.painter().rect_filled(badge, 4.0, bg_color);
+    ui.painter().rect_filled(badge, RADIUS_XS, bg_color);
     ui.painter().galley(badge.center() - galley.size() / 2.0, galley, TEXT_WHITE);
 }
 fn install_marker(painter: &egui::Painter, rect: egui::Rect, state: InstallState) {
@@ -1336,7 +1351,7 @@ fn category_badge(ui: &mut egui::Ui, category: Category) {
     });
     let size = egui::vec2(galley.size().x + 10.0, 14.0);
     let rect = ui.allocate_exact_size(size, egui::Sense::hover()).0;
-    ui.painter().rect_filled(rect, 4.0, color.gamma_multiply(0.3));
+    ui.painter().rect_filled(rect, RADIUS_XS, color.gamma_multiply(0.3));
     ui.painter().galley(rect.center() - galley.size() / 2.0, galley, TEXT_WHITE);
 }
 #[derive(Clone, Copy)]
@@ -1432,8 +1447,8 @@ fn button_hints(
                     match glyph {
                         Glyph::Shoulders => {
                             let (rect, _) = ui.allocate_exact_size(egui::vec2(40.0, 20.0), egui::Sense::hover());
-                            ui.painter().rect_filled(rect, 5.0, BG_CARD);
-                            ui.painter().rect_stroke(rect, 5.0, egui::Stroke::new(1.0_f32, SEPARATOR), egui::StrokeKind::Inside);
+                            ui.painter().rect_filled(rect, RADIUS_XS, BG_CARD);
+                            ui.painter().rect_stroke(rect, RADIUS_XS, egui::Stroke::new(1.0_f32, SEPARATOR), egui::StrokeKind::Inside);
                             ui.painter().text(
                                 rect.center(),
                                 egui::Align2::CENTER_CENTER,
@@ -1507,7 +1522,7 @@ fn platform_badge(ui: &mut egui::Ui, platform: Platform) {
     });
     let size = egui::vec2(galley.size().x + 10.0, 14.0);
     let rect = ui.allocate_exact_size(size, egui::Sense::hover()).0;
-    ui.painter().rect_filled(rect, 4.0, ACCENT_CYAN.gamma_multiply(0.22));
+    ui.painter().rect_filled(rect, RADIUS_XS, ACCENT_CYAN.gamma_multiply(0.22));
     ui.painter().galley(rect.center() - galley.size() / 2.0, galley, ACCENT_CYAN);
 }
 fn region_badge(ui: &mut egui::Ui, region: &str) {
@@ -1516,7 +1531,7 @@ fn region_badge(ui: &mut egui::Ui, region: &str) {
     });
     let size = egui::vec2(galley.size().x + 10.0, 14.0);
     let rect = ui.allocate_exact_size(size, egui::Sense::hover()).0;
-    ui.painter().rect_filled(rect, 4.0, egui::Color32::from_rgb(0xea, 0x58, 0x0c).gamma_multiply(0.8)); 
+    ui.painter().rect_filled(rect, RADIUS_XS, egui::Color32::from_rgb(0xea, 0x58, 0x0c).gamma_multiply(0.8));
     ui.painter().galley(rect.center() - galley.size() / 2.0, galley, TEXT_WHITE);
 }
 fn source_badge(ui: &mut egui::Ui, label: &str) {
@@ -1525,8 +1540,8 @@ fn source_badge(ui: &mut egui::Ui, label: &str) {
     });
     let size = egui::vec2(galley.size().x + 10.0, 14.0);
     let rect = ui.allocate_exact_size(size, egui::Sense::hover()).0;
-    ui.painter().rect_filled(rect, 4.0, BG_CARD_HOVER);
-    ui.painter().rect_stroke(rect, 4.0, egui::Stroke::new(1.0_f32, ACCENT_CYAN), egui::StrokeKind::Inside);
+    ui.painter().rect_filled(rect, RADIUS_XS, BG_CARD_HOVER);
+    ui.painter().rect_stroke(rect, RADIUS_XS, egui::Stroke::new(1.0_f32, ACCENT_CYAN), egui::StrokeKind::Inside);
     ui.painter().galley(rect.center() - galley.size() / 2.0, galley, TEXT_WHITE);
 }
 fn warning_glyph(painter: &egui::Painter, center: egui::Pos2, radius: f32, color: egui::Color32) {
@@ -1561,7 +1576,7 @@ fn warning_pill(ui: &mut egui::Ui, label: &str) {
         (galley.size().y + PADDING).max(ICON_BOX),
     );
     let rect = ui.allocate_exact_size(size, egui::Sense::hover()).0;
-    ui.painter().rect_filled(rect, 4.0, STAR_GOLD.gamma_multiply(0.2));
+    ui.painter().rect_filled(rect, RADIUS_XS, STAR_GOLD.gamma_multiply(0.2));
     warning_glyph(
         ui.painter(),
         egui::pos2(rect.left() + PADDING + ICON_BOX / 2.0, rect.top() + ICON_BOX / 2.0 + 1.0),
@@ -1583,7 +1598,7 @@ fn install_pill(ui: &mut egui::Ui, lang: Language, state: InstallState) {
     let galley = ui.fonts(|f| f.layout_no_wrap(label.to_owned(), font(FONT_MICRO), color));
     let size = egui::vec2(galley.size().x + 14.0, 16.0);
     let rect = ui.allocate_exact_size(size, egui::Sense::hover()).0;
-    ui.painter().rect_filled(rect, 4.0, color.gamma_multiply(0.25));
+    ui.painter().rect_filled(rect, RADIUS_XS, color.gamma_multiply(0.25));
     ui.painter().galley(rect.center() - galley.size() / 2.0, galley, color);
 }
 fn detail_screen(
@@ -1599,6 +1614,7 @@ fn detail_screen(
     comments_loaded: bool,
     comment_entry_requested: bool,
     lightbox: Option<usize>,
+    data_prompt: bool,
 ) -> Vec<AppCommand> {
     let mut commands = Vec::new();
     let state = installed.state(entry);
@@ -1626,6 +1642,61 @@ fn detail_screen(
         ));
     }
 
+    if data_prompt {
+        egui::Area::new(egui::Id::new("data_prompt"))
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                let screen = ui.ctx().screen_rect();
+                let (bg, _) = ui.allocate_exact_size(screen.size(), egui::Sense::click());
+                ui.painter().rect_filled(bg, 0.0, egui::Color32::from_black_alpha(200));
+                let panel =
+                    egui::Rect::from_center_size(screen.center(), egui::vec2(360.0, 210.0));
+                ui.allocate_new_ui(egui::UiBuilder::new().max_rect(panel), |ui| {
+                    egui::Frame::window(&ctx.style())
+                        .fill(BG_CARD)
+                        .stroke(egui::Stroke::new(1.5_f32, STAR_GOLD))
+                        .corner_radius(RADIUS_LG)
+                        .inner_margin(egui::vec2(24.0, 18.0))
+                        .show(ui, |ui| {
+                            ui.vertical_centered(|ui| {
+                                ui.label(
+                                    egui::RichText::new(lang.data_prompt_title())
+                                        .size(FONT_LARGE)
+                                        .strong()
+                                        .color(TEXT_WHITE),
+                                );
+                                ui.add_space(10.0);
+                                ui.label(
+                                    egui::RichText::new(lang.data_prompt_body())
+                                        .size(FONT_BODY)
+                                        .color(TEXT_DIM),
+                                );
+                                if entry.data_size_bytes > 0 {
+                                    ui.add_space(6.0);
+                                    ui.label(
+                                        egui::RichText::new(entry.data_size_label())
+                                            .size(FONT_BODY)
+                                            .strong()
+                                            .color(STAR_GOLD),
+                                    );
+                                }
+                                ui.add_space(18.0);
+                                ui.horizontal(|ui| {
+                                    if pill_button(ui, lang.data_prompt_accept(), true) {
+                                        commands.push(AppCommand::InstallCurrent);
+                                    }
+                                    ui.add_space(10.0);
+                                    if pill_button(ui, lang.cancel_btn(), false) {
+                                        commands.push(AppCommand::CancelDataPrompt);
+                                    }
+                                });
+                            });
+                        });
+                });
+            });
+    }
+
     if let Some(job) = install {
         if !job.is_finished() {
             egui::Area::new(egui::Id::new("install_overlay"))
@@ -1635,7 +1706,7 @@ fn detail_screen(
                     egui::Frame::window(&ctx.style())
                         .fill(BG_CARD)
                         .stroke(egui::Stroke::new(1.5_f32, ACCENT_STEAM))
-                        .corner_radius(12.0)
+                        .corner_radius(RADIUS_LG)
                         .inner_margin(egui::vec2(28.0, 20.0))
                         .show(ui, |ui| {
                             ui.set_width(300.0);
@@ -1921,7 +1992,7 @@ fn detail_screen(
                     for comment in comments {
                         egui::Frame::NONE
                             .fill(glass(BG_HEADER))
-                            .corner_radius(8.0)
+                            .corner_radius(RADIUS_MD)
                             .stroke(egui::Stroke::new(1.0_f32, GLASS_EDGE))
                             .inner_margin(10.0)
                             .show(ui, |ui| {
@@ -1961,7 +2032,7 @@ fn info_row(ui: &mut egui::Ui, label: &str, value: &str) {
 fn text_panel(ui: &mut egui::Ui, text: &str, color: egui::Color32) {
     egui::Frame::NONE
         .fill(glass(BG_CARD))
-        .corner_radius(8.0)
+        .corner_radius(RADIUS_MD)
         .stroke(egui::Stroke::new(1.0_f32, GLASS_EDGE))
         .inner_margin(12.0)
         .show(ui, |ui| {
@@ -1981,7 +2052,7 @@ fn search_field(ui: &mut egui::Ui, query: &str, placeholder: &str, active: bool)
         ui.allocate_exact_size(egui::vec2(SEARCH_FIELD_WIDTH, SEARCH_FIELD_HEIGHT), egui::Sense::click());
     let hover_t = if response.hovered() { 1.0_f32 } else { 0.0_f32 };
     let border = if active { ACCENT_CYAN } else { SEPARATOR };
-    ui.painter().rect_filled(rect, 6.0, BG_CARD.lerp_to_gamma(BG_CARD_HOVER, hover_t));
+    ui.painter().rect_filled(rect, RADIUS_SM, BG_CARD.lerp_to_gamma(BG_CARD_HOVER, hover_t));
     ui.painter().rect_stroke(
         rect,
         6.0,
@@ -2028,8 +2099,8 @@ fn back_button(ui: &mut egui::Ui, label: &str) -> bool {
     let press_t = if response.is_pointer_button_down_on() { 1.0_f32 } else { 0.0_f32 };
     let hover_t = if response.hovered() { 1.0_f32 } else { 0.0_f32 };
     let rect = rect.shrink(press_t * (PRESS_SHRINK * 0.6));
-    ui.painter().rect_filled(rect, 6.0, BG_CARD.lerp_to_gamma(BG_CARD_HOVER, hover_t));
-    ui.painter().rect_stroke(rect, 6.0, egui::Stroke::new(1.0_f32, SEPARATOR), egui::StrokeKind::Inside);
+    ui.painter().rect_filled(rect, RADIUS_SM, BG_CARD.lerp_to_gamma(BG_CARD_HOVER, hover_t));
+    ui.painter().rect_stroke(rect, RADIUS_SM, egui::Stroke::new(1.0_f32, SEPARATOR), egui::StrokeKind::Inside);
     let chevron_x = rect.left() + 20.0;
     let mid_y = rect.center().y;
     let stroke = egui::Stroke::new(2.0_f32, ACCENT_CYAN);
@@ -2118,8 +2189,8 @@ fn install_status(ui: &mut egui::Ui, progress: &crate::install::Progress) -> boo
         Progress::Failed(_) => (egui::Color32::from_rgb(0x3a, 0x1c, 0x1c), egui::Color32::from_rgb(0xff, 0x6b, 0x6b)),
         _ => (BG_CARD_HOVER, TEXT_DIM),
     };
-    ui.painter().rect_filled(rect, 6.0, fill);
-    ui.painter().rect_stroke(rect, 6.0, egui::Stroke::new(1.0_f32, ACCENT_STEAM), egui::StrokeKind::Inside);
+    ui.painter().rect_filled(rect, RADIUS_SM, fill);
+    ui.painter().rect_stroke(rect, RADIUS_SM, egui::Stroke::new(1.0_f32, ACCENT_STEAM), egui::StrokeKind::Inside);
     ui.painter().text(
         rect.center(),
         egui::Align2::CENTER_CENTER,
@@ -2167,8 +2238,8 @@ fn cancel_button(ui: &mut egui::Ui, label: &str) -> bool {
     } else {
         (BG_CARD_HOVER, SEPARATOR)
     };
-    ui.painter().rect_filled(rect, 6.0, fill);
-    ui.painter().rect_stroke(rect, 6.0, egui::Stroke::new(1.0_f32, stroke), egui::StrokeKind::Inside);
+    ui.painter().rect_filled(rect, RADIUS_SM, fill);
+    ui.painter().rect_stroke(rect, RADIUS_SM, egui::Stroke::new(1.0_f32, stroke), egui::StrokeKind::Inside);
     ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, label, font(FONT_SMALL), TEXT_WHITE);
     response.clicked()
 }
@@ -2183,7 +2254,7 @@ fn play_install_button(ui: &mut egui::Ui, label: &str, state: InstallState) -> b
         InstallState::Absent | InstallState::Installed => (BLUE_PLAY, BLUE_PLAY_HOVER),
     };
     let bg = base.lerp_to_gamma(hover, hover_t);
-    ui.painter().rect_filled(rect, 6.0, bg);
+    ui.painter().rect_filled(rect, RADIUS_SM, bg);
     ui.painter().text(
         rect.center(),
         egui::Align2::CENTER_CENTER,
@@ -2232,8 +2303,8 @@ fn draw_screenshot(
     category: Category,
     fetch: bool,
 ) {
-    ui.painter().rect_filled(rect, 8.0, BG_DEEP);
-    ui.painter().rect_stroke(rect, 8.0, egui::Stroke::new(1.0_f32, SEPARATOR), egui::StrokeKind::Inside);
+    ui.painter().rect_filled(rect, RADIUS_MD, BG_DEEP);
+    ui.painter().rect_stroke(rect, RADIUS_MD, egui::Stroke::new(1.0_f32, SEPARATOR), egui::StrokeKind::Inside);
     if !fetch {
         return;
     }
@@ -2244,7 +2315,7 @@ fn draw_screenshot(
             egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
             TEXT_WHITE,
         );
-        ui.painter().rect_stroke(rect, 8.0, egui::Stroke::new(1.0_f32, SEPARATOR), egui::StrokeKind::Inside);
+        ui.painter().rect_stroke(rect, RADIUS_MD, egui::Stroke::new(1.0_f32, SEPARATOR), egui::StrokeKind::Inside);
         return;
     }
     if icons.is_loading(url, super::icons::MAX_SCREENSHOT_SIDE) {
@@ -2329,4 +2400,3 @@ fn draw_icon(ui: &mut egui::Ui, icons: &IconCache, rect: egui::Rect, entry: &cra
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(80));
     }
 }
-

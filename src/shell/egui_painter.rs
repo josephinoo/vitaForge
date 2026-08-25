@@ -295,31 +295,13 @@ impl SdlEguiPainter {
             let is_new = self.is_new_creation(*texture_id, delta.pos);
             let pixel_bytes = scratch.len();
             if is_new && (serviced_this_frame >= MAX_PENDING_SERVICED_PER_FRAME || !budget.can_upload_bytes(pixel_bytes)) {
-                self.enqueue_pending(
-                    *texture_id,
-                    PendingUpload {
-                        size: delta.image.size(),
-                        pos: delta.pos,
-                        pixels: scratch.clone(),
-                        attempts: 0,
-                        next_retry_at: std::time::Instant::now(),
-                    },
-                );
+                self.defer_upload(*texture_id, delta.image.size(), delta.pos, &scratch);
                 continue;
             }
             if is_new && Self::is_hero_class_size(delta.image.size()) {
                 let would_create = self.hero_free_pool.is_empty();
                 if (would_create && !budget.can_create()) || !budget.can_upload_bytes(pixel_bytes) {
-                    self.enqueue_pending(
-                        *texture_id,
-                        PendingUpload {
-                            size: delta.image.size(),
-                            pos: None,
-                            pixels: scratch.clone(),
-                            attempts: 0,
-                            next_retry_at: std::time::Instant::now(),
-                        },
-                    );
+                    self.defer_upload(*texture_id, delta.image.size(), None, &scratch);
                     continue;
                 }
                 serviced_this_frame += 1;
@@ -338,16 +320,7 @@ impl SdlEguiPainter {
             if is_new && Self::is_icon_class_size(delta.image.size()) {
                 let would_create = self.icon_free_pool.is_empty();
                 if (would_create && !budget.can_create()) || !budget.can_upload_bytes(pixel_bytes) {
-                    self.enqueue_pending(
-                        *texture_id,
-                        PendingUpload {
-                            size: delta.image.size(),
-                            pos: None,
-                            pixels: scratch.clone(),
-                            attempts: 0,
-                            next_retry_at: std::time::Instant::now(),
-                        },
-                    );
+                    self.defer_upload(*texture_id, delta.image.size(), None, &scratch);
                     continue;
                 }
                 serviced_this_frame += 1;
@@ -364,16 +337,7 @@ impl SdlEguiPainter {
                 continue;
             }
             if is_new && (!budget.can_create() || !budget.can_upload_bytes(pixel_bytes)) {
-                self.enqueue_pending(
-                    *texture_id,
-                    PendingUpload {
-                        size: delta.image.size(),
-                        pos: delta.pos,
-                        pixels: scratch.clone(),
-                        attempts: 0,
-                        next_retry_at: std::time::Instant::now(),
-                    },
-                );
+                self.defer_upload(*texture_id, delta.image.size(), delta.pos, &scratch);
                 continue;
             }
             if is_new {
@@ -517,6 +481,24 @@ impl SdlEguiPainter {
             self.pending.remove(&victim);
             self.dropped.push(victim);
         }
+    }
+    fn defer_upload(
+        &mut self,
+        texture_id: egui::TextureId,
+        size: [usize; 2],
+        pos: Option<[usize; 2]>,
+        pixels: &[u8],
+    ) {
+        self.enqueue_pending(
+            texture_id,
+            PendingUpload {
+                size,
+                pos,
+                pixels: pixels.to_vec(),
+                attempts: 0,
+                next_retry_at: std::time::Instant::now(),
+            },
+        );
     }
     fn enqueue_pending(&mut self, texture_id: egui::TextureId, upload: PendingUpload) {
         self.make_pending_room(texture_id);

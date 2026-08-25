@@ -249,6 +249,8 @@ pub struct AppEntry {
     #[serde(default)]
     pub data_url: Option<String>,
     #[serde(default)]
+    pub data_extract_path: Option<String>,
+    #[serde(default)]
     pub data_size_bytes: u64,
     pub size_bytes: u64,
     pub downloads: u64,
