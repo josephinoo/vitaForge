@@ -148,20 +148,7 @@ impl SdlEguiPainter {
         for texture_id in &textures_delta.free {
             self.pending.remove(texture_id);
             let Some(freed) = self.textures.remove(texture_id) else { continue };
-            let query = freed.texture.query();
-            if query.width == MAX_ICON_SIDE
-                && query.height == MAX_ICON_SIDE
-                && self.icon_free_pool.len() < ICON_FREE_POOL_CAP
-            {
-                self.icon_free_pool.push(freed.texture);
-            } else if query.width == HERO_SIDE
-                && query.height == HERO_SIDE
-                && self.hero_free_pool.len() < HERO_FREE_POOL_CAP
-            {
-                self.hero_free_pool.push(freed.texture);
-            } else {
-                unsafe { freed.texture.destroy() };
-            }
+            self.recycle(freed.texture);
         }
         Ok(PaintStats { texture_apply_secs, geometry_secs, draw_calls, textures_uploaded, vertices_drawn })
     }
@@ -413,7 +400,7 @@ impl SdlEguiPainter {
         let cap = HERO_SIDE as f32;
         let uv_scale = egui::vec2(width as f32 / cap, height as f32 / cap);
         if let Some(previous) = self.textures.insert(texture_id, SdlEguiTexture { texture, uv_scale }) {
-            unsafe { previous.texture.destroy() };
+            self.recycle(previous.texture);
         }
     }
     fn try_upload_icon(
@@ -466,7 +453,23 @@ impl SdlEguiPainter {
         let cap = MAX_ICON_SIDE as f32;
         let uv_scale = egui::vec2(width as f32 / cap, height as f32 / cap);
         if let Some(previous) = self.textures.insert(texture_id, SdlEguiTexture { texture, uv_scale }) {
-            unsafe { previous.texture.destroy() };
+            self.recycle(previous.texture);
+        }
+    }
+    fn recycle(&mut self, texture: sdl2::render::Texture) {
+        let query = texture.query();
+        if query.width == MAX_ICON_SIDE
+            && query.height == MAX_ICON_SIDE
+            && self.icon_free_pool.len() < ICON_FREE_POOL_CAP
+        {
+            self.icon_free_pool.push(texture);
+        } else if query.width == HERO_SIDE
+            && query.height == HERO_SIDE
+            && self.hero_free_pool.len() < HERO_FREE_POOL_CAP
+        {
+            self.hero_free_pool.push(texture);
+        } else {
+            unsafe { texture.destroy() };
         }
     }
     fn make_pending_room(&mut self, keep: egui::TextureId) {

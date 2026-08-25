@@ -601,12 +601,6 @@ fn evict_stale(
         to_remove.push((max_side, url));
     }
 
-    if !to_remove.is_empty() {
-        crate::install::log_file(&format!(
-            "icon evict: dropping {} textures (protect_after={protect_after}, ready={ready}, bytes={resident_bytes})",
-            to_remove.len()
-        ));
-    }
     for (max_side, url) in to_remove {
         if let Some(bucket) = entries.get_mut(&max_side) {
             bucket.remove(&url);
