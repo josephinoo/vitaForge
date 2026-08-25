@@ -92,21 +92,29 @@ pub fn plan_resume(
 }
 pub struct ProgressReporter<'a> {
     tx: &'a watch::Sender<crate::install::Progress>,
-    make: fn(u64, Option<u64>) -> crate::install::Progress,
+    make: fn(u64, Option<u64>, u32) -> crate::install::Progress,
     last_sent: Instant,
     interval: Duration,
+    started_at: Instant,
 }
 impl<'a> ProgressReporter<'a> {
     pub fn new(
         tx: &'a watch::Sender<crate::install::Progress>,
-        make: fn(u64, Option<u64>) -> crate::install::Progress,
+        make: fn(u64, Option<u64>, u32) -> crate::install::Progress,
     ) -> Self {
-        Self { tx, make, last_sent: Instant::now() - Duration::from_secs(1), interval: Duration::from_millis(250) }
+        Self {
+            tx,
+            make,
+            last_sent: Instant::now() - Duration::from_secs(1),
+            interval: Duration::from_millis(250),
+            started_at: Instant::now(),
+        }
     }
     pub fn record(&mut self, received: u64, total: Option<u64>) {
         if self.last_sent.elapsed() >= self.interval {
             self.last_sent = Instant::now();
-            let _ = self.tx.send((self.make)(received, total));
+            let elapsed = self.started_at.elapsed().as_secs() as u32;
+            let _ = self.tx.send((self.make)(received, total, elapsed));
         }
     }
 }

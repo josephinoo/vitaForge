@@ -714,6 +714,7 @@ pub enum AppState {
         comments_loaded: bool,
         comment_entry_requested: bool,
         lightbox: Option<usize>,
+        data_prompt: bool,
     },
     Settings {
         previous: Box<CatalogState>,
@@ -1010,6 +1011,9 @@ impl App {
                 if let AppState::Detail { lightbox: Some(_), .. } = &self.state {
                     return self.handle_command(AppCommand::CloseScreenshot);
                 }
+                if matches!(self.state, AppState::Detail { data_prompt: true, .. }) {
+                    return self.handle_command(AppCommand::CancelDataPrompt);
+                }
                 if let AppState::Catalog(catalog) = &mut self.state {
                     if catalog.tab == StoreTab::Discover && !catalog.discover_home {
                         catalog.discover_home = true;
@@ -1089,6 +1093,9 @@ impl App {
                 }
             }
             AppCommand::Input(InputCommand::Confirm) => {
+                if matches!(self.state, AppState::Detail { data_prompt: true, .. }) {
+                    return self.handle_command(AppCommand::InstallCurrent);
+                }
                 if let AppState::Catalog(catalog) = &self.state
                     && catalog.shows_discover_home()
                 {
@@ -1297,6 +1304,15 @@ impl App {
             AppCommand::BackToCatalog => self.back_to_catalog(),
             AppCommand::InstallCurrent => {
                 let busy = self.install.as_ref().is_some_and(|job| !job.progress.is_finished());
+                if let AppState::Detail { app, data_prompt, .. } = &mut self.state
+                    && !busy
+                    && app.data_url.is_some()
+                    && !*data_prompt
+                {
+                    *data_prompt = true;
+                    self.audio.play(crate::audio::Sfx::ShowModal);
+                    return Ok(());
+                }
                 if let AppState::Detail { app, .. } = &self.state
                     && !busy
                 {
@@ -1308,6 +1324,17 @@ impl App {
                     let progress = rx.borrow().clone();
                     self.install = Some(InstallJob { app_id, app_id_title, title, progress, rx, cancel });
                     self.audio.play(crate::audio::Sfx::Launch);
+                    if let AppState::Detail { data_prompt, .. } = &mut self.state {
+                        *data_prompt = false;
+                    }
+                }
+            }
+            AppCommand::CancelDataPrompt => {
+                if let AppState::Detail { data_prompt, .. } = &mut self.state
+                    && *data_prompt
+                {
+                    *data_prompt = false;
+                    self.audio.play(crate::audio::Sfx::HideModal);
                 }
             }
             AppCommand::DismissInstall => self.install = None,
@@ -1348,6 +1375,7 @@ impl App {
                         hash: String::new(),
                         hash2: String::new(),
                         data_url: None,
+                        data_extract_path: None,
                         data_size_bytes: 0,
                         size_bytes: 0,
                         downloads: 0,
@@ -1551,6 +1579,7 @@ impl App {
             comments: Vec::new(),
             comments_loaded: false,
             comment_entry_requested: false,
+            data_prompt: false,
             lightbox: None,
         };
         let AppState::Catalog(mut catalog) = std::mem::replace(&mut self.state, placeholder) else {
@@ -1589,6 +1618,7 @@ impl App {
             comments: Vec::new(),
             comments_loaded: false,
             comment_entry_requested: false,
+            data_prompt: false,
             lightbox: None,
         };
         self.audio.play(crate::audio::Sfx::IntoDetail);
@@ -1690,6 +1720,7 @@ mod sort_tests {
             hash: String::new(),
             hash2: String::new(),
             data_url: None,
+            data_extract_path: None,
             data_size_bytes: 0,
             size_bytes,
             downloads,

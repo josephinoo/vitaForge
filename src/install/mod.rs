@@ -28,8 +28,8 @@ const PLUGIN_DIR: &str = "ux0:data/vitaforge/plugins";
 #[derive(Clone, Debug, PartialEq)]
 pub enum Progress {
     Resolving,
-    DownloadingData { received: u64, total: Option<u64> },
-    Downloading { received: u64, total: Option<u64> },
+    DownloadingData { received: u64, total: Option<u64>, elapsed_secs: u32 },
+    Downloading { received: u64, total: Option<u64>, elapsed_secs: u32 },
 
     Decrypting,
     Extracting { done: u32, total: u32 },
@@ -40,22 +40,41 @@ pub enum Progress {
     Failed(String),
 }
 pub const CANCELLED_MESSAGE: &str = "cancelled";
+fn format_clock(secs: u64) -> String {
+    if secs >= 3600 {
+        format!("{}h{:02}m", secs / 3600, (secs % 3600) / 60)
+    } else {
+        format!("{}:{:02}", secs / 60, secs % 60)
+    }
+}
+fn transfer_detail(received: u64, total: Option<u64>, elapsed_secs: u32) -> String {
+    match total {
+        Some(total) if total > 0 => {
+            let percent = (received * 100 / total).min(100);
+            if elapsed_secs >= 2 && received > 0 && received < total {
+                let remaining = (total - received) as f64 * elapsed_secs as f64 / received as f64;
+                format!("{percent}% · {} left", format_clock(remaining as u64))
+            } else {
+                format!("{percent}%")
+            }
+        }
+        _ => format!(
+            "{:.1} MB · {}",
+            received as f64 / (1024.0 * 1024.0),
+            format_clock(elapsed_secs as u64)
+        ),
+    }
+}
 impl Progress {
     pub fn label(&self) -> String {
         match self {
             Progress::Resolving => "Checking latest…".to_owned(),
-            Progress::Downloading { received, total } => match total {
-                Some(total) if *total > 0 => {
-                    format!("[2/3] Downloading {}%", (*received * 100 / *total).min(100))
-                }
-                _ => format!("[2/3] Downloading {:.1} MB", *received as f64 / (1024.0 * 1024.0)),
-            },
-            Progress::DownloadingData { received, total } => match total {
-                Some(total) if *total > 0 => {
-                    format!("[1/3] Game data {}%", (*received * 100 / *total).min(100))
-                }
-                _ => format!("[1/3] Game data {:.1} MB", *received as f64 / (1024.0 * 1024.0)),
-            },
+            Progress::Downloading { received, total, elapsed_secs } => {
+                format!("[2/3] Downloading {}", transfer_detail(*received, *total, *elapsed_secs))
+            }
+            Progress::DownloadingData { received, total, elapsed_secs } => {
+                format!("[1/3] Game data {}", transfer_detail(*received, *total, *elapsed_secs))
+            }
             Progress::Decrypting => "[3/3] Decrypting…".to_owned(),
             Progress::Extracting { done, total } if *total > 0 => {
                 format!("[3/3] Extracting {done}/{total} ({}%)", (*done as u64 * 100 / *total as u64).min(100))
@@ -144,6 +163,39 @@ fn check_cancelled(cancel: &AtomicBool) -> Result<()> {
         bail!(CANCELLED_MESSAGE);
     }
     Ok(())
+}
+fn required_bytes(size_bytes: u64, data_size_bytes: u64) -> u64 {
+    size_bytes
+        .saturating_add(data_size_bytes)
+        .saturating_mul(2)
+}
+fn check_free_space(size_bytes: u64, data_size_bytes: u64, storage: Option<(u64, u64)>) -> Result<()> {
+    let required = required_bytes(size_bytes, data_size_bytes);
+    if required == 0 {
+        return Ok(());
+    }
+    let Some((used, total)) = storage else {
+        return Ok(());
+    };
+    let available = total.saturating_sub(used);
+    if available < required {
+        bail!(
+            "not enough free space: {} required, {} available",
+            crate::data::cache_manager::format_bytes(required),
+            crate::data::cache_manager::format_bytes(available)
+        );
+    }
+    Ok(())
+}
+fn sanitize_data_dest(path: &str) -> Result<PathBuf> {
+    let allowed = ["ux0:", "ur0:", "uma0:"];
+    if !allowed.iter().any(|root| path.starts_with(root)) {
+        bail!("game data extract path '{path}' must start with ux0:, ur0: or uma0:");
+    }
+    if path.split(['/', '\\']).any(|part| part == "..") {
+        bail!("game data extract path '{path}' must not contain '..'");
+    }
+    Ok(PathBuf::from(path))
 }
 pub fn start(entry: AppEntry) -> (watch::Receiver<Progress>, Arc<AtomicBool>) {
     log_file(&format!("Install requested for '{}' (platform: {:?}, url: '{}')", entry.name, entry.platform, entry.download_url));
@@ -328,6 +380,11 @@ async fn run_vita(entry: &AppEntry, tx: &watch::Sender<Progress>, cancel: &Arc<A
     if url.is_empty() {
         bail!("no download link for this app");
     }
+    check_free_space(
+        entry.size_bytes,
+        entry.data_size_bytes,
+        crate::app::sysinfo::storage("ux0:"),
+    )?;
     std::fs::create_dir_all(WORK_DIR).context("couldn't create the work folder")?;
     let _ = std::fs::remove_dir_all(EXTRACT_DIR);
     let _ = std::fs::remove_dir_all(DATA_STAGE_DIR);
@@ -372,7 +429,15 @@ async fn run_vita(entry: &AppEntry, tx: &watch::Sender<Progress>, cancel: &Arc<A
         bail!("the system didn't accept the package");
     }
     if Path::new(DATA_STAGE_DIR).exists() {
-        tokio::task::spawn_blocking(|| merge_into(Path::new(DATA_STAGE_DIR), Path::new(DATA_ROOT)))
+        let data_dest = entry
+            .data_extract_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .map(sanitize_data_dest)
+            .transpose()?
+            .unwrap_or_else(|| PathBuf::from(DATA_ROOT));
+        tokio::task::spawn_blocking(move || merge_into(Path::new(DATA_STAGE_DIR), &data_dest))
             .await
             .context("the data worker crashed")??;
         let _ = std::fs::remove_dir_all(DATA_STAGE_DIR);
@@ -381,7 +446,11 @@ async fn run_vita(entry: &AppEntry, tx: &watch::Sender<Progress>, cancel: &Arc<A
 }
 async fn stage_data(url: &str, tx: &watch::Sender<Progress>, cancel: &Arc<AtomicBool>) -> Result<()> {
     let dest = Path::new(TEMP_DATA);
-    download_with(url, dest, tx, cancel, |received, total| Progress::DownloadingData { received, total })
+    download_with(url, dest, tx, cancel, |received, total, elapsed_secs| Progress::DownloadingData {
+        received,
+        total,
+        elapsed_secs,
+    })
         .await
         .context("couldn't download the required game data")?;
     let _ = tx.send(Progress::Extracting { done: 0, total: 0 });
@@ -421,14 +490,19 @@ fn merge_into(from: &Path, to: &Path) -> Result<()> {
     Ok(())
 }
 async fn download(url: &str, dest: &Path, tx: &watch::Sender<Progress>, cancel: &Arc<AtomicBool>) -> Result<()> {
-    download_with(url, dest, tx, cancel, |received, total| Progress::Downloading { received, total }).await
+    download_with(url, dest, tx, cancel, |received, total, elapsed_secs| Progress::Downloading {
+        received,
+        total,
+        elapsed_secs,
+    })
+    .await
 }
 async fn download_with(
     url: &str,
     dest: &Path,
     tx: &watch::Sender<Progress>,
     cancel: &Arc<AtomicBool>,
-    progress: fn(u64, Option<u64>) -> Progress,
+    progress: fn(u64, Option<u64>, u32) -> Progress,
 ) -> Result<()> {
     let mut sink = download::FileSink::open(dest)?;
     let mut reporter = download::ProgressReporter::new(tx, progress);
@@ -474,4 +548,60 @@ fn extract(
     }
     on_progress(total, total);
     Ok(())
+}
+#[cfg(test)]
+mod tests {
+    use super::{check_free_space, required_bytes, sanitize_data_dest, transfer_detail};
+    #[test]
+    fn shows_percent_and_eta_once_there_is_history() {
+        assert_eq!(transfer_detail(50, Some(100), 10), "50% · 0:10 left");
+    }
+    #[test]
+    fn holds_back_the_eta_until_the_sample_is_meaningful() {
+        assert_eq!(transfer_detail(10, Some(100), 0), "10%");
+        assert_eq!(transfer_detail(0, Some(100), 5), "0%");
+        assert_eq!(transfer_detail(100, Some(100), 5), "100%");
+    }
+    #[test]
+    fn falls_back_to_size_and_elapsed_without_a_content_length() {
+        assert_eq!(transfer_detail(2 * 1024 * 1024, None, 65), "2.0 MB · 1:05");
+        assert_eq!(transfer_detail(0, Some(0), 3), "0.0 MB · 0:03");
+    }
+    #[test]
+    fn accepts_allowed_roots() {
+        assert!(sanitize_data_dest("ux0:data/SOMEGAME").is_ok());
+        assert!(sanitize_data_dest("ur0:data/SOMEGAME").is_ok());
+        assert!(sanitize_data_dest("uma0:data/SOMEGAME").is_ok());
+    }
+    #[test]
+    fn rejects_missing_volume_root() {
+        assert!(sanitize_data_dest("data/SOMEGAME").is_err());
+        assert!(sanitize_data_dest("/etc/passwd").is_err());
+        assert!(sanitize_data_dest("").is_err());
+    }
+    #[test]
+    fn rejects_path_traversal() {
+        assert!(sanitize_data_dest("ux0:data/../app").is_err());
+        assert!(sanitize_data_dest("ux0:data/SOMEGAME/../../app").is_err());
+    }
+    #[test]
+    fn required_space_accounts_for_download_and_extraction() {
+        assert_eq!(required_bytes(100, 50), 300);
+        assert_eq!(required_bytes(0, 0), 0);
+        assert_eq!(required_bytes(u64::MAX, 1), u64::MAX);
+    }
+    #[test]
+    fn skips_space_check_when_sizes_or_storage_are_unknown() {
+        assert!(check_free_space(0, 0, Some((100, 100))).is_ok());
+        assert!(check_free_space(100, 50, None).is_ok());
+    }
+    #[test]
+    fn compares_required_space_with_available_space() {
+        assert!(check_free_space(100, 50, Some((700, 1_000))).is_ok());
+        let error = check_free_space(100, 50, Some((701, 1_000))).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "not enough free space: 300 B required, 299 B available"
+        );
+    }
 }
