@@ -1,10 +1,7 @@
 use crate::data::{SortDirection, SortOrder};
 use serde::{Deserialize, Serialize};
 
-#[cfg(target_os = "vita")]
 const SETTINGS_PATH: &str = "ux0:data/vitaforge/settings.json";
-#[cfg(not(target_os = "vita"))]
-const SETTINGS_PATH: &str = "data/vitaforge/settings.json";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
 pub struct Settings {
@@ -12,6 +9,14 @@ pub struct Settings {
     pub sort_order: SortOrder,
     #[serde(default)]
     pub sort_direction: SortDirection,
+    #[serde(default)]
+    pub language: Option<crate::app::i18n::Language>,
+}
+
+pub fn set_language(language: crate::app::i18n::Language) {
+    let mut settings = load();
+    settings.language = Some(language);
+    save(&settings);
 }
 
 pub fn load() -> Settings {

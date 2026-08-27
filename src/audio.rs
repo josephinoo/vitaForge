@@ -117,19 +117,12 @@ fn load(map: &mut HashMap<Sfx, WavSound>, effect: Sfx, bytes: &[u8]) {
 
 const GRAIN_SIZE: usize = 512;
 
-#[cfg(target_os = "vita")]
 fn open_port(sample_rate: u32, channels: u16) -> i32 {
     use vitasdk_sys::*;
     let mode = if channels == 1 { SCE_AUDIO_OUT_MODE_MONO } else { SCE_AUDIO_OUT_MODE_STEREO };
     unsafe { sceAudioOutOpenPort(SCE_AUDIO_OUT_PORT_TYPE_MAIN, GRAIN_SIZE as i32, sample_rate as i32, mode as u32) }
 }
 
-#[cfg(not(target_os = "vita"))]
-fn open_port(_sample_rate: u32, _channels: u16) -> i32 {
-    -1
-}
-
-#[cfg(target_os = "vita")]
 fn close_port(port: i32) {
     if port >= 0 {
         unsafe {
@@ -138,10 +131,6 @@ fn close_port(port: i32) {
     }
 }
 
-#[cfg(not(target_os = "vita"))]
-fn close_port(_port: i32) {}
-
-#[cfg(target_os = "vita")]
 fn play_sound_on_hardware(port: i32, sound: &WavSound) {
     if port < 0 {
         return;
@@ -160,6 +149,3 @@ fn play_sound_on_hardware(port: i32, sound: &WavSound) {
         }
     }
 }
-
-#[cfg(not(target_os = "vita"))]
-fn play_sound_on_hardware(_port: i32, _sound: &WavSound) {}

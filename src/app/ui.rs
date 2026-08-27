@@ -159,36 +159,7 @@ pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
             app.install.as_ref().map(|j| &j.progress),
             self_update,
         ),
-        AppState::Catalog(catalog) => catalog_screen(
-            ctx,
-            &app.icons,
-            &app.installed,
-            app.lang,
-            &catalog.apps,
-            &catalog.filtered_indices,
-            &catalog.search_query,
-            catalog.search_requested,
-            catalog.category_filter,
-            catalog.source_filter,
-            catalog.sort_order,
-            catalog.sort_direction,
-            catalog.selection_active.then_some(catalog.selected),
-            catalog.scroll_to_selected,
-            catalog.scroll_reset,
-            catalog.is_commercial_view,
-            &catalog.source_counts,
-            catalog.total_unique_count,
-            &catalog.category_counts,
-            catalog.featured_index,
-            catalog.tab,
-            catalog.discover_home,
-            catalog.discover_focus,
-            catalog.scroll_category_into_view,
-            &catalog.top_rail,
-            &catalog.recent_rail,
-            self_update,
-            self_update_progress,
-        ),
+        AppState::Catalog(catalog) => catalog_view(ctx, app, catalog, self_update, self_update_progress),
         AppState::Detail { app: entry, scroll_delta, comments, comments_loaded, comment_entry_requested, lightbox, data_prompt, .. } => {
             let progress = app
                 .install
@@ -211,14 +182,18 @@ pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
                 *data_prompt,
             )
         }
-        AppState::Settings { selected, previous } => settings_screen(
-            ctx,
-            app.lang,
-            *selected,
-            previous.apps.len(),
-            &app.cache_stats,
-            app.cache_notice.as_deref(),
-        ),
+        AppState::Settings { selected, previous } => {
+            let mut commands = catalog_view(ctx, app, previous, self_update, self_update_progress);
+            commands.extend(settings_modal(
+                ctx,
+                app.lang,
+                *selected,
+                previous.apps.len(),
+                &app.cache_stats,
+                app.cache_notice.as_deref(),
+            ));
+            commands
+        }
     };
     app.icons.maintain(ctx);
     if app.icons.rate_limited_for().is_some() {
@@ -226,7 +201,45 @@ pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
     }
     commands
 }
-fn settings_screen(
+fn catalog_view(
+    ctx: &egui::Context,
+    app: &App,
+    catalog: &super::CatalogState,
+    self_update: Option<&super::SelfUpdateInfo>,
+    self_update_progress: Option<&crate::install::Progress>,
+) -> Vec<AppCommand> {
+    catalog_screen(
+        ctx,
+        &app.icons,
+        &app.installed,
+        app.lang,
+        &catalog.apps,
+        &catalog.filtered_indices,
+        &catalog.search_query,
+        catalog.search_requested,
+        catalog.category_filter,
+        catalog.source_filter,
+        catalog.sort_order,
+        catalog.sort_direction,
+        catalog.selection_active.then_some(catalog.selected),
+        catalog.scroll_to_selected,
+        catalog.scroll_reset,
+        catalog.is_commercial_view,
+        &catalog.source_counts,
+        catalog.total_unique_count,
+        &catalog.category_counts,
+        catalog.featured_index,
+        catalog.tab,
+        catalog.discover_home,
+        catalog.discover_focus,
+        catalog.scroll_category_into_view,
+        &catalog.top_rail,
+        &catalog.recent_rail,
+        self_update,
+        self_update_progress,
+    )
+}
+fn settings_modal(
     ctx: &egui::Context,
     lang: Language,
     selected: usize,
@@ -235,63 +248,85 @@ fn settings_screen(
     cache_notice: Option<&str>,
 ) -> Vec<AppCommand> {
     let mut commands = Vec::new();
-    egui::TopBottomPanel::top("settings_header")
-        .frame(egui::Frame::NONE.fill(glass(BG_HEADER)).inner_margin(egui::vec2(SCREEN_MARGIN, 8.0)))
+    egui::Area::new(egui::Id::new("settings_modal_backdrop"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(egui::Pos2::ZERO)
         .show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                if back_button(ui, lang.back()) {
-                    commands.push(AppCommand::CloseSettings);
-                }
-            });
-        });
-    button_hints(ctx, &[(Glyph::Circle, lang.btn_back()), (Glyph::Cross, lang.btn_open())], None, None);
-    egui::CentralPanel::default()
-        .frame(egui::Frame::NONE.inner_margin(SCREEN_MARGIN))
-        .show(ctx, |ui| {
-            paint_background(ui.painter(), ui.ctx().screen_rect());
-            ui.label(egui::RichText::new(lang.settings_title()).size(FONT_TITLE).strong().color(TEXT_WHITE));
-            ui.add_space(16.0);
-            ui.label(egui::RichText::new(lang.language_label()).size(FONT_BODY).color(TEXT_DIM));
-            ui.add_space(8.0);
-            if dropdown_row(ui, "English", selected == 0) {
-                commands.push(AppCommand::SetLanguage(Language::English));
+            let screen = ui.ctx().screen_rect();
+            let panel = egui::Rect::from_center_size(screen.center(), egui::vec2(650.0, 410.0));
+            let backdrop = ui.interact(screen, ui.id().with("dismiss"), egui::Sense::click());
+            ui.painter().rect_filled(screen, 0.0, egui::Color32::from_black_alpha(175));
+            if backdrop.clicked() && !backdrop.interact_pointer_pos().is_some_and(|pos| panel.contains(pos)) {
+                commands.push(AppCommand::CloseSettings);
             }
-            if dropdown_row(ui, "Español", selected == 1) {
-                commands.push(AppCommand::SetLanguage(Language::Spanish));
-            }
-            ui.add_space(18.0);
-            ui.label(egui::RichText::new(lang.settings_storage()).size(FONT_BODY).color(TEXT_DIM));
-            ui.add_space(8.0);
-            let info_rows = [
-                (lang.settings_version(), format!("VitaForge {}", env!("CARGO_PKG_VERSION"))),
-                (lang.settings_catalog(), format!("{catalog_count}")),
-                (lang.settings_icon_cache(), crate::data::cache_manager::format_bytes(stats.icons_bytes)),
-                (lang.settings_catalog_cache(), crate::data::cache_manager::format_bytes(stats.catalog_bytes)),
-                (lang.settings_hash_cache(), crate::data::cache_manager::format_bytes(stats.hashes_bytes)),
-                (lang.settings_total(), crate::data::cache_manager::format_bytes(stats.total_bytes)),
-            ];
-            for (label, value) in info_rows {
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(label).size(FONT_SMALL).color(TEXT_DIM));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(egui::RichText::new(value).size(FONT_SMALL).color(TEXT_WHITE));
+            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(panel), |ui| {
+                egui::Frame::new()
+                    .fill(BG_CARD)
+                    .stroke(egui::Stroke::new(1.0, GLASS_EDGE))
+                    .corner_radius(egui::CornerRadius::same(CARD_RADIUS as u8))
+                    .inner_margin(egui::Margin::same(20))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new(lang.settings_title()).size(FONT_LARGE).strong().color(TEXT_WHITE));
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if back_button(ui, lang.back()) {
+                                    commands.push(AppCommand::CloseSettings);
+                                }
+                            });
+                        });
+                        ui.add_space(12.0);
+                        ui.separator();
+                        ui.add_space(10.0);
+                        ui.horizontal_top(|ui| {
+                            ui.vertical(|ui| {
+                                ui.set_width(180.0);
+                                ui.label(egui::RichText::new(lang.language_label()).size(FONT_SMALL).color(TEXT_DIM));
+                                ui.add_space(8.0);
+                                for (index, language) in Language::ALL.into_iter().enumerate() {
+                                    if dropdown_row(ui, language.label(), selected == index) {
+                                        commands.push(AppCommand::SetLanguage(language));
+                                    }
+                                }
+                            });
+                            ui.add_space(22.0);
+                            ui.vertical(|ui| {
+                                ui.set_width(390.0);
+                                ui.label(egui::RichText::new(lang.settings_storage()).size(FONT_SMALL).color(TEXT_DIM));
+                                ui.add_space(6.0);
+                                let info_rows = [
+                                    (lang.settings_version(), format!("VitaForge {}", env!("CARGO_PKG_VERSION"))),
+                                    (lang.settings_catalog(), format!("{catalog_count}")),
+                                    (lang.settings_icon_cache(), crate::data::cache_manager::format_bytes(stats.icons_bytes)),
+                                    (lang.settings_catalog_cache(), crate::data::cache_manager::format_bytes(stats.catalog_bytes)),
+                                    (lang.settings_hash_cache(), crate::data::cache_manager::format_bytes(stats.hashes_bytes)),
+                                    (lang.settings_total(), crate::data::cache_manager::format_bytes(stats.total_bytes)),
+                                ];
+                                for (label, value) in info_rows {
+                                    ui.horizontal(|ui| {
+                                        ui.label(egui::RichText::new(label).size(FONT_MICRO).color(TEXT_DIM));
+                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                            ui.label(egui::RichText::new(value).size(FONT_MICRO).color(TEXT_WHITE));
+                                        });
+                                    });
+                                }
+                                ui.add_space(10.0);
+                                if dropdown_row(ui, lang.settings_clear_icons(), selected == 5) {
+                                    commands.push(AppCommand::ClearIconCache);
+                                }
+                                if dropdown_row(ui, lang.settings_clear_catalog(), selected == 6) {
+                                    commands.push(AppCommand::ClearCatalogCache);
+                                }
+                                if dropdown_row(ui, lang.settings_purge_all(), selected == 7) {
+                                    commands.push(AppCommand::PurgeAllCache);
+                                }
+                            });
+                        });
+                        if let Some(notice) = cache_notice {
+                            ui.add_space(8.0);
+                            ui.label(egui::RichText::new(notice).size(FONT_SMALL).color(GREEN_PLAY));
+                        }
                     });
-                });
-            }
-            ui.add_space(12.0);
-            if dropdown_row(ui, lang.settings_clear_icons(), selected == 2) {
-                commands.push(AppCommand::ClearIconCache);
-            }
-            if dropdown_row(ui, lang.settings_clear_catalog(), selected == 3) {
-                commands.push(AppCommand::ClearCatalogCache);
-            }
-            if dropdown_row(ui, lang.settings_purge_all(), selected == 4) {
-                commands.push(AppCommand::PurgeAllCache);
-            }
-            if let Some(notice) = cache_notice {
-                ui.add_space(16.0);
-                ui.label(egui::RichText::new(notice).size(FONT_SMALL).color(GREEN_PLAY));
-            }
+            });
         });
     commands
 }
@@ -539,6 +574,7 @@ fn catalog_screen(
                     top_rail,
                     recent_rail,
                     is_commercial_view,
+                    scroll_to_selected,
                     &mut commands,
                 );
                 return;
@@ -780,6 +816,7 @@ fn discover_home_ui(
     top_rail: &[usize],
     recent_rail: &[usize],
     is_commercial_view: bool,
+    scroll_focus_into_view: bool,
     commands: &mut Vec<AppCommand>,
 ) {
     let mut warm = Vec::new();
@@ -798,8 +835,12 @@ fn discover_home_ui(
         }
     }
     icons.prefetch_urls(ui.ctx(), warm);
+    let viewport_height = ui.available_height();
     egui::ScrollArea::vertical()
         .id_salt("discover_home")
+        .max_height(viewport_height)
+        .auto_shrink([false, false])
+        .drag_to_scroll(true)
         .show(ui, |ui| {
             let is_featured = matches!(discover_focus, super::DiscoverFocus::Featured);
             if !is_commercial_view
@@ -811,7 +852,7 @@ fn discover_home_ui(
                         commands.push(AppCommand::SelectAppById(entry.id.clone()));
                     }
                 }).response;
-                if is_featured {
+                if scroll_focus_into_view && is_featured {
                     banner_resp.scroll_to_me(Some(egui::Align::TOP));
                 }
                 ui.add_space(12.0);
@@ -835,7 +876,7 @@ fn discover_home_ui(
                     commands,
                 );
             }).response;
-            if top_selected.is_some() && !is_featured {
+            if scroll_focus_into_view && top_selected.is_some() && !is_featured {
                 top_resp.scroll_to_me(None);
             }
             ui.add_space(14.0);
@@ -858,14 +899,20 @@ fn discover_home_ui(
                     commands,
                 );
             }).response;
-            if new_selected.is_some() {
+            if scroll_focus_into_view && new_selected.is_some() {
                 new_resp.scroll_to_me(None);
             }
             ui.add_space(16.0);
-            if pill_button(ui, lang.see_all_catalog(), false) {
-                commands.push(AppCommand::SeeAllRail(DiscoverRail::Top));
+            let browse_focused = matches!(discover_focus, super::DiscoverFocus::BrowseAll);
+            let browse_resp = ui.scope(|ui| {
+                if pill_button(ui, lang.see_all_catalog(), browse_focused) {
+                    commands.push(AppCommand::SeeAllRail(DiscoverRail::Top));
+                }
+            }).response;
+            ui.add_space(GRID_BOTTOM_PAD + 16.0);
+            if scroll_focus_into_view && browse_focused {
+                browse_resp.scroll_to_me(Some(egui::Align::BOTTOM));
             }
-            ui.add_space(GRID_BOTTOM_PAD + 8.0);
         });
 }
 
@@ -1388,31 +1435,119 @@ fn button_texture(ctx: &egui::Context, glyph: Glyph) -> Option<egui::TextureHand
         Glyph::Shoulders => None,
     }
 }
-fn status_note(installed: &InstalledIndex, icons: &IconCache) -> String {
+enum StatusNote {
+    RateLimited(String),
+    Overview {
+        installed: usize,
+        updates: usize,
+        storage: Option<(f64, f64)>,
+    },
+}
+
+fn status_note(installed: &InstalledIndex, icons: &IconCache) -> StatusNote {
     if let Some(left) = icons.rate_limited_for() {
         let secs = left.as_secs();
-        return if secs >= 60 {
-            format!("server rate limit · art resumes in {}m {:02}s", secs / 60, secs % 60)
+        return StatusNote::RateLimited(if secs >= 60 {
+            format!("Artwork resumes in {}m {:02}s", secs / 60, secs % 60)
         } else {
-            format!("server rate limit · art resumes in {}s", secs.max(1))
-        };
+            format!("Artwork resumes in {}s", secs.max(1))
+        });
     }
     let (installed_count, outdated_count) = installed.counts();
-    let mut parts = vec![installed.summary()];
-    parts.push(format!("{installed_count} installed"));
-    if outdated_count > 0 {
-        parts.push(format!("{outdated_count} updates"));
-    }
-    if let Some((used, total)) = super::sysinfo::storage("ux0:") {
+    let storage = super::sysinfo::storage("ux0:").map(|(used, total)| {
         let gb = |bytes: u64| bytes as f64 / (1024.0 * 1024.0 * 1024.0);
-        parts.push(format!("{:.1}/{:.1} GB", gb(used), gb(total)));
+        (gb(used), gb(total))
+    });
+    StatusNote::Overview {
+        installed: installed_count,
+        updates: outdated_count,
+        storage,
     }
-    parts.join(" · ")
+}
+
+fn status_icon(painter: &egui::Painter, center: egui::Pos2, kind: StatusIcon, color: egui::Color32) {
+    let stroke = egui::Stroke::new(1.35, color);
+    match kind {
+        StatusIcon::Library => {
+            let rect = egui::Rect::from_center_size(center, egui::vec2(9.0, 7.0));
+            painter.rect_stroke(rect, 1.5, stroke, egui::StrokeKind::Inside);
+            painter.line_segment([egui::pos2(rect.left(), center.y - 1.0), egui::pos2(rect.right(), center.y - 1.0)], stroke);
+            painter.line_segment([egui::pos2(center.x, center.y - 1.0), egui::pos2(center.x, rect.bottom())], stroke);
+        }
+        StatusIcon::Update => {
+            painter.line_segment([egui::pos2(center.x, center.y + 4.0), egui::pos2(center.x, center.y - 4.0)], stroke);
+            painter.line_segment([egui::pos2(center.x - 3.0, center.y - 1.0), egui::pos2(center.x, center.y - 4.0)], stroke);
+            painter.line_segment([egui::pos2(center.x + 3.0, center.y - 1.0), egui::pos2(center.x, center.y - 4.0)], stroke);
+            painter.line_segment([egui::pos2(center.x - 4.0, center.y + 4.0), egui::pos2(center.x + 4.0, center.y + 4.0)], stroke);
+        }
+        StatusIcon::Storage => {
+            painter.circle_stroke(center, 4.5, stroke);
+            painter.line_segment([center, egui::pos2(center.x, center.y - 4.5)], stroke);
+            painter.line_segment([center, egui::pos2(center.x + 3.5, center.y + 2.5)], stroke);
+        }
+        StatusIcon::Alert => {
+            let points = [
+                egui::pos2(center.x, center.y - 5.0),
+                egui::pos2(center.x + 5.0, center.y + 4.0),
+                egui::pos2(center.x - 5.0, center.y + 4.0),
+            ];
+            painter.add(egui::Shape::convex_polygon(points.to_vec(), color.gamma_multiply(0.2), stroke));
+            painter.line_segment([egui::pos2(center.x, center.y - 2.0), egui::pos2(center.x, center.y + 1.0)], stroke);
+            painter.circle_filled(egui::pos2(center.x, center.y + 2.8), 0.9, color);
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum StatusIcon {
+    Library,
+    Update,
+    Storage,
+    Alert,
+}
+
+fn status_chip(
+    ui: &mut egui::Ui,
+    pos: egui::Pos2,
+    text: &str,
+    icon: StatusIcon,
+    color: egui::Color32,
+) -> egui::Rect {
+    let galley = ui.fonts(|fonts| fonts.layout_no_wrap(text.to_owned(), font(FONT_MICRO), color));
+    let size = egui::vec2(galley.size().x + 28.0, 22.0);
+    let rect = egui::Rect::from_min_size(pos, size);
+    ui.painter().rect_filled(rect, 11.0, color.gamma_multiply(0.13));
+    ui.painter().rect_stroke(rect, 11.0, egui::Stroke::new(1.0, color.gamma_multiply(0.34)), egui::StrokeKind::Inside);
+    status_icon(ui.painter(), egui::pos2(rect.left() + 11.0, rect.center().y), icon, color);
+    ui.painter().galley(egui::pos2(rect.left() + 20.0, rect.center().y - galley.size().y * 0.5), galley, color);
+    rect
+}
+
+fn status_note_widget(ui: &mut egui::Ui, rect: egui::Rect, note: StatusNote) -> egui::Response {
+    let response = ui.interact(rect, ui.id().with("status_note"), egui::Sense::click());
+    let mut cursor = egui::pos2(rect.left(), rect.center().y - 11.0);
+    let mut paint_chip = |text: &str, icon, color| {
+        let chip = status_chip(ui, cursor, text, icon, color);
+        cursor.x = chip.right() + 5.0;
+    };
+    match note {
+        StatusNote::RateLimited(message) => paint_chip(&message, StatusIcon::Alert, STAR_GOLD),
+        StatusNote::Overview { installed, updates, storage } => {
+            paint_chip(&format!("{installed} installed"), StatusIcon::Library, GREEN_PLAY);
+            if updates > 0 {
+                paint_chip(&format!("{updates} updates"), StatusIcon::Update, STAR_GOLD);
+            }
+            if let Some((used, total)) = storage {
+                paint_chip(&format!("{used:.1}/{total:.1} GB"), StatusIcon::Storage, TEXT_DIM);
+            }
+        }
+    }
+    response
 }
 fn button_hints(
     ctx: &egui::Context,
     hints: &[(Glyph, &str)],
-    note: Option<String>,
+    note: Option<StatusNote>,
     installed: Option<&InstalledIndex>,
 ) -> Vec<AppCommand> {
     let mut commands = Vec::new();
@@ -1422,15 +1557,11 @@ fn button_hints(
         .show(ctx, |ui| {
             if let Some(note) = note {
                 let rect = ui.max_rect();
-                let note_rect = egui::Rect::from_min_size(rect.left_top(), egui::vec2(rect.width() * 0.55, rect.height()));
-                let response = ui.interact(note_rect, ui.id().with("status_note"), egui::Sense::click());
-                ui.painter().text(
-                    rect.left_center(),
-                    egui::Align2::LEFT_CENTER,
-                    note,
-                    font(FONT_MICRO),
-                    if response.hovered() { ACCENT_CYAN } else { TEXT_DIM },
+                let note_rect = egui::Rect::from_min_size(
+                    rect.left_top(),
+                    egui::vec2(rect.width() * 0.54, rect.height()),
                 );
+                let response = status_note_widget(ui, note_rect, note);
                 if response.clicked() {
                     let outdated = installed.map(|i| i.counts().1).unwrap_or(0);
                     if outdated > 0 {

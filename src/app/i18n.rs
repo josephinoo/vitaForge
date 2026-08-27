@@ -1,12 +1,28 @@
 use fluent_bundle::{FluentArgs, FluentBundle, FluentResource, FluentValue};
 const EN_US_FTL: &str = include_str!("i18n/en-US.ftl");
 const ES_ES_FTL: &str = include_str!("i18n/es-ES.ftl");
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+const FR_FR_FTL: &str = include_str!("i18n/fr-FR.ftl");
+const IT_IT_FTL: &str = include_str!("i18n/it-IT.ftl");
+const PT_PT_FTL: &str = include_str!("i18n/pt-PT.ftl");
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Language {
     English,
     Spanish,
+    French,
+    Italian,
+    Portuguese,
 }
 impl Language {
+    pub const ALL: [Self; 5] = [Self::Spanish, Self::English, Self::French, Self::Italian, Self::Portuguese];
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Spanish => "Español",
+            Self::English => "English",
+            Self::French => "Français",
+            Self::Italian => "Italiano",
+            Self::Portuguese => "Português",
+        }
+    }
     pub fn detect() -> Self {
         #[cfg(target_os = "vita")]
         {
@@ -33,20 +49,32 @@ impl Language {
         thread_local! {
             static EN: LocalizedStrings = LocalizedStrings::resolve(&build_bundle("en-US", EN_US_FTL));
             static ES: LocalizedStrings = LocalizedStrings::resolve(&build_bundle("es-ES", ES_ES_FTL));
+            static FR: LocalizedStrings = LocalizedStrings::resolve(&build_bundle("fr-FR", FR_FR_FTL));
+            static IT: LocalizedStrings = LocalizedStrings::resolve(&build_bundle("it-IT", IT_IT_FTL));
+            static PT: LocalizedStrings = LocalizedStrings::resolve(&build_bundle("pt-PT", PT_PT_FTL));
         }
         match self {
             Language::English => EN.with(f),
             Language::Spanish => ES.with(f),
+            Language::French => FR.with(f),
+            Language::Italian => IT.with(f),
+            Language::Portuguese => PT.with(f),
         }
     }
     fn with_bundle<R>(self, f: impl FnOnce(&FluentBundle<FluentResource>) -> R) -> R {
         thread_local! {
             static EN_BUNDLE: FluentBundle<FluentResource> = build_bundle("en-US", EN_US_FTL);
             static ES_BUNDLE: FluentBundle<FluentResource> = build_bundle("es-ES", ES_ES_FTL);
+            static FR_BUNDLE: FluentBundle<FluentResource> = build_bundle("fr-FR", FR_FR_FTL);
+            static IT_BUNDLE: FluentBundle<FluentResource> = build_bundle("it-IT", IT_IT_FTL);
+            static PT_BUNDLE: FluentBundle<FluentResource> = build_bundle("pt-PT", PT_PT_FTL);
         }
         match self {
             Language::English => EN_BUNDLE.with(f),
             Language::Spanish => ES_BUNDLE.with(f),
+            Language::French => FR_BUNDLE.with(f),
+            Language::Italian => IT_BUNDLE.with(f),
+            Language::Portuguese => PT_BUNDLE.with(f),
         }
     }
     pub fn apps_count(self, count: usize) -> String {
@@ -315,11 +343,16 @@ impl Language {
 fn build_bundle(locale: &str, source: &str) -> FluentBundle<FluentResource> {
     let langid: unic_langid::LanguageIdentifier =
         locale.parse().unwrap_or_else(|err| panic!("bad locale id {locale}: {err}"));
-    let resource = FluentResource::try_new(source.to_owned())
-        .unwrap_or_else(|(_, errs)| panic!("bad ftl syntax in {locale}: {errs:?}"));
     let mut bundle = FluentBundle::new(vec![langid]);
     bundle.set_use_isolating(false);
-    bundle.add_resource(resource).unwrap_or_else(|errs| panic!("duplicate ftl id in {locale}: {errs:?}"));
+    let base = FluentResource::try_new(EN_US_FTL.to_owned())
+        .unwrap_or_else(|(_, errs)| panic!("bad English ftl: {errs:?}"));
+    bundle.add_resource(base).unwrap_or_else(|errs| panic!("bad base ftl: {errs:?}"));
+    if source != EN_US_FTL {
+        let resource = FluentResource::try_new(source.to_owned())
+            .unwrap_or_else(|(_, errs)| panic!("bad ftl syntax in {locale}: {errs:?}"));
+        bundle.add_resource_overriding(resource);
+    }
     bundle
 }
 fn format_message(bundle: &FluentBundle<FluentResource>, id: &str, args: Option<&FluentArgs>) -> String {

@@ -169,45 +169,115 @@ pub fn open_first_controller(subsystem: &sdl2::GameControllerSubsystem) -> Optio
     let available = subsystem.num_joysticks().ok()?;
     (0..available).find_map(|id| subsystem.is_game_controller(id).then(|| subsystem.open(id).ok())?)
 }
-pub fn map_pointer_event(
-    event: &Event,
-    screen_size: (f32, f32),
-    pixels_per_point: f32,
-    pointer_pos: &mut egui::Pos2,
-) -> Option<egui::Event> {
-    match *event {
-        Event::MouseMotion { x, y, .. } => {
-            *pointer_pos = mouse_to_screen_pos(x, y, pixels_per_point);
-            Some(egui::Event::PointerMoved(*pointer_pos))
+pub struct Pointer {
+    pos: egui::Pos2,
+    front_touch: i64,
+    active_finger: Option<i64>,
+    saw_finger: bool,
+    release_pending: bool,
+    cancel_pending: bool,
+}
+impl Pointer {
+    pub fn new() -> Self {
+        Self::for_touch_device(front_touch_device().unwrap_or(FRONT_TOUCH_DEVICE_ID))
+    }
+    fn for_touch_device(front_touch: i64) -> Self {
+        Self {
+            pos: egui::Pos2::ZERO,
+            front_touch,
+            active_finger: None,
+            saw_finger: false,
+            release_pending: false,
+            cancel_pending: false,
         }
-        Event::MouseButtonDown { mouse_btn, x, y, .. } => Some(pointer_button_at(
-            pointer_pos,
-            mouse_to_screen_pos(x, y, pixels_per_point),
-            map_mouse_button(mouse_btn),
-            true,
-        )),
-        Event::MouseButtonUp { mouse_btn, x, y, .. } => Some(pointer_button_at(
-            pointer_pos,
-            mouse_to_screen_pos(x, y, pixels_per_point),
-            map_mouse_button(mouse_btn),
-            false,
-        )),
-        Event::FingerDown { touch_id, x, y, .. } if touch_id == FRONT_TOUCH_DEVICE_ID => {
-            Some(pointer_button_at(pointer_pos, touch_to_screen_pos(x, y, screen_size), egui::PointerButton::Primary, true))
+    }
+    pub fn deferred(&mut self, out: &mut Vec<egui::Event>) {
+        if std::mem::take(&mut self.cancel_pending) {
+            let pos = self.pos;
+            out.push(self.button_at(pos, egui::PointerButton::Primary, false));
         }
-        Event::FingerUp { touch_id, x, y, .. } if touch_id == FRONT_TOUCH_DEVICE_ID => {
-            Some(pointer_button_at(pointer_pos, touch_to_screen_pos(x, y, screen_size), egui::PointerButton::Primary, false))
+        if std::mem::take(&mut self.release_pending) {
+            out.push(egui::Event::PointerGone);
         }
-        Event::FingerMotion { touch_id, x, y, .. } if touch_id == FRONT_TOUCH_DEVICE_ID => {
-            *pointer_pos = touch_to_screen_pos(x, y, screen_size);
-            Some(egui::Event::PointerMoved(*pointer_pos))
+    }
+    pub fn map_event(
+        &mut self,
+        event: &Event,
+        screen_size: (f32, f32),
+        pixels_per_point: f32,
+        out: &mut Vec<egui::Event>,
+    ) {
+        match *event {
+            Event::MouseMotion { which, x, y, .. } if !self.is_emulated(which) => {
+                self.pos = mouse_to_screen_pos(x, y, pixels_per_point);
+                out.push(egui::Event::PointerMoved(self.pos));
+            }
+            Event::MouseButtonDown { which, mouse_btn, x, y, .. } if !self.is_emulated(which) => {
+                let pos = mouse_to_screen_pos(x, y, pixels_per_point);
+                out.push(self.button_at(pos, map_mouse_button(mouse_btn), true));
+            }
+            Event::MouseButtonUp { which, mouse_btn, x, y, .. } if !self.is_emulated(which) => {
+                let pos = mouse_to_screen_pos(x, y, pixels_per_point);
+                out.push(self.button_at(pos, map_mouse_button(mouse_btn), false));
+            }
+            Event::FingerDown { touch_id, finger_id, x, y, .. } if self.is_front(touch_id) => {
+                if self.active_finger.is_some() {
+                    return; // a second finger must not yank the pointer away from the one dragging
+                }
+                self.active_finger = Some(finger_id);
+                self.saw_finger = true;
+                self.release_pending = false;
+                let pos = touch_to_screen_pos(x, y, screen_size);
+                self.pos = pos;
+                out.push(egui::Event::PointerMoved(pos));
+                out.push(self.button_at(pos, egui::PointerButton::Primary, true));
+            }
+            Event::FingerUp { touch_id, finger_id, x, y, .. }
+                if self.is_front(touch_id) && self.active_finger == Some(finger_id) =>
+            {
+                self.active_finger = None;
+                self.release_pending = true;
+                let pos = touch_to_screen_pos(x, y, screen_size);
+                out.push(self.button_at(pos, egui::PointerButton::Primary, false));
+            }
+            Event::FingerMotion { touch_id, finger_id, x, y, .. }
+                if self.is_front(touch_id) && self.active_finger == Some(finger_id) =>
+            {
+                self.pos = touch_to_screen_pos(x, y, screen_size);
+                out.push(egui::Event::PointerMoved(self.pos));
+            }
+            _ => {}
         }
-        _ => None,
+    }
+    pub fn forget_touch(&mut self) {
+        self.cancel_pending = self.active_finger.take().is_some();
+        self.release_pending = true;
+    }
+    fn is_front(&self, touch_id: i64) -> bool {
+        touch_id == self.front_touch
+    }
+    fn is_emulated(&self, which: u32) -> bool {
+        which == SDL_TOUCH_MOUSEID || self.saw_finger
+    }
+    fn button_at(&mut self, pos: egui::Pos2, button: egui::PointerButton, pressed: bool) -> egui::Event {
+        self.pos = pos;
+        egui::Event::PointerButton { pos, button, pressed, modifiers: egui::Modifiers::default() }
     }
 }
-fn pointer_button_at(pointer_pos: &mut egui::Pos2, pos: egui::Pos2, button: egui::PointerButton, pressed: bool) -> egui::Event {
-    *pointer_pos = pos;
-    egui::Event::PointerButton { pos, button, pressed, modifiers: egui::Modifiers::default() }
+impl Default for Pointer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+const SDL_TOUCH_MOUSEID: u32 = u32::MAX;
+fn front_touch_device() -> Option<i64> {
+    unsafe {
+        let count = sdl2::sys::SDL_GetNumTouchDevices();
+        (0..count).map(|index| sdl2::sys::SDL_GetTouchDevice(index)).find(|&id| {
+            sdl2::sys::SDL_GetTouchDeviceType(id)
+                == sdl2::sys::SDL_TouchDeviceType::SDL_TOUCH_DEVICE_DIRECT
+        })
+    }
 }
 fn mouse_to_screen_pos(x: i32, y: i32, pixels_per_point: f32) -> egui::Pos2 {
     egui::pos2(x as f32 / pixels_per_point, y as f32 / pixels_per_point)
@@ -220,5 +290,85 @@ fn map_mouse_button(button: MouseButton) -> egui::PointerButton {
         MouseButton::Right => egui::PointerButton::Secondary,
         MouseButton::Middle => egui::PointerButton::Middle,
         _ => egui::PointerButton::Primary,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Pointer, SDL_TOUCH_MOUSEID};
+    use sdl2::event::Event;
+    const SCREEN: (f32, f32) = (960.0, 544.0);
+    fn finger(kind: u8, finger_id: i64, x: f32, y: f32) -> Event {
+        match kind {
+            0 => Event::FingerDown { timestamp: 0, touch_id: 7, finger_id, x, y, dx: 0.0, dy: 0.0, pressure: 1.0 },
+            1 => Event::FingerMotion { timestamp: 0, touch_id: 7, finger_id, x, y, dx: 0.0, dy: 0.0, pressure: 1.0 },
+            _ => Event::FingerUp { timestamp: 0, touch_id: 7, finger_id, x, y, dx: 0.0, dy: 0.0, pressure: 1.0 },
+        }
+    }
+    fn drain(pointer: &mut Pointer, event: &Event) -> Vec<egui::Event> {
+        let mut out = Vec::new();
+        pointer.map_event(event, SCREEN, 1.0, &mut out);
+        out
+    }
+    #[test]
+    fn a_press_moves_before_it_presses() {
+        let mut pointer = Pointer::for_touch_device(7);
+        let events = drain(&mut pointer, &finger(0, 1, 0.5, 0.5));
+        assert!(matches!(events[0], egui::Event::PointerMoved(pos) if pos == egui::pos2(480.0, 272.0)));
+        assert!(matches!(events[1], egui::Event::PointerButton { pressed: true, .. }));
+    }
+    #[test]
+    fn a_second_finger_does_not_steal_the_drag() {
+        let mut pointer = Pointer::for_touch_device(7);
+        drain(&mut pointer, &finger(0, 1, 0.5, 0.5));
+        assert!(drain(&mut pointer, &finger(0, 2, 0.1, 0.1)).is_empty());
+        assert!(drain(&mut pointer, &finger(1, 2, 0.2, 0.2)).is_empty());
+        assert!(!drain(&mut pointer, &finger(1, 1, 0.6, 0.6)).is_empty());
+    }
+    #[test]
+    fn the_rear_pad_is_not_a_pointer() {
+        let mut pointer = Pointer::for_touch_device(0);
+        assert!(drain(&mut pointer, &finger(0, 1, 0.5, 0.5)).is_empty());
+    }
+    #[test]
+    fn the_pointer_leaves_a_frame_after_the_finger_lifts() {
+        let mut pointer = Pointer::for_touch_device(7);
+        drain(&mut pointer, &finger(0, 1, 0.5, 0.5));
+        let up = drain(&mut pointer, &finger(2, 1, 0.5, 0.5));
+        assert!(matches!(up[..], [egui::Event::PointerButton { pressed: false, .. }]));
+        let mut deferred = Vec::new();
+        pointer.deferred(&mut deferred);
+        assert!(matches!(deferred[..], [egui::Event::PointerGone]));
+        let mut again = Vec::new();
+        pointer.deferred(&mut again);
+        assert!(again.is_empty());
+    }
+    #[test]
+    fn touch_emulated_mouse_events_are_dropped() {
+        let mut pointer = Pointer::for_touch_device(7);
+        let emulated = Event::MouseMotion {
+            timestamp: 0,
+            window_id: 0,
+            which: SDL_TOUCH_MOUSEID,
+            mousestate: sdl2::mouse::MouseState::from_sdl_state(0),
+            x: 10,
+            y: 10,
+            xrel: 0,
+            yrel: 0,
+        };
+        assert!(drain(&mut pointer, &emulated).is_empty());
+        let real = Event::MouseMotion {
+            timestamp: 0,
+            window_id: 0,
+            which: 0,
+            mousestate: sdl2::mouse::MouseState::from_sdl_state(0),
+            x: 10,
+            y: 10,
+            xrel: 0,
+            yrel: 0,
+        };
+        assert!(!drain(&mut pointer, &real).is_empty());
+        drain(&mut pointer, &finger(0, 1, 0.5, 0.5));
+        assert!(drain(&mut pointer, &real).is_empty()); // real fingers are in play now
     }
 }

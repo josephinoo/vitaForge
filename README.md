@@ -47,9 +47,6 @@ Requirements: [VitaSDK](https://vitasdk.org/) and [cargo-vita](https://github.co
 # Build VPK package
 make vpk
 
-# Build VPK and copy to Desktop
-make desktop
-
 # Install directly to PS Vita over FTP
 make ftp VITA_IP=192.168.0.x
 ```

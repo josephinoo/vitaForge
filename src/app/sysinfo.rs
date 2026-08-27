@@ -24,7 +24,6 @@ pub fn storage(dev: &str) -> Option<(u64, u64)> {
     value
 }
 
-#[cfg(target_os = "vita")]
 fn storage_uncached(dev: &str) -> Option<(u64, u64)> {
     use std::ffi::CString;
     let dev = CString::new(dev).ok()?;
@@ -35,8 +34,4 @@ fn storage_uncached(dev: &str) -> Option<(u64, u64)> {
         return None;
     }
     Some((max_size.saturating_sub(free_size), max_size))
-}
-#[cfg(not(target_os = "vita"))]
-fn storage_uncached(_dev: &str) -> Option<(u64, u64)> {
-    None
 }

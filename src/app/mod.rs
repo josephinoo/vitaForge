@@ -31,6 +31,7 @@ pub enum DiscoverFocus {
     Featured,
     Top(usize),
     New(usize),
+    BrowseAll,
 }
 
 pub struct CatalogState {
@@ -331,6 +332,7 @@ impl CatalogState {
         data::settings::save(&data::settings::Settings {
             sort_order: self.sort_order,
             sort_direction: self.sort_direction,
+            language: data::settings::load().language,
         });
     }
     fn flip_sort_direction(&mut self) {
@@ -339,6 +341,7 @@ impl CatalogState {
         data::settings::save(&data::settings::Settings {
             sort_order: self.sort_order,
             sort_direction: self.sort_direction,
+            language: data::settings::load().language,
         });
     }
     fn resort(&mut self) {
@@ -384,6 +387,10 @@ impl CatalogState {
                         || app.titleid_lower.contains(&query))
             })
             .collect();
+        if source_filter.is_none() {
+            self.filtered_indices =
+                collapse_homebrew_duplicates(&self.apps, std::mem::take(&mut self.filtered_indices));
+        }
         if self.filtered_indices.is_empty() {
             self.selected = 0;
             self.selection_active = false;
@@ -408,25 +415,26 @@ impl CatalogState {
         }
     }
     fn recompute_dropdown_counts(&mut self) {
-        let apps = &self.apps;
         let source_filter = self.source_filter;
+        let unique_all = collapse_homebrew_duplicates(&self.apps, (0..self.apps.len()).collect());
+        let visible: Vec<usize> = match source_filter {
+            None => unique_all.clone(),
+            Some(source) => (0..self.apps.len())
+                .filter(|&index| source.matches(&self.apps[index].source_catalog))
+                .collect(),
+        };
+        let apps = &self.apps;
         self.source_counts = SourceCatalog::ALL
             .into_iter()
             .map(|source| (source, apps.iter().filter(|app| source.matches(&app.source_catalog)).count()))
             .filter(|&(_, count)| count > 0)
             .collect();
-        self.source_scoped_count =
-            apps.iter().filter(|app| source_filter.is_none_or(|s| s.matches(&app.source_catalog))).count();
-        self.total_unique_count = apps.len();
+        self.source_scoped_count = visible.len();
+        self.total_unique_count = unique_all.len();
         self.category_counts = Category::ALL
             .into_iter()
             .map(|category| {
-                let count = apps
-                    .iter()
-                    .filter(|app| {
-                        app.category == category && source_filter.is_none_or(|s| s.matches(&app.source_catalog))
-                    })
-                    .count();
+                let count = visible.iter().filter(|&&index| apps[index].category == category).count();
                 (category, count)
             })
             .filter(|&(_, count)| count > 0)
@@ -472,6 +480,7 @@ impl CatalogState {
             DiscoverFocus::Featured if featured => DiscoverFocus::Featured,
             DiscoverFocus::Top(i) if top_len > 0 => DiscoverFocus::Top(i.min(top_len - 1)),
             DiscoverFocus::New(i) if new_len > 0 => DiscoverFocus::New(i.min(new_len - 1)),
+            DiscoverFocus::BrowseAll => DiscoverFocus::BrowseAll,
             _ if featured => DiscoverFocus::Featured,
             _ if top_len > 0 => DiscoverFocus::Top(0),
             _ if new_len > 0 => DiscoverFocus::New(0),
@@ -495,6 +504,7 @@ impl CatalogState {
                 .get(i)
                 .and_then(|&idx| self.apps.get(idx))
                 .map(|app| app.id.as_str()),
+            DiscoverFocus::BrowseAll => None,
         }
     }
 
@@ -521,6 +531,9 @@ impl CatalogState {
             }
             InputCommand::MoveUp => {
                 self.discover_focus = match self.discover_focus {
+                    DiscoverFocus::BrowseAll if new_len > 0 => DiscoverFocus::New(0),
+                    DiscoverFocus::BrowseAll if top_len > 0 => DiscoverFocus::Top(0),
+                    DiscoverFocus::BrowseAll if featured => DiscoverFocus::Featured,
                     DiscoverFocus::New(i) if top_len > 0 => DiscoverFocus::Top(i.min(top_len - 1)),
                     DiscoverFocus::New(_) if featured => DiscoverFocus::Featured,
                     DiscoverFocus::Top(_) if featured => DiscoverFocus::Featured,
@@ -532,12 +545,17 @@ impl CatalogState {
                     DiscoverFocus::Featured if top_len > 0 => DiscoverFocus::Top(0),
                     DiscoverFocus::Featured if new_len > 0 => DiscoverFocus::New(0),
                     DiscoverFocus::Top(i) if new_len > 0 => DiscoverFocus::New(i.min(new_len - 1)),
-                    other => other,
+                    DiscoverFocus::BrowseAll => DiscoverFocus::BrowseAll,
+                    _ => DiscoverFocus::BrowseAll,
                 };
             }
             _ => {}
         }
-        self.discover_focus != before
+        let changed = self.discover_focus != before;
+        if changed {
+            self.scroll_to_selected = true;
+        }
+        changed
     }
 }
 
@@ -796,7 +814,7 @@ impl App {
             state: AppState::Loading,
             icons: IconCache::new(),
             installed: crate::install::installed::InstalledIndex::new(),
-            lang: Language::detect(),
+            lang: data::settings::load().language.unwrap_or_else(Language::detect),
             install: None,
             self_update: None,
             needs_installed_rescan: true,
@@ -1099,6 +1117,9 @@ impl App {
                 if let AppState::Catalog(catalog) = &self.state
                     && catalog.shows_discover_home()
                 {
+                    if catalog.discover_focus == DiscoverFocus::BrowseAll {
+                        return self.handle_command(AppCommand::SeeAllRail(DiscoverRail::Top));
+                    }
                     if let Some(id) = catalog.discover_focus_app_id().map(str::to_owned) {
                         return self.handle_command(AppCommand::SelectAppById(id));
                     }
@@ -1119,11 +1140,10 @@ impl App {
                     self.open_app(index);
                 } else if let AppState::Settings { selected, .. } = &self.state {
                     return match *selected {
-                        0 => self.handle_command(AppCommand::SetLanguage(Language::English)),
-                        1 => self.handle_command(AppCommand::SetLanguage(Language::Spanish)),
-                        2 => self.handle_command(AppCommand::ClearIconCache),
-                        3 => self.handle_command(AppCommand::ClearCatalogCache),
-                        4 => self.handle_command(AppCommand::PurgeAllCache),
+                        index if index < Language::ALL.len() => self.handle_command(AppCommand::SetLanguage(Language::ALL[index])),
+                        5 => self.handle_command(AppCommand::ClearIconCache),
+                        6 => self.handle_command(AppCommand::ClearCatalogCache),
+                        7 => self.handle_command(AppCommand::PurgeAllCache),
                         _ => Ok(()),
                     };
                 }
@@ -1208,7 +1228,7 @@ impl App {
                     AppState::Settings { selected, .. } => {
                         match direction {
                             InputCommand::MoveUp => *selected = selected.saturating_sub(1),
-                            InputCommand::MoveDown => *selected = (*selected + 1).min(4),
+                            InputCommand::MoveDown => *selected = (*selected + 1).min(7),
                             _ => {}
                         }
                     }
@@ -1421,7 +1441,7 @@ impl App {
                         return Ok(());
                     }
                 };
-                let selected = if self.lang == Language::English { 0 } else { 1 };
+                let selected = Language::ALL.iter().position(|&language| language == self.lang).unwrap_or(0);
                 self.refresh_cache_stats();
                 self.cache_notice = None;
                 self.state = AppState::Settings { previous, selected };
@@ -1437,8 +1457,9 @@ impl App {
             }
             AppCommand::SetLanguage(lang) => {
                 self.lang = lang;
+                data::settings::set_language(lang);
                 if let AppState::Settings { selected, .. } = &mut self.state {
-                    *selected = if lang == Language::English { 0 } else { 1 };
+                    *selected = Language::ALL.iter().position(|&language| language == lang).unwrap_or(0);
                 }
             }
             AppCommand::ClearIconCache => {
@@ -1839,13 +1860,20 @@ mod sort_tests {
     }
 
     #[test]
-    fn all_catalogs_keeps_homebrew_twins_so_counts_sum() {
+    fn all_catalogs_collapses_homebrew_twins() {
         let catalog = twin_catalog();
         let ids = ordered_ids(&catalog);
         assert!(ids.contains(&"official-ra".to_owned()));
-        assert!(ids.contains(&"dbtoo-ra".to_owned()));
+        assert!(!ids.contains(&"dbtoo-ra".to_owned())); // the same title from the other catalog
         assert!(ids.contains(&"dbtoo-only".to_owned()));
         assert!(ids.contains(&"nps-same-tid".to_owned()));
+    }
+    #[test]
+    fn the_all_catalogs_count_matches_the_collapsed_grid() {
+        let mut catalog = twin_catalog();
+        catalog.recompute_dropdown_counts();
+        assert_eq!(catalog.total_unique_count, ordered_ids(&catalog).len());
+        assert_eq!(catalog.source_scoped_count, catalog.total_unique_count);
     }
 
     #[test]
@@ -1930,5 +1958,59 @@ mod precache_tests {
             .map(|_| art(crate::data::Platform::NpsVita, None, Some("https://x/c.jpg")))
             .collect();
         assert_eq!(precache_art_urls(&apps).len(), MAX_PRECACHE_PER_LAUNCH);
+    }
+
+    fn discover_catalog() -> CatalogState {
+        let apps = vec![
+            entry("a", "vitadb", 1_000, 900, 4.0, "2024-06-01"),
+            entry("b", "vitadb", 1_000, 800, 4.0, "2024-06-02"),
+        ];
+        let mut catalog = CatalogState::new(apps);
+        catalog.top_rail = vec![0, 1];
+        catalog.recent_rail = vec![1, 0];
+        catalog.featured_index = Some(0);
+        catalog.discover_focus = DiscoverFocus::Featured;
+        catalog
+    }
+
+    #[test]
+    fn browse_all_is_reachable_going_down_past_both_rails() {
+        let mut catalog = discover_catalog();
+        assert!(catalog.move_discover_focus(InputCommand::MoveDown));
+        assert_eq!(catalog.discover_focus, DiscoverFocus::Top(0));
+        assert!(catalog.move_discover_focus(InputCommand::MoveDown));
+        assert_eq!(catalog.discover_focus, DiscoverFocus::New(0));
+        assert!(catalog.move_discover_focus(InputCommand::MoveDown));
+        assert_eq!(catalog.discover_focus, DiscoverFocus::BrowseAll);
+        assert!(!catalog.move_discover_focus(InputCommand::MoveDown));
+        assert_eq!(catalog.discover_focus, DiscoverFocus::BrowseAll);
+    }
+
+    #[test]
+    fn browse_all_gives_the_focus_back_going_up() {
+        let mut catalog = discover_catalog();
+        catalog.discover_focus = DiscoverFocus::BrowseAll;
+        assert!(catalog.move_discover_focus(InputCommand::MoveUp));
+        assert_eq!(catalog.discover_focus, DiscoverFocus::New(0));
+    }
+
+    #[test]
+    fn browse_all_is_reachable_with_no_rails_at_all() {
+        let mut catalog = discover_catalog();
+        catalog.top_rail.clear();
+        catalog.recent_rail.clear();
+        assert!(catalog.move_discover_focus(InputCommand::MoveDown));
+        assert_eq!(catalog.discover_focus, DiscoverFocus::BrowseAll);
+        assert!(catalog.move_discover_focus(InputCommand::MoveUp));
+        assert_eq!(catalog.discover_focus, DiscoverFocus::Featured);
+    }
+
+    #[test]
+    fn browse_all_focus_is_a_button_not_an_app() {
+        let mut catalog = discover_catalog();
+        catalog.discover_focus = DiscoverFocus::BrowseAll;
+        assert_eq!(catalog.discover_focus_app_id(), None);
+        catalog.clamp_discover_focus();
+        assert_eq!(catalog.discover_focus, DiscoverFocus::BrowseAll); // survives a clamp
     }
 }
