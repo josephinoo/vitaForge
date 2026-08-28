@@ -220,6 +220,8 @@ pub struct AppEntry {
     pub release_page: Option<String>,
     pub category: Category,
     #[serde(default)]
+    pub genres: Vec<String>,
+    #[serde(default)]
     pub platform: Platform,
     #[serde(default)]
     pub kind: String,
@@ -294,6 +296,12 @@ impl AppEntry {
         text::sanitize(&mut self.requirements);
         text::sanitize(&mut self.changelog);
         text::sanitize(&mut self.version);
+        self.genres.retain_mut(|genre| {
+            text::sanitize(genre);
+            !genre.trim().is_empty()
+        });
+        self.genres.sort_unstable();
+        self.genres.dedup();
         for (key, value) in &mut self.overview {
             text::sanitize(key);
             text::sanitize(value);

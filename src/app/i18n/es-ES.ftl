@@ -12,6 +12,27 @@ category-tool = Tool
 category-utility = Utility
 category-other = Other
 
+genre-all = Todos los géneros
+genre-adventure = Aventura
+genre-arcade = Arcade
+genre-card-board = Cartas y mesa
+genre-fighting = Lucha
+genre-hack-slash = Acción y lucha
+genre-indie = Indie
+genre-music = Música
+genre-pinball = Pinball
+genre-platform = Plataformas
+genre-rpg = Rol (RPG)
+genre-racing = Carreras
+genre-shooter = Disparos
+genre-simulation = Simulación
+genre-sports = Deportes
+genre-strategy = Estrategia
+genre-puzzle = Rompecabezas
+genre-action = Acción
+genre-family = Familiar
+genre-educational = Educativo
+
 sort-by-prefix = Ordenar por:
 sort-downloads = Más descargados
 sort-rating = Mejor valorados

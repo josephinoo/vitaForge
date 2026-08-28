@@ -1,5 +1,26 @@
 apps-count = { $count } APPS
 
+genre-all = All genres
+genre-adventure = Adventure
+genre-arcade = Arcade
+genre-card-board = Card & Board Game
+genre-fighting = Fighting
+genre-hack-slash = Hack and slash/Beat 'em up
+genre-indie = Indie
+genre-music = Music
+genre-pinball = Pinball
+genre-platform = Platform
+genre-rpg = Role-Playing (RPG)
+genre-racing = Racing
+genre-shooter = Shooter
+genre-simulation = Simulation
+genre-sports = Sports
+genre-strategy = Strategy
+genre-puzzle = Puzzle
+genre-action = Action
+genre-family = Family
+genre-educational = Educational
+
 category-all = ALL
 category-emulator = Emulator
 category-original = Original

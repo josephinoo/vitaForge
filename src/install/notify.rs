@@ -19,14 +19,7 @@ fn encode_notification(text: &str) -> [u16; TEXT_UNITS] {
     buf
 }
 pub fn send(text: &str) {
-    #[cfg(target_os = "vita")]
-    {
-        vita::send(text);
-    }
-    #[cfg(not(target_os = "vita"))]
-    {
-        let _ = text;
-    }
+    vita::send(text);
 }
 pub fn install_finished(title: &str) {
     send(&format!("{title} installed"));
@@ -34,7 +27,6 @@ pub fn install_finished(title: &str) {
 pub fn install_failed(title: &str, reason: &str) {
     send(&format!("{title} failed to install: {reason}"));
 }
-#[cfg(target_os = "vita")]
 mod vita {
     use std::sync::Once;
     static LOAD_MODULE: Once = Once::new();

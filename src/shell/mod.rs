@@ -11,7 +11,7 @@ mod surface;
 use crate::app::ui::build_ui;
 use crate::app::App;
 use crate::input::{
-    held_stick_direction, map_controller_button_event, map_keyboard_event, map_pointer_event,
+    Pointer, held_stick_direction, map_controller_button_event, map_keyboard_event,
     open_first_controller, register_vita_controller_mapping, AppCommand, TextTarget,
 };
 use anyhow::Result;
@@ -192,7 +192,7 @@ pub fn run(mut app: App) -> Result<()> {
     let egui_ctx = egui::Context::default();
     crate::app::ui::apply_theme(&egui_ctx);
     let start_time = Instant::now();
-    let mut pointer_pos = egui::Pos2::ZERO;
+    let mut pointer = Pointer::new();
     let mut ime: Option<ImeSession> = None;
     let mut held_direction = None;
     let mut held_since = Instant::now();
@@ -206,6 +206,7 @@ pub fn run(mut app: App) -> Result<()> {
         frame_stats.note_iteration();
         frame_stats.maybe_flush();
         let mut egui_events = Vec::new();
+        pointer.deferred(&mut egui_events);
         let mut direct_commands = Vec::new();
         let screen_points = (WIDTH as f32 / UI_SCALE, HEIGHT as f32 / UI_SCALE);
         for event in event_pump.poll_iter() {
@@ -213,12 +214,9 @@ pub fn run(mut app: App) -> Result<()> {
                 sdl2::event::Event::Quit { .. }
                 | sdl2::event::Event::AppWillEnterBackground { .. }
                 | sdl2::event::Event::AppDidEnterBackground { .. } => {
-                    #[cfg(target_os = "vita")]
                     unsafe {
                         vitasdk_sys::sceKernelExitProcess(0);
                     }
-                    #[cfg(not(target_os = "vita"))]
-                    return Ok(());
                 }
                 sdl2::event::Event::ControllerDeviceAdded { .. } if controller.is_none() => {
                     controller = open_first_controller(&controllers);
@@ -234,9 +232,7 @@ pub fn run(mut app: App) -> Result<()> {
                 direct_commands.push(command);
                 frame_stats.note_keyboard_command();
             }
-            if let Some(egui_event) = map_pointer_event(&event, screen_points, UI_SCALE, &mut pointer_pos) {
-                egui_events.push(egui_event);
-            }
+            pointer.map_event(&event, screen_points, UI_SCALE, &mut egui_events);
             if let Some(command) = map_controller_button_event(&event) {
                 direct_commands.push(command);
                 frame_stats.note_controller_button_command();
@@ -315,16 +311,6 @@ pub fn run(mut app: App) -> Result<()> {
         let app_busy = app.install_busy()
             || matches!(app.state, crate::app::AppState::Loading)
             || text_target.is_some();
-        #[cfg(not(target_os = "vita"))]
-        static SCREENSHOT_DUMPED: std::sync::atomic::AtomicBool =
-            std::sync::atomic::AtomicBool::new(false);
-        #[cfg(not(target_os = "vita"))]
-        let dump_force_paint = std::env::var_os("VITAFORGE_DUMP_SCREENSHOT").is_some()
-            && matches!(app.state, crate::app::AppState::Catalog(_))
-            && !SCREENSHOT_DUMPED.load(std::sync::atomic::Ordering::Relaxed);
-        #[cfg(target_os = "vita")]
-        let dump_force_paint = false;
-        let _ = dump_force_paint;
         let raw_input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -355,39 +341,10 @@ pub fn run(mut app: App) -> Result<()> {
         let clipped_primitives = egui_ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
         let tessellate_elapsed = tessellate_started_at.elapsed();
         surface.draw_scene();
-        #[cfg(not(target_os = "vita"))]
-        let dump_path = {
-            static DUMP_ARMED: std::sync::atomic::AtomicBool =
-                std::sync::atomic::AtomicBool::new(false);
-            if matches!(app.state, crate::app::AppState::Catalog(_))
-                && std::env::var_os("VITAFORGE_DUMP_SCREENSHOT").is_some()
-                && !SCREENSHOT_DUMPED.load(std::sync::atomic::Ordering::Relaxed)
-            {
-                if !DUMP_ARMED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                    let _ = app.handle_command(crate::input::AppCommand::SetStoreTab(
-                        crate::input::StoreTab::Search,
-                    ));
-                    if let crate::app::AppState::Catalog(catalog) = &mut app.state {
-                        catalog.search_requested = false;
-                    }
-                    egui_ctx.request_repaint();
-                    None
-                } else if !SCREENSHOT_DUMPED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                    std::env::var("VITAFORGE_DUMP_SCREENSHOT").ok()
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        };
-        #[cfg(target_os = "vita")]
-        let dump_path: Option<String> = None;
         let paint_stats: FramePaintStats = surface.paint_egui(
             full_output.pixels_per_point,
             &clipped_primitives,
             &full_output.textures_delta,
-            dump_path.as_deref(),
         )?;
         app.icons.set_gpu_backlog(surface.pending_texture_uploads());
         let dropped = surface.take_dropped_textures();
@@ -397,7 +354,6 @@ pub fn run(mut app: App) -> Result<()> {
         }
         frame_stats.record(tick_elapsed, build_ui_elapsed, tessellate_elapsed, paint_stats);
         crate::install::process_pending_bgdl();
-        #[cfg(target_os = "vita")]
         unsafe {
             vitasdk_sys::sceKernelPowerTick(vitasdk_sys::SCE_KERNEL_POWER_TICK_DEFAULT);
         }
@@ -418,6 +374,7 @@ pub fn run(mut app: App) -> Result<()> {
             };
             if ime::open(&video, surface.window(), purpose, initial) {
                 ime = Some(ImeSession { target, query_before });
+                pointer.forget_touch(); // the keyboard eats the events that would have ended this touch
             } else {
                 match target {
                     TextTarget::Search => app.handle_command(AppCommand::CloseSearch)?,

@@ -290,7 +290,7 @@ async fn install_pbp_pkg(entry: &AppEntry, tx: &watch::Sender<Progress>, pkg_pat
         std::fs::write(format!("ux0:pspemu/PSP/LICENSE/{content_id}.rif"), &psp_license)
             .context("couldn't write the PSP license file")?;
     }
-    installed::stamp_pending_install(&installed::index_key(entry), &entry.hash, None);
+    installed::stamp_pending_install(&installed::index_key(entry), &entry.hash, &entry.version, None);
     Ok(Progress::Done)
 }
 async fn queue_bgdl_vita(entry: &AppEntry, _tx: &watch::Sender<Progress>) -> Result<Progress> {
@@ -305,7 +305,7 @@ async fn queue_bgdl_vita(entry: &AppEntry, _tx: &watch::Sender<Progress>) -> Res
     queue_livearea_install(&entry.name, &entry.download_url, license, bgdl::BGDL_TYPE_GAME)
         .await
         .context("Failed to queue background download (BGDL)")?;
-    installed::stamp_pending_install(&installed::index_key(entry), &entry.hash, None);
+    installed::stamp_pending_install(&installed::index_key(entry), &entry.hash, &entry.version, None);
     Ok(Progress::Queued)
 }
 async fn run_psp(entry: &AppEntry, tx: &watch::Sender<Progress>, cancel: &Arc<AtomicBool>) -> Result<Progress> {
@@ -338,7 +338,7 @@ async fn run_psp(entry: &AppEntry, tx: &watch::Sender<Progress>, cancel: &Arc<At
     .await
     .context("the extract worker crashed")??;
     let _ = std::fs::remove_file(TEMP_VPK);
-    installed::stamp_pending_install(&installed::index_key(entry), &entry.hash, None);
+    installed::stamp_pending_install(&installed::index_key(entry), &entry.hash, &entry.version, None);
     Ok(Progress::Done)
 }
 async fn stage_bgdl_icon(entry: &AppEntry) {
@@ -403,7 +403,7 @@ async fn run_vita(entry: &AppEntry, tx: &watch::Sender<Progress>, cancel: &Arc<A
     .await
     .context("the extract worker crashed")??;
     let _ = std::fs::remove_file(TEMP_VPK);
-    installed::stamp_pending_install(&installed::index_key(entry), &entry.hash, Some(Path::new(EXTRACT_DIR)));
+    installed::stamp_pending_install(&installed::index_key(entry), &entry.hash, &entry.version, Some(Path::new(EXTRACT_DIR)));
     head::write(Path::new(EXTRACT_DIR))?;
     let titleid = entry.titleid.trim().to_uppercase();
     if !titleid.is_empty() {

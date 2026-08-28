@@ -79,7 +79,6 @@ mod sys {
         }
     }
 }
-#[cfg(target_os = "vita")]
 pub fn promote_package(dir: &str, tx: &tokio::sync::watch::Sender<super::Progress>) -> Result<()> {
     let _guard = PROMOTER.lock().map_err(|_| anyhow::anyhow!("the promoter lock is poisoned"))?;
     let session = sys::Session::open()?;
@@ -87,7 +86,6 @@ pub fn promote_package(dir: &str, tx: &tokio::sync::watch::Sender<super::Progres
         let _ = tx.send(super::Progress::Installing { elapsed_secs });
     })
 }
-#[cfg(target_os = "vita")]
 pub fn installed_titles(titleids: &[String]) -> Option<Vec<String>> {
     let _guard = PROMOTER.lock().ok()?;
     let session = match sys::Session::open() {
@@ -104,12 +102,4 @@ pub fn installed_titles(titleids: &[String]) -> Option<Vec<String>> {
         }
     }
     Some(found)
-}
-#[cfg(not(target_os = "vita"))]
-pub fn promote_package(_dir: &str, _tx: &tokio::sync::watch::Sender<super::Progress>) -> Result<()> {
-    anyhow::bail!("installing only works on the vita itself")
-}
-#[cfg(not(target_os = "vita"))]
-pub fn installed_titles(_titleids: &[String]) -> Option<Vec<String>> {
-    None
 }

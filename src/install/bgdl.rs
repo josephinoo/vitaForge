@@ -253,10 +253,6 @@ fn get_download_class() -> Result<&'static SceDownloadClass> {
         Err(err) => bail!("{err}"),
     }
 }
-#[cfg(not(target_os = "vita"))]
-pub fn start_bgdl(_title: &str, _url: &str, _rif: Option<&[u8]>, _bgdl_type: u32) -> Result<()> {
-    bail!("BGDL is not supported on the host simulator.")
-}
 #[cfg(target_os = "vita")]
 fn probe_fs() {
     const PATHS: &[&str] = &[

@@ -1,25 +1,13 @@
 use std::fs;
 use std::path::Path;
 
-#[cfg(target_os = "vita")]
 const ICON_CACHE_DIR: &str = "ux0:data/vitaforge/cache";
-#[cfg(not(target_os = "vita"))]
-const ICON_CACHE_DIR: &str = "data/vitaforge/cache";
 
-#[cfg(target_os = "vita")]
 const HASH_CACHE_DIR: &str = "ux0:data/vitaforge/hashes";
-#[cfg(not(target_os = "vita"))]
-const HASH_CACHE_DIR: &str = "data/vitaforge/hashes";
 
-#[cfg(target_os = "vita")]
 const CATALOG_CACHE_PATH: &str = "ux0:data/vitaforge/catalog_cache.json";
-#[cfg(not(target_os = "vita"))]
-const CATALOG_CACHE_PATH: &str = "data/vitaforge/catalog_cache.json";
 
-#[cfg(target_os = "vita")]
 const CATALOG_VERSION_PATH: &str = "ux0:data/vitaforge/catalog_version.json";
-#[cfg(not(target_os = "vita"))]
-const CATALOG_VERSION_PATH: &str = "data/vitaforge/catalog_version.json";
 
 #[derive(Debug, Clone, Default)]
 pub struct CacheStats {
