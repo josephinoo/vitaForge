@@ -1,4 +1,25 @@
 apps-count = { $count } APPLIS
+
+genre-all = Tous les genres
+genre-adventure = Aventure
+genre-arcade = Arcade
+genre-card-board = Jeux de cartes et de plateau
+genre-fighting = Combat
+genre-hack-slash = Action et combat
+genre-indie = Indé
+genre-music = Musique
+genre-pinball = Flipper
+genre-platform = Plates-formes
+genre-rpg = Jeu de rôle (RPG)
+genre-racing = Course
+genre-shooter = Tir
+genre-simulation = Simulation
+genre-sports = Sports
+genre-strategy = Stratégie
+genre-puzzle = Réflexion
+genre-action = Action
+genre-family = Familial
+genre-educational = Éducatif
 search-placeholder = Rechercher...
 no-results = Aucun résultat trouvé
 no-results-sub = Essayez de modifier les filtres ou votre recherche

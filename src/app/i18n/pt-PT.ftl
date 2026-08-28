@@ -1,4 +1,25 @@
 apps-count = { $count } APPS
+
+genre-all = Todos os géneros
+genre-adventure = Aventura
+genre-arcade = Arcade
+genre-card-board = Jogos de cartas e tabuleiro
+genre-fighting = Luta
+genre-hack-slash = Ação e luta
+genre-indie = Indie
+genre-music = Música
+genre-pinball = Pinball
+genre-platform = Plataformas
+genre-rpg = Jogo de interpretação (RPG)
+genre-racing = Corridas
+genre-shooter = Tiro
+genre-simulation = Simulação
+genre-sports = Desporto
+genre-strategy = Estratégia
+genre-puzzle = Puzzle
+genre-action = Ação
+genre-family = Familiar
+genre-educational = Educativo
 search-placeholder = Pesquisar...
 no-results = Nenhum resultado encontrado
 no-results-sub = Tente alterar os filtros ou a pesquisa

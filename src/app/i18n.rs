@@ -99,6 +99,34 @@ impl Language {
             },
         })
     }
+    pub fn genre_label(self, genre: &str) -> String {
+        let message_id = match genre.trim().to_ascii_lowercase().as_str() {
+            "adventure" => Some("genre-adventure"),
+            "arcade" => Some("genre-arcade"),
+            "card & board game" => Some("genre-card-board"),
+            "fighting" => Some("genre-fighting"),
+            "hack and slash/beat 'em up" => Some("genre-hack-slash"),
+            "indie" => Some("genre-indie"),
+            "music" => Some("genre-music"),
+            "pinball" => Some("genre-pinball"),
+            "platform" => Some("genre-platform"),
+            "role-playing (rpg)" => Some("genre-rpg"),
+            "racing" => Some("genre-racing"),
+            "shooter" => Some("genre-shooter"),
+            "simulation" => Some("genre-simulation"),
+            "sports" => Some("genre-sports"),
+            "strategy" => Some("genre-strategy"),
+            "puzzle" => Some("genre-puzzle"),
+            "action" => Some("genre-action"),
+            "family" => Some("genre-family"),
+            "educational" => Some("genre-educational"),
+            _ => None,
+        };
+        message_id.map_or_else(|| genre.to_owned(), |id| self.with_bundle(|bundle| format_message(bundle, id, None)))
+    }
+    pub fn all_genres_label(self) -> String {
+        self.with_bundle(|bundle| format_message(bundle, "genre-all", None))
+    }
     pub fn sort_by_prefix(self) -> &'static str {
         self.strings(|s| s.sort_by_prefix)
     }

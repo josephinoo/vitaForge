@@ -635,7 +635,7 @@ fn catalog_screen(
                         }
                         if source_filter == Some(crate::data::SourceCatalog::Nps) {
                             ui.add_space(8.0);
-                            if let Some(picked) = genre_dropdown(ui, genre_counts, genre_filter) {
+                            if let Some(picked) = genre_dropdown(ui, lang, genre_counts, genre_filter) {
                                 commands.push(AppCommand::SetGenreFilter(picked));
                             }
                         }
@@ -1023,11 +1023,12 @@ fn source_dropdown(
 }
 fn genre_dropdown(
     ui: &mut egui::Ui,
+    lang: Language,
     genre_counts: &[(String, usize)],
     genre_filter: Option<&str>,
 ) -> Option<Option<String>> {
     let popup_id = ui.make_persistent_id("genre_dropdown");
-    let mut label = genre_filter.map_or_else(|| "All genres".to_owned(), str::to_owned);
+    let mut label = genre_filter.map_or_else(|| lang.all_genres_label(), |genre| lang.genre_label(genre));
     if label.chars().count() > 16 {
         label = format!("{}…", label.chars().take(15).collect::<String>());
     }
@@ -1060,11 +1061,11 @@ fn genre_dropdown(
             .max_height(180.0)
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 2.0;
-                if dropdown_row(ui, "All genres", genre_filter.is_none()) {
+                if dropdown_row(ui, &lang.all_genres_label(), genre_filter.is_none()) {
                     picked = Some(None);
                 }
                 for (genre, count) in genre_counts {
-                    let row_label = format!("{genre} ({count})");
+                    let row_label = format!("{} ({count})", lang.genre_label(genre));
                     if dropdown_row(ui, &row_label, genre_filter == Some(genre.as_str())) {
                         picked = Some(Some(genre.clone()));
                     }
@@ -1471,8 +1472,8 @@ fn category_badge(ui: &mut egui::Ui, category: Category) {
     ui.painter().rect_filled(rect, RADIUS_XS, color.gamma_multiply(0.3));
     ui.painter().galley(rect.center() - galley.size() / 2.0, galley, TEXT_WHITE);
 }
-fn genre_badge(ui: &mut egui::Ui, genre: &str) {
-    let galley = ui.fonts(|f| f.layout_no_wrap(genre.to_uppercase(), font(FONT_MICRO), TEXT_WHITE));
+fn genre_badge(ui: &mut egui::Ui, lang: Language, genre: &str) {
+    let galley = ui.fonts(|f| f.layout_no_wrap(lang.genre_label(genre).to_uppercase(), font(FONT_MICRO), TEXT_WHITE));
     let size = egui::vec2(galley.size().x + 10.0, 14.0);
     let rect = ui.allocate_exact_size(size, egui::Sense::hover()).0;
     ui.painter().rect_filled(rect, RADIUS_XS, ACCENT_CYAN.gamma_multiply(0.22));
@@ -2020,7 +2021,7 @@ fn detail_screen(
                                     if crate::data::SourceCatalog::Nps.matches(&entry.source_catalog) {
                                         for genre in entry.genres.iter().filter(|genre| !genre.eq_ignore_ascii_case("other")) {
                                             ui.add_space(4.0);
-                                            genre_badge(ui, genre);
+                                            genre_badge(ui, lang, genre);
                                         }
                                     }
                                     if entry.platform != Platform::Vita {
