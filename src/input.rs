@@ -40,6 +40,7 @@ pub enum AppCommand {
     RequestSearch,
     CloseSearch,
     SetCategoryFilter(Option<crate::data::Category>),
+    SetGenreFilter(Option<String>),
     SetSourceFilter(Option<crate::data::SourceCatalog>),
     SetSortOrder(crate::data::SortOrder),
     FlipSortDirection,

@@ -1,6 +1,6 @@
 use super::client_id;
 use super::{AppEntry, Category, Platform};
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 const DEFAULT_API_URL: &str = "https://vitaforge.josephinoo.dev/api/v1";
 pub fn api_url() -> &'static str {
     option_env!("SERVER_URL").unwrap_or(DEFAULT_API_URL)
@@ -82,6 +82,8 @@ struct RawApp {
     release_page: Option<String>,
     #[serde(default)]
     category: String,
+    #[serde(default, alias = "genre", deserialize_with = "deserialize_genres")]
+    genres: Vec<String>,
     #[serde(rename = "type", default)]
     kind: String,
     #[serde(default)]
@@ -136,6 +138,30 @@ struct RawApp {
     user_rating: Option<u8>,
     #[serde(default)]
     release_date: Option<String>,
+}
+
+fn deserialize_genres<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Genres {
+        List(Vec<String>),
+        One(String),
+        None,
+    }
+
+    Ok(match Genres::deserialize(deserializer)? {
+        Genres::List(genres) => genres,
+        Genres::One(genre) => genre
+            .split(',')
+            .map(str::trim)
+            .filter(|genre| !genre.is_empty())
+            .map(str::to_owned)
+            .collect(),
+        Genres::None => Vec::new(),
+    })
 }
 const MAX_SCREENSHOTS_KEPT: usize = 8;
 fn non_empty(value: String) -> Option<String> {
@@ -227,6 +253,7 @@ impl RawApp {
             changelog,
             release_page,
             category,
+            genres: self.genres,
             platform,
             kind: self.kind.clone(),
             icon_url,
@@ -351,6 +378,10 @@ fn catalog_cache_complete(entries: &[AppEntry]) -> bool {
     catalog_has_vitadb_official(entries) && catalog_has_nps(entries)
 }
 
+fn catalog_cache_has_genres(entries: &[AppEntry]) -> bool {
+    entries.iter().any(|entry| !entry.genres.is_empty())
+}
+
 async fn fetch_remote_version() -> anyhow::Result<CatalogVersionInfo> {
     let response = request(reqwest::Method::GET, "/apps/version")
         .timeout(std::time::Duration::from_secs(3))
@@ -404,7 +435,8 @@ pub async fn fetch_catalog() -> anyhow::Result<Vec<AppEntry>> {
         (Some((entries, local_ver)), Ok(remote_ver))
             if local_ver.version == remote_ver.version
                 && local_ver.total_apps == remote_ver.total_apps
-                && catalog_cache_complete(&entries) =>
+                && catalog_cache_complete(&entries)
+                && catalog_cache_has_genres(&entries) =>
         {
             eprintln!(
                 "Catalog cache hit! (version: {}, apps: {}). Loaded {} entries instantly from disk.",
@@ -610,6 +642,21 @@ mod tests {
     }
 
     #[test]
+    fn parses_genres_from_a_list_or_a_comma_separated_value() {
+        let list: RawApp = serde_json::from_str(
+            r#"{"id":1,"name":"n","download_url":"http://x","genres":["Action", "Puzzle"]}"#,
+        )
+        .expect("parses genre list");
+        assert_eq!(list.into_app_entry().expect("has download url").genres, ["Action", "Puzzle"]);
+
+        let text: RawApp = serde_json::from_str(
+            r#"{"id":2,"name":"n","download_url":"http://x","genre":"Action, Puzzle"}"#,
+        )
+        .expect("parses genre text");
+        assert_eq!(text.into_app_entry().expect("has download url").genres, ["Action", "Puzzle"]);
+    }
+
+    #[test]
     fn synthesizes_cover_url_when_catalog_omitted_it() {
         let mut entry = AppEntry {
             id: "1".into(),
@@ -627,6 +674,7 @@ mod tests {
             changelog: String::new(),
             release_page: None,
             category: Category::PsVitaGame,
+            genres: Vec::new(),
             platform: Platform::NpsVita,
             kind: "psv_game".into(),
             icon_url: None,

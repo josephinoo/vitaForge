@@ -218,6 +218,7 @@ fn catalog_view(
         &catalog.search_query,
         catalog.search_requested,
         catalog.category_filter,
+        catalog.genre_filter.as_deref(),
         catalog.source_filter,
         catalog.sort_order,
         catalog.sort_direction,
@@ -228,6 +229,7 @@ fn catalog_view(
         &catalog.source_counts,
         catalog.total_unique_count,
         &catalog.category_counts,
+        &catalog.genre_counts,
         catalog.featured_index,
         catalog.tab,
         catalog.discover_home,
@@ -466,6 +468,7 @@ fn catalog_screen(
     search_query: &str,
     search_active: bool,
     category_filter: Option<Category>,
+    genre_filter: Option<&str>,
     source_filter: Option<crate::data::SourceCatalog>,
     sort_order: SortOrder,
     sort_direction: crate::data::SortDirection,
@@ -476,6 +479,7 @@ fn catalog_screen(
     source_counts: &[(crate::data::SourceCatalog, usize)],
     total_unique_count: usize,
     category_counts: &[(Category, usize)],
+    genre_counts: &[(String, usize)],
     featured_index: Option<usize>,
     tab: StoreTab,
     discover_home: bool,
@@ -628,6 +632,12 @@ fn catalog_screen(
                             sort_dropdown(ui, lang, sort_order, sort_direction)
                         {
                             commands.push(AppCommand::SetSortOrder(picked));
+                        }
+                        if source_filter == Some(crate::data::SourceCatalog::Nps) {
+                            ui.add_space(8.0);
+                            if let Some(picked) = genre_dropdown(ui, genre_counts, genre_filter) {
+                                commands.push(AppCommand::SetGenreFilter(picked));
+                            }
                         }
                     });
                 });
@@ -1011,6 +1021,58 @@ fn source_dropdown(
     });
     picked
 }
+fn genre_dropdown(
+    ui: &mut egui::Ui,
+    genre_counts: &[(String, usize)],
+    genre_filter: Option<&str>,
+) -> Option<Option<String>> {
+    let popup_id = ui.make_persistent_id("genre_dropdown");
+    let mut label = genre_filter.map_or_else(|| "All genres".to_owned(), str::to_owned);
+    if label.chars().count() > 16 {
+        label = format!("{}…", label.chars().take(15).collect::<String>());
+    }
+    let galley = ui.fonts(|f| f.layout_no_wrap(label, font(FONT_SMALL), ACCENT_CYAN));
+    let size = egui::vec2((galley.size().x + 34.0).clamp(112.0, 156.0), 26.0);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    let hover_t = if response.hovered() { 1.0_f32 } else { 0.0_f32 };
+    let open = ui.memory(|mem| mem.is_popup_open(popup_id));
+    ui.painter().rect_filled(rect, rect.height() / 2.0, BG_CARD.lerp_to_gamma(BG_CARD_HOVER, hover_t));
+    ui.painter().rect_stroke(
+        rect,
+        rect.height() / 2.0,
+        egui::Stroke::new(1.0_f32, if open || genre_filter.is_some() { ACCENT_CYAN } else { SEPARATOR }),
+        egui::StrokeKind::Inside,
+    );
+    ui.painter().galley(
+        egui::pos2(rect.left() + 12.0, rect.center().y - galley.size().y / 2.0),
+        galley,
+        ACCENT_CYAN,
+    );
+    chevron(ui.painter(), egui::pos2(rect.right() - 12.0, rect.center().y), open);
+    if response.clicked() {
+        ui.memory_mut(|mem| mem.toggle_popup(popup_id));
+    }
+    let mut picked = None;
+    egui::popup_below_widget(ui, popup_id, &response, egui::PopupCloseBehavior::CloseOnClick, |ui| {
+        ui.set_width(176.0);
+        egui::ScrollArea::vertical()
+            .id_salt("genre_dropdown_options")
+            .max_height(180.0)
+            .show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 2.0;
+                if dropdown_row(ui, "All genres", genre_filter.is_none()) {
+                    picked = Some(None);
+                }
+                for (genre, count) in genre_counts {
+                    let row_label = format!("{genre} ({count})");
+                    if dropdown_row(ui, &row_label, genre_filter == Some(genre.as_str())) {
+                        picked = Some(Some(genre.clone()));
+                    }
+                }
+            });
+    });
+    picked
+}
 fn sort_dropdown(
     ui: &mut egui::Ui,
     lang: Language,
@@ -1068,11 +1130,19 @@ fn dropdown_row(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
         ui.painter().rect_filled(rect, RADIUS_XS, BG_CARD_HOVER.gamma_multiply(hover_t));
     }
     let text_color = if active { ACCENT_CYAN } else { TEXT_WHITE };
-    ui.painter().text(
-        egui::pos2(rect.left() + 10.0, rect.center().y),
-        egui::Align2::LEFT_CENTER,
-        label,
+    let mut job = egui::text::LayoutJob::simple(
+        label.to_owned(),
         font(FONT_BODY),
+        text_color,
+        (rect.width() - 20.0).max(0.0),
+    );
+    job.wrap.max_rows = 1;
+    job.wrap.break_anywhere = false;
+    job.wrap.overflow_character = Some('…');
+    let galley = ui.fonts(|fonts| fonts.layout_job(job));
+    ui.painter().galley(
+        egui::pos2(rect.left() + 10.0, rect.center().y - galley.size().y * 0.5),
+        galley,
         text_color,
     );
     response.clicked()
@@ -1399,6 +1469,13 @@ fn category_badge(ui: &mut egui::Ui, category: Category) {
     let size = egui::vec2(galley.size().x + 10.0, 14.0);
     let rect = ui.allocate_exact_size(size, egui::Sense::hover()).0;
     ui.painter().rect_filled(rect, RADIUS_XS, color.gamma_multiply(0.3));
+    ui.painter().galley(rect.center() - galley.size() / 2.0, galley, TEXT_WHITE);
+}
+fn genre_badge(ui: &mut egui::Ui, genre: &str) {
+    let galley = ui.fonts(|f| f.layout_no_wrap(genre.to_uppercase(), font(FONT_MICRO), TEXT_WHITE));
+    let size = egui::vec2(galley.size().x + 10.0, 14.0);
+    let rect = ui.allocate_exact_size(size, egui::Sense::hover()).0;
+    ui.painter().rect_filled(rect, RADIUS_XS, ACCENT_CYAN.gamma_multiply(0.22));
     ui.painter().galley(rect.center() - galley.size() / 2.0, galley, TEXT_WHITE);
 }
 #[derive(Clone, Copy)]
@@ -1925,7 +2002,7 @@ fn detail_screen(
                                 ui.add_space(2.0);
                                 ui.label(egui::RichText::new(&entry.name).size(FONT_TITLE).strong().color(TEXT_WHITE));
                                 ui.add_space(2.0);
-                                ui.horizontal(|ui| {
+                                ui.horizontal_wrapped(|ui| {
                                     let author_label = lang.by_author(&entry.author);
                                     let author_btn = ui.add(
                                         egui::Button::new(
@@ -1940,6 +2017,12 @@ fn detail_screen(
                                     }
                                     ui.add_space(6.0);
                                     category_badge(ui, entry.category);
+                                    if crate::data::SourceCatalog::Nps.matches(&entry.source_catalog) {
+                                        for genre in entry.genres.iter().filter(|genre| !genre.eq_ignore_ascii_case("other")) {
+                                            ui.add_space(4.0);
+                                            genre_badge(ui, genre);
+                                        }
+                                    }
                                     if entry.platform != Platform::Vita {
                                         ui.add_space(4.0);
                                         platform_badge(ui, entry.platform);
@@ -1986,28 +2069,30 @@ fn detail_screen(
                                     };
                                     warning_pill(ui, text);
                                 }
-                            });
-                            ui.add_space(8.0);
-                            version_info_block(ui, lang, installed, entry, state);
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                match install {
-                                    None => {
-                                        let label = match (entry.platform, state) {
-                                            (Platform::Plugin, _) => lang.download(),
-                                            (_, InstallState::Absent) => lang.install(),
-                                            (_, InstallState::Installed) => lang.reinstall(),
-                                            (_, InstallState::Outdated) => lang.update(),
-                                        };
-                                        if play_install_button(ui, label, state) {
-                                            commands.push(AppCommand::InstallCurrent);
+                                ui.add_space(8.0);
+                                ui.horizontal(|ui| {
+                                    version_info_block(ui, lang, installed, entry, state);
+                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                        match install {
+                                            None => {
+                                                let label = match (entry.platform, state) {
+                                                    (Platform::Plugin, _) => lang.download(),
+                                                    (_, InstallState::Absent) => lang.install(),
+                                                    (_, InstallState::Installed) => lang.reinstall(),
+                                                    (_, InstallState::Outdated) => lang.update(),
+                                                };
+                                                if play_install_button(ui, label, state) {
+                                                    commands.push(AppCommand::InstallCurrent);
+                                                }
+                                            }
+                                            Some(progress) => {
+                                                if install_status(ui, progress) {
+                                                    commands.push(AppCommand::DismissInstall);
+                                                }
+                                            }
                                         }
-                                    }
-                                    Some(progress) => {
-                                        if install_status(ui, progress) {
-                                            commands.push(AppCommand::DismissInstall);
-                                        }
-                                    }
-                                }
+                                    });
+                                });
                             });
                         });
                     });
@@ -2407,16 +2492,10 @@ fn screenshots_row(
     }
     egui::ScrollArea::horizontal().id_salt("screenshots").show(ui, |ui| {
         ui.horizontal(|ui| {
-            let mut load_budget = 2usize;
             for (index, url) in entry.screenshot_urls.iter().enumerate() {
                 let (rect, response) = ui.allocate_exact_size(SCREENSHOT_SIZE, egui::Sense::click());
                 let nearby = rect.right() > ui.clip_rect().left() && rect.left() < ui.clip_rect().right();
-                let already = icons.peek(url).is_some();
-                let fetch = nearby && (already || load_budget > 0);
-                if fetch && !already {
-                    load_budget = load_budget.saturating_sub(1);
-                }
-                draw_screenshot(ui, icons, rect, url, entry.category, fetch);
+                draw_screenshot(ui, icons, rect, url, entry.category, nearby);
                 if response.clicked() {
                     commands.push(AppCommand::OpenScreenshot(index));
                 }

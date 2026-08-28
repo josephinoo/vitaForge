@@ -41,6 +41,7 @@ pub struct CatalogState {
     pub search_query: String,
     pub search_requested: bool,
     pub category_filter: Option<Category>,
+    pub genre_filter: Option<String>,
     pub source_filter: Option<SourceCatalog>,
     pub sort_order: SortOrder,
     pub sort_direction: SortDirection,
@@ -52,6 +53,7 @@ pub struct CatalogState {
     pub is_commercial_view: bool,
     pub source_counts: Vec<(SourceCatalog, usize)>,
     pub category_counts: Vec<(Category, usize)>,
+    pub genre_counts: Vec<(String, usize)>,
     pub source_scoped_count: usize,
     pub total_unique_count: usize,
     pub featured_index: Option<usize>,
@@ -74,6 +76,7 @@ impl CatalogState {
             search_query: String::new(),
             search_requested: false,
             category_filter: None,
+            genre_filter: None,
             source_filter: None,
             sort_order: settings.sort_order,
             sort_direction: settings.sort_direction,
@@ -84,6 +87,7 @@ impl CatalogState {
             is_commercial_view: false,
             source_counts: Vec::new(),
             category_counts: Vec::new(),
+            genre_counts: Vec::new(),
             source_scoped_count: 0,
             total_unique_count: 0,
             featured_index: None,
@@ -109,6 +113,7 @@ impl CatalogState {
             search_query: String::new(),
             search_requested: false,
             category_filter: None,
+            genre_filter: None,
             source_filter: None,
             sort_order: SortOrder::default(),
             sort_direction: SortDirection::default(),
@@ -119,6 +124,7 @@ impl CatalogState {
             is_commercial_view: false,
             source_counts: Vec::new(),
             category_counts: Vec::new(),
+            genre_counts: Vec::new(),
             source_scoped_count: 0,
             total_unique_count: 0,
             featured_index: None,
@@ -370,6 +376,7 @@ impl CatalogState {
         let query = self.search_query.trim().to_lowercase();
         let apps = &self.apps;
         let category_filter = self.category_filter;
+        let genre_filter = self.genre_filter.as_deref();
         let source_filter = self.source_filter;
         self.filtered_indices = self
             .sorted_indices
@@ -378,13 +385,18 @@ impl CatalogState {
             .filter(|&index| {
                 let app = &apps[index];
                 let matches_cat = category_filter.is_none_or(|c| c as u8 == app.category as u8);
+                let matches_genre = genre_filter.is_none_or(|genre| {
+                    app.genres.iter().any(|app_genre| app_genre.eq_ignore_ascii_case(genre))
+                });
                 let matches_source = source_filter.is_none_or(|s| s.matches(&app.source_catalog));
                 matches_cat
+                    && matches_genre
                     && matches_source
                     && (query.is_empty()
                         || app.name_lower.contains(&query)
                         || app.author_lower.contains(&query)
-                        || app.titleid_lower.contains(&query))
+                        || app.titleid_lower.contains(&query)
+                        || app.genres.iter().any(|genre| genre.to_lowercase().contains(&query)))
             })
             .collect();
         if source_filter.is_none() {
@@ -439,6 +451,17 @@ impl CatalogState {
             })
             .filter(|&(_, count)| count > 0)
             .collect();
+        let mut genres = std::collections::BTreeMap::<String, usize>::new();
+        if source_filter == Some(SourceCatalog::Nps) {
+            for &index in &visible {
+                for genre in &apps[index].genres {
+                    if !genre.eq_ignore_ascii_case("other") {
+                        *genres.entry(genre.clone()).or_default() += 1;
+                    }
+                }
+            }
+        }
+        self.genre_counts = genres.into_iter().collect();
     }
     fn move_selection(&mut self, delta: isize) -> bool {
         if self.filtered_indices.is_empty() {
@@ -1082,10 +1105,21 @@ impl App {
                     self.audio.play(crate::audio::Sfx::TabTransition);
                 }
             }
+            AppCommand::SetGenreFilter(genre) => {
+                if let AppState::Catalog(catalog) = &mut self.state {
+                    catalog.genre_filter = genre;
+                    catalog.discover_home = false;
+                    if catalog.tab == StoreTab::Discover || catalog.tab == StoreTab::Search {
+                        catalog.refresh_filter();
+                    }
+                    self.audio.play(crate::audio::Sfx::TabTransition);
+                }
+            }
             AppCommand::SetSourceFilter(source) => {
                 if let AppState::Catalog(catalog) = &mut self.state {
                     catalog.source_filter = source;
                     catalog.category_filter = None;
+                    catalog.genre_filter = None;
                     catalog.recompute_dropdown_counts();
                     catalog.rebuild_rails_from_ids_or_fallback();
                     match catalog.tab {
@@ -1379,6 +1413,7 @@ impl App {
                         changelog: String::new(),
                         release_page: Some("https://github.com/josephinoo/vitaForge/releases".to_owned()),
                         category: Category::Utility,
+                        genres: Vec::new(),
                         platform: crate::data::Platform::Vita,
                         kind: String::new(),
                         icon_url: None,
@@ -1725,6 +1760,7 @@ mod sort_tests {
             changelog: String::new(),
             release_page: None,
             category: Category::Tool,
+            genres: Vec::new(),
             platform: crate::data::Platform::Vita,
             kind: String::new(),
             icon_url: None,

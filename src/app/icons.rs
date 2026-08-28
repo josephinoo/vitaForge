@@ -15,11 +15,11 @@ const MAX_CONCURRENT_FETCHES: usize = 6;
 const MAX_CONCURRENT_DECODES: usize = 2;
 const LIVE_RESERVED_SLOTS: usize = 2;
 const MAX_BACKOFF: Duration = Duration::from_secs(15 * 60);
-pub const MAX_ICON_SIDE: u32 = 128;
+pub const MAX_ICON_SIDE: u32 = 256;
 pub const MAX_SCREENSHOT_SIDE: u32 = 480;
 pub const HERO_SIDE: u32 = 480;
 const MAX_RESIDENT_BYTES: usize = 24 * 1024 * 1024;
-const MAX_RESIDENT_READY: usize = 160;
+const MAX_RESIDENT_READY: usize = 96;
 const RECENT_USE_TICKS: u64 = 128;
 const MAX_META_ENTRIES: usize = 2048;
 const MAX_GPU_BACKLOG_FOR_SPAWN: usize = 24;
@@ -927,12 +927,7 @@ fn decode_image(bytes: &[u8], max_side: u32) -> Option<egui::ColorImage> {
         }
     };
     if decoded.width() > max_side || decoded.height() > max_side {
-        let filter = if max_side > MAX_ICON_SIDE {
-            image::imageops::FilterType::Triangle
-        } else {
-            image::imageops::FilterType::Nearest
-        };
-        decoded = decoded.resize(max_side, max_side, filter);
+        decoded = decoded.resize(max_side, max_side, image::imageops::FilterType::Triangle);
     }
     let rgba = decoded.into_rgba8();
     let size = [rgba.width() as usize, rgba.height() as usize];
