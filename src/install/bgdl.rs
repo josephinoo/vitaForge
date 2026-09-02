@@ -1,6 +1,5 @@
-use anyhow::{Result, bail};
 #[cfg(target_os = "vita")]
-use anyhow::Context;
+use anyhow::{Context, Result, bail};
 #[cfg(target_os = "vita")]
 use std::ffi::CString;
 #[cfg(target_os = "vita")]

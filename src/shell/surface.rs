@@ -11,6 +11,7 @@ pub struct FramePaintStats {
     pub draw_calls: u32,
     pub textures_uploaded: u32,
     pub vertices_drawn: u32,
+    pub missing_textures: u32,
 }
 pub const WIDTH: u32 = 960;
 pub const HEIGHT: u32 = 544;
@@ -55,13 +56,16 @@ impl VitaSurface {
     pub fn take_dropped_textures(&mut self) -> Vec<egui::TextureId> {
         self.egui_painter.take_dropped_textures()
     }
+    pub fn force_recover(&mut self) -> Vec<egui::TextureId> {
+        self.egui_painter.force_recover()
+    }
     pub fn paint_egui(
         &mut self,
         pixels_per_point: f32,
         primitives: &[egui::ClippedPrimitive],
         textures_delta: &egui::TexturesDelta,
     ) -> Result<FramePaintStats> {
-        let PaintStats { texture_apply_secs, geometry_secs, draw_calls, textures_uploaded, vertices_drawn } =
+        let PaintStats { texture_apply_secs, geometry_secs, draw_calls, textures_uploaded, vertices_drawn, missing_textures } =
             self.egui_painter.paint(&mut self.canvas, [WIDTH, HEIGHT], pixels_per_point, primitives, textures_delta)?;
         let present_started_at = std::time::Instant::now();
         self.canvas.present();
@@ -73,6 +77,7 @@ impl VitaSurface {
             draw_calls,
             textures_uploaded,
             vertices_drawn,
+            missing_textures,
         })
     }
 

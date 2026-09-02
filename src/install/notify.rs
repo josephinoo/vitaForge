@@ -24,6 +24,9 @@ pub fn send(text: &str) {
 pub fn install_finished(title: &str) {
     send(&format!("{title} installed"));
 }
+pub fn install_progress(title: &str, percent: u8) {
+    send(&format!("{title}: {percent}%"));
+}
 pub fn install_failed(title: &str, reason: &str) {
     send(&format!("{title} failed to install: {reason}"));
 }
