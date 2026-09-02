@@ -60,6 +60,7 @@ pub enum AppCommand {
     OpenSettings,
     CloseSettings,
     SetLanguage(crate::app::i18n::Language),
+    ToggleInstallNotifications,
     ClearIconCache,
     ClearCatalogCache,
     PurgeAllCache,

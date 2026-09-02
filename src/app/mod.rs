@@ -335,20 +335,18 @@ impl CatalogState {
             self.sort_direction = sort.default_direction();
         }
         self.resort();
-        data::settings::save(&data::settings::Settings {
-            sort_order: self.sort_order,
-            sort_direction: self.sort_direction,
-            language: data::settings::load().language,
-        });
+        let mut settings = data::settings::load();
+        settings.sort_order = self.sort_order;
+        settings.sort_direction = self.sort_direction;
+        data::settings::save(&settings);
     }
     fn flip_sort_direction(&mut self) {
         self.sort_direction = self.sort_direction.flipped();
         self.resort();
-        data::settings::save(&data::settings::Settings {
-            sort_order: self.sort_order,
-            sort_direction: self.sort_direction,
-            language: data::settings::load().language,
-        });
+        let mut settings = data::settings::load();
+        settings.sort_order = self.sort_order;
+        settings.sort_direction = self.sort_direction;
+        data::settings::save(&settings);
     }
     fn resort(&mut self) {
         self.sorted_indices = self.sort_order_indices();
@@ -629,6 +627,12 @@ fn is_collapsible_homebrew(app: &AppEntry) -> bool {
 fn prefers_homebrew_candidate(apps: &[AppEntry], candidate: usize, incumbent: usize) -> bool {
     let a = &apps[candidate];
     let b = &apps[incumbent];
+    if crate::install::installed::version_is_older(&b.version, &a.version) {
+        return true;
+    }
+    if crate::install::installed::version_is_older(&a.version, &b.version) {
+        return false;
+    }
     let rank_a = SourceCatalog::from_api(&a.source_catalog)
         .map(homebrew_source_rank)
         .unwrap_or(100);
@@ -795,6 +799,7 @@ pub struct App {
     pub cache_stats: data::cache_manager::CacheStats,
     pub cache_notice: Option<String>,
     icons_need_clear: bool,
+    install_notifications: bool,
 }
 const LOAD_WATCHDOG: std::time::Duration = std::time::Duration::from_secs(25);
 pub struct InstallJob {
@@ -804,6 +809,48 @@ pub struct InstallJob {
     pub progress: crate::install::Progress,
     rx: watch::Receiver<crate::install::Progress>,
     cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    last_notification_progress: Option<(u8, u8)>,
+}
+
+fn progress_notification(progress: &crate::install::Progress) -> Option<(u8, u8)> {
+    match progress {
+        crate::install::Progress::DownloadingData { received, total: Some(total), .. } if *total > 0 => {
+            Some((1, ((*received * 100 / *total).min(100)) as u8))
+        }
+        crate::install::Progress::Downloading { received, total: Some(total), .. } if *total > 0 => {
+            Some((2, ((*received * 100 / *total).min(100)) as u8))
+        }
+        crate::install::Progress::Extracting { done, total } if *total > 0 => {
+            Some((3, ((*done as u64 * 100 / *total as u64).min(100)) as u8))
+        }
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod install_notification_tests {
+    use super::progress_notification;
+    use crate::install::Progress;
+
+    #[test]
+    fn progress_notifications_only_use_known_totals() {
+        assert_eq!(
+            progress_notification(&Progress::Downloading {
+                received: 50,
+                total: Some(200),
+                elapsed_secs: 1,
+            }),
+            Some((2, 25))
+        );
+        assert_eq!(
+            progress_notification(&Progress::Downloading {
+                received: 50,
+                total: None,
+                elapsed_secs: 1,
+            }),
+            None
+        );
+    }
 }
 impl App {
     pub fn new() -> Result<Self> {
@@ -833,11 +880,12 @@ impl App {
             }
         });
 
+        let settings = data::settings::load();
         Ok(Self {
             state: AppState::Loading,
             icons: IconCache::new(),
             installed: crate::install::installed::InstalledIndex::new(),
-            lang: data::settings::load().language.unwrap_or_else(Language::detect),
+            lang: settings.language.unwrap_or_else(Language::detect),
             install: None,
             self_update: None,
             needs_installed_rescan: true,
@@ -852,6 +900,7 @@ impl App {
             cache_stats: data::cache_manager::CacheStats::default(),
             cache_notice: None,
             icons_need_clear: false,
+            install_notifications: settings.install_notifications,
         })
     }
     fn spawn_catalog_fetch(&mut self) {
@@ -905,9 +954,20 @@ impl App {
         }
         if let Some(job) = &mut self.install {
             let previous = std::mem::replace(&mut job.progress, job.rx.borrow_and_update().clone());
+            if self.install_notifications && previous != job.progress {
+                if let Some((stage, percent)) = progress_notification(&job.progress) {
+                    let milestone = percent / 25 * 25;
+                    if job.last_notification_progress != Some((stage, milestone)) {
+                        crate::install::notify::install_progress(&job.title, milestone);
+                        job.last_notification_progress = Some((stage, milestone));
+                    }
+                }
+            }
             if previous != job.progress && job.progress == crate::install::Progress::Done {
                 self.installed.mark_installed(&job.app_id_title);
-                crate::install::notify::install_finished(&job.title);
+                if self.install_notifications {
+                    crate::install::notify::install_finished(&job.title);
+                }
                 let app_id = job.app_id.clone();
                 tokio::spawn(async move {
                     if let Err(err) = data::api::notify_install(&app_id).await {
@@ -917,7 +977,9 @@ impl App {
             } else if let crate::install::Progress::Failed(reason) = &job.progress
                 && previous != job.progress
             {
-                crate::install::notify::install_failed(&job.title, reason);
+                if self.install_notifications {
+                    crate::install::notify::install_failed(&job.title, reason);
+                }
             }
         }
         if let Some(rx) = &mut self.self_update_rx
@@ -1178,6 +1240,7 @@ impl App {
                         5 => self.handle_command(AppCommand::ClearIconCache),
                         6 => self.handle_command(AppCommand::ClearCatalogCache),
                         7 => self.handle_command(AppCommand::PurgeAllCache),
+                        8 => self.handle_command(AppCommand::ToggleInstallNotifications),
                         _ => Ok(()),
                     };
                 }
@@ -1262,7 +1325,7 @@ impl App {
                     AppState::Settings { selected, .. } => {
                         match direction {
                             InputCommand::MoveUp => *selected = selected.saturating_sub(1),
-                            InputCommand::MoveDown => *selected = (*selected + 1).min(7),
+                            InputCommand::MoveDown => *selected = (*selected + 1).min(8),
                             _ => {}
                         }
                     }
@@ -1376,7 +1439,15 @@ impl App {
                     let title = entry.name.clone();
                     let (rx, cancel) = crate::install::start(entry);
                     let progress = rx.borrow().clone();
-                    self.install = Some(InstallJob { app_id, app_id_title, title, progress, rx, cancel });
+                    self.install = Some(InstallJob {
+                        app_id,
+                        app_id_title,
+                        title,
+                        progress,
+                        rx,
+                        cancel,
+                        last_notification_progress: None,
+                    });
                     self.audio.play(crate::audio::Sfx::Launch);
                     if let AppState::Detail { data_prompt, .. } = &mut self.state {
                         *data_prompt = false;
@@ -1456,6 +1527,7 @@ impl App {
                         progress,
                         rx,
                         cancel,
+                        last_notification_progress: None,
                     });
                     self.audio.play(crate::audio::Sfx::Launch);
                 }
@@ -1496,6 +1568,10 @@ impl App {
                 if let AppState::Settings { selected, .. } = &mut self.state {
                     *selected = Language::ALL.iter().position(|&language| language == lang).unwrap_or(0);
                 }
+            }
+            AppCommand::ToggleInstallNotifications => {
+                self.install_notifications = !self.install_notifications;
+                data::settings::set_install_notifications(self.install_notifications);
             }
             AppCommand::ClearIconCache => {
                 let freed = data::cache_manager::clear_icon_cache();

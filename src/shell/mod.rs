@@ -15,12 +15,10 @@ use crate::input::{
     open_first_controller, register_vita_controller_mapping, AppCommand, TextTarget,
 };
 use anyhow::Result;
-use std::thread::sleep;
 use std::time::{Duration, Instant};
 use surface::{FramePaintStats, HEIGHT, VitaSurface, WIDTH};
 const UI_SCALE: f32 = 1.3;
 const ACTIVE_FRAME_TIME: Duration = Duration::from_millis(16);
-const INPUT_POLL_INTERVAL: Duration = Duration::from_millis(4);
 const STICK_REPEAT_DELAY: Duration = Duration::from_millis(200);
 const STICK_REPEAT_INTERVAL: Duration = Duration::from_millis(70);
 const FRAME_STATS_INTERVAL: Duration = Duration::from_secs(5);
@@ -48,6 +46,8 @@ struct FrameStats {
     draw_calls: u64,
     textures_uploaded: u64,
     vertices_drawn: u64,
+    missing_textures: u64,
+    stalled_frames: u32,
     iterations: u32,
     commands: u32,
     keyboard_commands: u32,
@@ -82,6 +82,20 @@ impl FrameStats {
         self.last_repeat_at = Some(now);
         self.repeats += 1;
     }
+    const STALL_THRESHOLD: u32 = 30;
+    fn note_stall(&mut self, draw_calls: u32, missing_textures: u32) -> bool {
+        if draw_calls == 0 || missing_textures > 0 {
+            self.stalled_frames += 1;
+        } else {
+            self.stalled_frames = 0;
+        }
+        if self.stalled_frames >= Self::STALL_THRESHOLD {
+            self.stalled_frames = 0;
+            true
+        } else {
+            false
+        }
+    }
     fn record(&mut self, tick: Duration, build_ui: Duration, tessellate: Duration, paint: FramePaintStats) {
         let now = Instant::now();
         let texture_apply = Duration::from_secs_f64(paint.texture_apply_secs);
@@ -97,6 +111,7 @@ impl FrameStats {
         self.draw_calls += paint.draw_calls as u64;
         self.textures_uploaded += paint.textures_uploaded as u64;
         self.vertices_drawn += paint.vertices_drawn as u64;
+        self.missing_textures += paint.missing_textures as u64;
         let paint_total = texture_apply + geometry + present;
         let total = tick + build_ui + tessellate + paint_total;
         if let Some(previous) = self.last_painted_at {
@@ -159,7 +174,7 @@ impl FrameStats {
         if self.frames > 0 {
             self.pending_log.push(format!(
                 "  avg per painted frame: tick={:.2}ms build_ui={:.2}ms tessellate={:.2}ms \
-                 texture_apply={:.2}ms ({:.1} uploads) geometry={:.2}ms ({:.1} draws, {:.0} verts) present={:.2}ms",
+                 texture_apply={:.2}ms ({:.1} uploads) geometry={:.2}ms ({:.1} draws, {:.0} verts, {} missing textures) present={:.2}ms",
                 self.tick.as_secs_f64() * 1000.0 / frames,
                 self.build_ui.as_secs_f64() * 1000.0 / frames,
                 self.tessellate.as_secs_f64() * 1000.0 / frames,
@@ -168,6 +183,7 @@ impl FrameStats {
                 self.geometry.as_secs_f64() * 1000.0 / frames,
                 self.draw_calls as f64 / frames,
                 self.vertices_drawn as f64 / frames,
+                self.missing_textures,
                 self.present.as_secs_f64() * 1000.0 / frames,
             ));
         }
@@ -294,7 +310,6 @@ pub fn run(mut app: App) -> Result<()> {
             }
         }
         frame_stats.note_commands(direct_commands.len());
-        let had_input = !egui_events.is_empty() || !direct_commands.is_empty();
         for command in direct_commands {
             app.handle_command(command)?;
         }
@@ -308,9 +323,6 @@ pub fn run(mut app: App) -> Result<()> {
             crate::app::AppState::Detail { comment_entry_requested: true, .. } => Some(TextTarget::Comment),
             _ => None,
         };
-        let app_busy = app.install_busy()
-            || matches!(app.state, crate::app::AppState::Loading)
-            || text_target.is_some();
         let raw_input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -347,7 +359,12 @@ pub fn run(mut app: App) -> Result<()> {
             &full_output.textures_delta,
         )?;
         app.icons.set_gpu_backlog(surface.pending_texture_uploads());
-        let dropped = surface.take_dropped_textures();
+        let mut dropped = surface.take_dropped_textures();
+        if frame_stats.note_stall(paint_stats.draw_calls, paint_stats.missing_textures) {
+            log_line("frame loop looked stalled for 30 frames straight, forcing texture recovery");
+            dropped.extend(surface.force_recover());
+            egui_ctx.request_repaint();
+        }
         if !dropped.is_empty() {
             app.icons.forget_textures(&egui_ctx, &dropped);
             egui_ctx.request_repaint();

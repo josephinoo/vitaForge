@@ -10,9 +10,9 @@ const BACKOFF_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_mi
 const NEW_TEXTURES_PER_FRAME: usize = 1;
 const MAX_UPLOAD_BYTES_PER_FRAME: usize = (HERO_SIDE as usize) * (HERO_SIDE as usize) * 4;
 const MAX_PENDING_SERVICED_PER_FRAME: usize = 2;
-pub const INITIAL_ICON_POOL_SIZE: usize = 64;
-pub const ICON_FREE_POOL_CAP: usize = 160;
-pub const ICON_FREE_POOL_WARM_LOW: usize = 16;
+pub const INITIAL_ICON_POOL_SIZE: usize = 24;
+pub const ICON_FREE_POOL_CAP: usize = 32;
+pub const ICON_FREE_POOL_WARM_LOW: usize = 8;
 const HERO_FREE_POOL_CAP: usize = 6;
 const MAX_PENDING_UPLOADS: usize = 48;
 struct FrameUploadBudget {
@@ -69,6 +69,7 @@ pub struct PaintStats {
     pub draw_calls: u32,
     pub textures_uploaded: u32,
     pub vertices_drawn: u32,
+    pub missing_textures: u32,
 }
 impl SdlEguiPainter {
     pub fn prewarm(&mut self, canvas: &mut sdl2::render::Canvas<sdl2::video::Window>) {
@@ -109,6 +110,7 @@ impl SdlEguiPainter {
         let geometry_started_at = std::time::Instant::now();
         let mut draw_calls = 0u32;
         let mut vertices_drawn = 0u32;
+        let mut missing_textures = 0u32;
         let mut current_clip: Option<sdl2::rect::Rect> = None;
         let mut current_texture_id: Option<egui::TextureId> = None;
         for clipped_primitive in primitives {
@@ -125,7 +127,10 @@ impl SdlEguiPainter {
             }
             let uv_scale = match self.textures.get(&mesh.texture_id) {
                 Some(t) => t.uv_scale,
-                None => continue,
+                None => {
+                    missing_textures += 1;
+                    continue;
+                }
             };
             let same_batch = current_clip == Some(clip_rect) && current_texture_id == Some(mesh.texture_id);
             if !same_batch {
@@ -150,7 +155,14 @@ impl SdlEguiPainter {
             let Some(freed) = self.textures.remove(texture_id) else { continue };
             self.recycle(freed.texture);
         }
-        Ok(PaintStats { texture_apply_secs, geometry_secs, draw_calls, textures_uploaded, vertices_drawn })
+        Ok(PaintStats {
+            texture_apply_secs,
+            geometry_secs,
+            draw_calls,
+            textures_uploaded,
+            vertices_drawn,
+            missing_textures,
+        })
     }
     fn is_new_creation(&self, texture_id: egui::TextureId, pos: Option<[usize; 2]>) -> bool {
         pos.is_none() || !self.textures.contains_key(&texture_id)
@@ -366,7 +378,11 @@ impl SdlEguiPainter {
             self.defer_or_give_up(texture_id, size, None, pixels, 0);
             return UploadOutcome::Deferred;
         }
-        match canvas.create_texture_streaming(PixelFormatEnum::RGBA32, HERO_SIDE, HERO_SIDE) {
+        let mut created = canvas.create_texture_streaming(PixelFormatEnum::RGBA32, HERO_SIDE, HERO_SIDE);
+        if created.is_err() && self.release_pools() > 0 {
+            created = canvas.create_texture_streaming(PixelFormatEnum::RGBA32, HERO_SIDE, HERO_SIDE);
+        }
+        match created {
             Ok(mut texture) => {
                 texture.set_blend_mode(BlendMode::Blend);
                 self.finish_hero_upload(texture, texture_id, size, pixels);
@@ -419,7 +435,11 @@ impl SdlEguiPainter {
             self.defer_or_give_up(texture_id, size, None, pixels, 0);
             return UploadOutcome::Deferred;
         }
-        match canvas.create_texture_streaming(PixelFormatEnum::RGBA32, MAX_ICON_SIDE, MAX_ICON_SIDE) {
+        let mut created = canvas.create_texture_streaming(PixelFormatEnum::RGBA32, MAX_ICON_SIDE, MAX_ICON_SIDE);
+        if created.is_err() && self.release_pools() > 0 {
+            created = canvas.create_texture_streaming(PixelFormatEnum::RGBA32, MAX_ICON_SIDE, MAX_ICON_SIDE);
+        }
+        match created {
             Ok(mut texture) => {
                 texture.set_blend_mode(BlendMode::Blend);
                 self.finish_icon_upload(texture, texture_id, size, pixels);
@@ -455,6 +475,29 @@ impl SdlEguiPainter {
         if let Some(previous) = self.textures.insert(texture_id, SdlEguiTexture { texture, uv_scale }) {
             self.recycle(previous.texture);
         }
+    }
+    pub fn force_recover(&mut self) -> Vec<egui::TextureId> {
+        self.release_pools();
+        let stale: Vec<egui::TextureId> =
+            self.textures.keys().copied().filter(|id| !Self::is_font_atlas(*id)).collect();
+        for id in &stale {
+            if let Some(texture) = self.textures.remove(id) {
+                unsafe { texture.texture.destroy() };
+            }
+        }
+        self.pending.retain(|id, _| Self::is_font_atlas(*id));
+        self.pending_order.retain(|id| Self::is_font_atlas(*id));
+        stale
+    }
+    fn release_pools(&mut self) -> usize {
+        let freed = self.icon_free_pool.len() + self.hero_free_pool.len();
+        for texture in self.icon_free_pool.drain(..) {
+            unsafe { texture.destroy() };
+        }
+        for texture in self.hero_free_pool.drain(..) {
+            unsafe { texture.destroy() };
+        }
+        freed
     }
     fn recycle(&mut self, texture: sdl2::render::Texture) {
         let query = texture.query();
@@ -555,8 +598,12 @@ impl SdlEguiPainter {
     ) {
         let [width, height] = size;
         if pos.is_none() || !self.textures.contains_key(&texture_id) {
-            let texture =
+            let mut texture =
                 canvas.create_texture_streaming(PixelFormatEnum::RGBA32, width as u32, height as u32);
+            if texture.is_err() && self.release_pools() > 0 {
+                texture =
+                    canvas.create_texture_streaming(PixelFormatEnum::RGBA32, width as u32, height as u32);
+            }
             let mut texture = match texture {
                 Ok(texture) => texture,
                 Err(err) => {

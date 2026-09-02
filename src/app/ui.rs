@@ -191,6 +191,7 @@ pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
                 previous.apps.len(),
                 &app.cache_stats,
                 app.cache_notice.as_deref(),
+                app.install_notifications,
             ));
             commands
         }
@@ -248,6 +249,7 @@ fn settings_modal(
     catalog_count: usize,
     stats: &crate::data::cache_manager::CacheStats,
     cache_notice: Option<&str>,
+    install_notifications: bool,
 ) -> Vec<AppCommand> {
     let mut commands = Vec::new();
     egui::Area::new(egui::Id::new("settings_modal_backdrop"))
@@ -264,7 +266,7 @@ fn settings_modal(
             ui.allocate_new_ui(egui::UiBuilder::new().max_rect(panel), |ui| {
                 egui::Frame::new()
                     .fill(BG_CARD)
-                    .stroke(egui::Stroke::new(1.0, GLASS_EDGE))
+                    .stroke(egui::Stroke::new(1.0_f32, GLASS_EDGE))
                     .corner_radius(egui::CornerRadius::same(CARD_RADIUS as u8))
                     .inner_margin(egui::Margin::same(20))
                     .show(ui, |ui| {
@@ -293,6 +295,18 @@ fn settings_modal(
                             ui.add_space(22.0);
                             ui.vertical(|ui| {
                                 ui.set_width(390.0);
+                                if dropdown_row(
+                                    ui,
+                                    &format!(
+                                        "{}: {}",
+                                        lang.settings_install_notifications(),
+                                        if install_notifications { lang.enabled() } else { lang.disabled() }
+                                    ),
+                                    selected == 8,
+                                ) {
+                                    commands.push(AppCommand::ToggleInstallNotifications);
+                                }
+                                ui.add_space(8.0);
                                 ui.label(egui::RichText::new(lang.settings_storage()).size(FONT_SMALL).color(TEXT_DIM));
                                 ui.add_space(6.0);
                                 let info_rows = [
@@ -508,7 +522,6 @@ fn catalog_screen(
         ctx,
         &hints,
         Some(status_note(installed, icons)),
-        Some(installed),
     ));
     egui::CentralPanel::default()
         .frame(egui::Frame::NONE.inner_margin(egui::vec2(SCREEN_MARGIN, 8.0)))
@@ -1544,7 +1557,7 @@ fn status_note(installed: &InstalledIndex, icons: &IconCache) -> StatusNote {
 }
 
 fn status_icon(painter: &egui::Painter, center: egui::Pos2, kind: StatusIcon, color: egui::Color32) {
-    let stroke = egui::Stroke::new(1.35, color);
+    let stroke = egui::Stroke::new(1.35_f32, color);
     match kind {
         StatusIcon::Library => {
             let rect = egui::Rect::from_center_size(center, egui::vec2(9.0, 7.0));
@@ -1595,38 +1608,66 @@ fn status_chip(
     let size = egui::vec2(galley.size().x + 28.0, 22.0);
     let rect = egui::Rect::from_min_size(pos, size);
     ui.painter().rect_filled(rect, 11.0, color.gamma_multiply(0.13));
-    ui.painter().rect_stroke(rect, 11.0, egui::Stroke::new(1.0, color.gamma_multiply(0.34)), egui::StrokeKind::Inside);
+    ui.painter().rect_stroke(rect, 11.0, egui::Stroke::new(1.0_f32, color.gamma_multiply(0.34)), egui::StrokeKind::Inside);
     status_icon(ui.painter(), egui::pos2(rect.left() + 11.0, rect.center().y), icon, color);
     ui.painter().galley(egui::pos2(rect.left() + 20.0, rect.center().y - galley.size().y * 0.5), galley, color);
     rect
 }
 
-fn status_note_widget(ui: &mut egui::Ui, rect: egui::Rect, note: StatusNote) -> egui::Response {
-    let response = ui.interact(rect, ui.id().with("status_note"), egui::Sense::click());
+fn status_note_widget(ui: &mut egui::Ui, rect: egui::Rect, note: StatusNote) -> Option<StoreTab> {
     let mut cursor = egui::pos2(rect.left(), rect.center().y - 11.0);
-    let mut paint_chip = |text: &str, icon, color| {
+    let mut paint_chip = |ui: &mut egui::Ui, key: &str, text: &str, icon, color, tab: Option<StoreTab>| {
         let chip = status_chip(ui, cursor, text, icon, color);
         cursor.x = chip.right() + 5.0;
+        tab.filter(|_| ui.interact(chip, ui.id().with(key), egui::Sense::click()).clicked())
     };
     match note {
-        StatusNote::RateLimited(message) => paint_chip(&message, StatusIcon::Alert, STAR_GOLD),
+        StatusNote::RateLimited(message) => {
+            let _ = paint_chip(ui, "status_chip_rate_limited", &message, StatusIcon::Alert, STAR_GOLD, None);
+            None
+        }
         StatusNote::Overview { installed, updates, storage } => {
-            paint_chip(&format!("{installed} installed"), StatusIcon::Library, GREEN_PLAY);
+            let mut clicked = None;
+            if let Some(tab) = paint_chip(
+                ui,
+                "status_chip_installed",
+                &format!("{installed} installed"),
+                StatusIcon::Library,
+                GREEN_PLAY,
+                Some(StoreTab::Library),
+            ) {
+                clicked = Some(tab);
+            }
             if updates > 0 {
-                paint_chip(&format!("{updates} updates"), StatusIcon::Update, STAR_GOLD);
+                if let Some(tab) = paint_chip(
+                    ui,
+                    "status_chip_updates",
+                    &format!("{updates} updates"),
+                    StatusIcon::Update,
+                    STAR_GOLD,
+                    Some(StoreTab::Updates),
+                ) {
+                    clicked = Some(tab);
+                }
             }
             if let Some((used, total)) = storage {
-                paint_chip(&format!("{used:.1}/{total:.1} GB"), StatusIcon::Storage, TEXT_DIM);
+                let _ = paint_chip(
+                    ui,
+                    "status_chip_storage",
+                    &format!("{used:.1}/{total:.1} GB"),
+                    StatusIcon::Storage,
+                    TEXT_DIM,
+                    None,
+                );
             }
+            clicked
         }
     }
-    response
 }
 fn button_hints(
     ctx: &egui::Context,
     hints: &[(Glyph, &str)],
     note: Option<StatusNote>,
-    installed: Option<&InstalledIndex>,
 ) -> Vec<AppCommand> {
     let mut commands = Vec::new();
     egui::TopBottomPanel::bottom("hints")
@@ -1639,14 +1680,8 @@ fn button_hints(
                     rect.left_top(),
                     egui::vec2(rect.width() * 0.54, rect.height()),
                 );
-                let response = status_note_widget(ui, note_rect, note);
-                if response.clicked() {
-                    let outdated = installed.map(|i| i.counts().1).unwrap_or(0);
-                    if outdated > 0 {
-                        commands.push(AppCommand::SetStoreTab(StoreTab::Updates));
-                    } else {
-                        commands.push(AppCommand::SetStoreTab(StoreTab::Library));
-                    }
+                if let Some(tab) = status_note_widget(ui, note_rect, note) {
+                    commands.push(AppCommand::SetStoreTab(tab));
                 }
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1841,19 +1876,18 @@ fn detail_screen(
             });
         });
     if busy {
-        commands.extend(button_hints(ctx, &[], None, None));
+        commands.extend(button_hints(ctx, &[], None));
     } else {
         commands.extend(button_hints(
             ctx,
             &[(Glyph::Circle, lang.btn_back()), (Glyph::Cross, lang.btn_open())],
             Some(status_note(installed, icons)),
-            Some(installed),
         ));
     }
 
     if data_prompt {
         egui::Area::new(egui::Id::new("data_prompt"))
-            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .fixed_pos(egui::Pos2::ZERO)
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
                 let screen = ui.ctx().screen_rect();

@@ -253,6 +253,15 @@ impl Language {
     pub fn settings_storage(self) -> &'static str {
         self.strings(|s| s.settings_storage)
     }
+    pub fn settings_install_notifications(self) -> &'static str {
+        self.strings(|s| s.settings_install_notifications)
+    }
+    pub fn enabled(self) -> &'static str {
+        self.strings(|s| s.enabled)
+    }
+    pub fn disabled(self) -> &'static str {
+        self.strings(|s| s.disabled)
+    }
     pub fn settings_version(self) -> &'static str {
         self.strings(|s| s.settings_version)
     }
@@ -467,6 +476,9 @@ struct LocalizedStrings {
     settings_title: &'static str,
     language_label: &'static str,
     settings_storage: &'static str,
+    settings_install_notifications: &'static str,
+    enabled: &'static str,
+    disabled: &'static str,
     settings_version: &'static str,
     settings_catalog: &'static str,
     settings_icon_cache: &'static str,
@@ -563,6 +575,9 @@ impl LocalizedStrings {
             settings_title: r("settings-title"),
             language_label: r("language-label"),
             settings_storage: r("settings-storage"),
+            settings_install_notifications: r("settings-install-notifications"),
+            enabled: r("enabled"),
+            disabled: r("disabled"),
             settings_version: r("settings-version"),
             settings_catalog: r("settings-catalog"),
             settings_icon_cache: r("settings-icon-cache"),

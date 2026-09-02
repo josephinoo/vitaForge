@@ -1,5 +1,5 @@
 use super::client_id;
-use super::{AppEntry, Category, Platform};
+use super::{AppEntry, Category, Platform, SourceCatalog};
 use serde::{Deserialize, Deserializer};
 const DEFAULT_API_URL: &str = "https://vitaforge.josephinoo.dev/api/v1";
 pub fn api_url() -> &'static str {
@@ -54,6 +54,18 @@ fn force_format(url: &str) -> String {
     };
     let value_start = start + "format=".len();
     let value_end = url[value_start..].find('&').map_or(url.len(), |i| value_start + i);
+    format!("{}{wanted}{}", &url[..value_start], &url[value_end..])
+}
+fn force_min_size(url: &str, wanted: &str) -> String {
+    let Some(start) = url.find("size=") else {
+        let separator = if url.contains('?') { '&' } else { '?' };
+        return format!("{url}{separator}size={wanted}");
+    };
+    let value_start = start + "size=".len();
+    let value_end = url[value_start..].find('&').map_or(url.len(), |i| value_start + i);
+    if &url[value_start..value_end] == "large" {
+        return url.to_owned();
+    }
     format!("{}{wanted}{}", &url[..value_start], &url[value_end..])
 }
 #[derive(Debug, Deserialize)]
@@ -216,6 +228,7 @@ impl RawApp {
             .and_then(|s| s.parse::<u64>().ok())
             .unwrap_or(0);
         let updated_at = self.release_date.unwrap_or_default();
+        let is_pkgj = SourceCatalog::Nps.matches(&source_catalog);
         let has_valid_icon = self.icon_hash.as_ref().is_some_and(|h| h != "default");
         let icon_url = if has_valid_icon {
             self.icon_url.map(|u| absolute(&u))
@@ -236,6 +249,14 @@ impl RawApp {
                     )))
                 }
             });
+        let (icon_url, cover_url) = if is_pkgj {
+            (
+                icon_url.map(|u| force_min_size(&u, "medium")),
+                cover_url.map(|u| force_min_size(&u, "medium")),
+            )
+        } else {
+            (icon_url, cover_url)
+        };
         let mut entry = AppEntry {
             id: self.id.to_string(),
             titleid,
@@ -616,6 +637,48 @@ mod tests {
             force_format("https://h/scraped_assets/psvita/game/screenshots/01.jpeg"),
             "https://h/scraped_assets/psvita/game/screenshots/01.jpeg?format=jpeg"
         );
+    }
+
+    #[test]
+    fn pkgj_images_get_upgraded_from_thumb_to_medium() {
+        assert_eq!(
+            force_min_size("https://h/api/v1/images/icon/abc.png?size=thumb&format=png", "medium"),
+            "https://h/api/v1/images/icon/abc.png?size=medium&format=png"
+        );
+        assert_eq!(
+            force_min_size("https://h/api/v1/images/icon/abc.png", "medium"),
+            "https://h/api/v1/images/icon/abc.png?size=medium"
+        );
+        assert_eq!(
+            force_min_size("https://h/api/v1/images/icon/abc.png?size=large", "medium"),
+            "https://h/api/v1/images/icon/abc.png?size=large"
+        );
+    }
+
+    #[test]
+    fn pkgj_entries_get_their_icon_and_cover_upgraded_to_medium() {
+        let raw: RawApp = serde_json::from_str(
+            r#"{"id":1,"title_id":"PCSE00001","name":"n","download_url":"http://x",
+                "source_catalog":"nps","icon_hash":"abc",
+                "icon_url":"/api/v1/images/icon/PCSE00001.png?size=thumb",
+                "cover_url":"/api/v1/images/cover/PCSE00001.png?size=thumb"}"#,
+        )
+        .expect("parses");
+        let entry = raw.into_app_entry().expect("has a download url");
+        assert!(entry.icon_url.unwrap().contains("size=medium"));
+        assert!(entry.cover_url.unwrap().contains("size=medium"));
+    }
+
+    #[test]
+    fn non_pkgj_entries_keep_the_size_the_server_sent() {
+        let raw: RawApp = serde_json::from_str(
+            r#"{"id":1,"title_id":"X","name":"n","download_url":"http://x",
+                "source_catalog":"vitadb","icon_hash":"abc",
+                "icon_url":"/api/v1/images/icon/X.png?size=thumb"}"#,
+        )
+        .expect("parses");
+        let entry = raw.into_app_entry().expect("has a download url");
+        assert!(entry.icon_url.unwrap().contains("size=thumb"));
     }
 
     #[test]
