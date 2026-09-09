@@ -1,4 +1,4 @@
-.PHONY: vpk ftp eboot upload-vpk run-vita vpk2
+.PHONY: vpk ftp eboot upload-vpk run-vita vpk2 vitagl-nosplash
 # Without this the build never sees SERVER_URL and silently falls back to the
 # default catalog url baked into the source.
 -include .env
@@ -9,6 +9,14 @@ VPK := target/armv7-sony-vita-newlibeabihf/release/vitaforge.vpk
 VITA_UPLOAD_DIR ?= ux0:/data/
 VPK_NAME := vitaforge.vpk
 FTP_PORT ?= 1337
+# Optional: rebuild system libvitaGL without splash (SRB2Kart vitagl-modern recipe).
+# App already stubs splash symbols; this is for a proper SDK-wide install.
+VITAGL_SRC ?= $(CURDIR)/vendor/vitaGL
+vitagl-nosplash:
+	@test -d "$(VITAGL_SRC)" || (echo "Clone vitaGL to $(VITAGL_SRC) first"; exit 1)
+	$(MAKE) -C "$(VITAGL_SRC)" clean
+	$(MAKE) -C "$(VITAGL_SRC)" HAVE_SBRK=1 NO_SPLASHSCREEN=1 -j$$(sysctl -n hw.ncpu 2>/dev/null || echo 4)
+	$(MAKE) -C "$(VITAGL_SRC)" HAVE_SBRK=1 NO_SPLASHSCREEN=1 install
 # --- Experimento: UI nativa alternativa con PocketJS (pocketjs.dev) ---
 # Genera un VPK totalmente separado (title_id propio, autogenerado por su
 # propio toolchain) desde experiments/pocketjs-ui/ — nunca toca $(VPK) ni

@@ -2,8 +2,8 @@ use anyhow::{Result, bail};
 pub const MAGIC: u32 = 0x7f50_4b47; // "\x7fPKG"
 pub const EXT_MAGIC: u32 = 0x7f65_7874; // "\x7fext"
 
-pub const HEADER_SIZE: usize = 192; 
-pub const EXT_HEADER_SIZE: usize = 64; 
+pub const HEADER_SIZE: usize = 192;
+pub const EXT_HEADER_SIZE: usize = 64;
 pub const PROBE_LEN: usize = HEADER_SIZE + EXT_HEADER_SIZE;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContentType {
@@ -46,9 +46,15 @@ fn get_u32be(b: &[u8]) -> u32 {
 fn get_u64be(b: &[u8]) -> u64 {
     u64::from_be_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]])
 }
-pub fn parse(probe: &[u8], mut read_at: impl FnMut(u64, usize) -> Result<Vec<u8>>) -> Result<PkgHeader> {
+pub fn parse(
+    probe: &[u8],
+    mut read_at: impl FnMut(u64, usize) -> Result<Vec<u8>>,
+) -> Result<PkgHeader> {
     if probe.len() < PROBE_LEN {
-        bail!("pkg header truncated: got {} bytes, need {PROBE_LEN}", probe.len());
+        bail!(
+            "pkg header truncated: got {} bytes, need {PROBE_LEN}",
+            probe.len()
+        );
     }
     if get_u32be(&probe[0..4]) != MAGIC {
         bail!("not a pkg file (bad magic)");
@@ -136,7 +142,9 @@ pub struct PkgItem {
 pub fn parse_items(table: &[u8], count: u32) -> Result<Vec<PkgItem>> {
     let mut items = Vec::with_capacity(count as usize);
     for index in 0..count as usize {
-        let entry = table.get(index * 32..index * 32 + 32).ok_or_else(|| anyhow::anyhow!("item table truncated"))?;
+        let entry = table
+            .get(index * 32..index * 32 + 32)
+            .ok_or_else(|| anyhow::anyhow!("item table truncated"))?;
         let flags = entry[27];
         items.push(PkgItem {
             name_offset: get_u32be(&entry[0..4]) as u64,
@@ -144,7 +152,11 @@ pub fn parse_items(table: &[u8], count: u32) -> Result<Vec<PkgItem>> {
             data_offset: get_u64be(&entry[8..16]),
             data_size: get_u64be(&entry[16..24]),
             psp_type: entry[24],
-            kind: if flags == 4 || flags == 18 { ItemKind::Directory } else { ItemKind::File },
+            kind: if flags == 4 || flags == 18 {
+                ItemKind::Directory
+            } else {
+                ItemKind::File
+            },
         });
     }
     Ok(items)
@@ -158,11 +170,16 @@ mod tests {
     fn u64be(v: u64) -> [u8; 8] {
         v.to_be_bytes()
     }
-    fn synthetic_probe(item_count: u32, items_size: u32, enc_offset: u64, meta_offset: u32) -> Vec<u8> {
+    fn synthetic_probe(
+        item_count: u32,
+        items_size: u32,
+        enc_offset: u64,
+        meta_offset: u32,
+    ) -> Vec<u8> {
         let mut buf = vec![0u8; PROBE_LEN];
         buf[0..4].copy_from_slice(&u32be(MAGIC));
         buf[8..12].copy_from_slice(&u32be(meta_offset));
-        buf[12..16].copy_from_slice(&u32be(1)); 
+        buf[12..16].copy_from_slice(&u32be(1));
         buf[20..24].copy_from_slice(&u32be(item_count));
         buf[24..32].copy_from_slice(&u64be(enc_offset + items_size as u64 + 1000));
         buf[32..40].copy_from_slice(&u64be(enc_offset));
@@ -170,7 +187,7 @@ mod tests {
         let content_id = b"UP4459-PCSE00487_00-GRAVITYBADGERSHD";
         buf[0x30..0x30 + content_id.len()].copy_from_slice(content_id);
         buf[HEADER_SIZE..HEADER_SIZE + 4].copy_from_slice(&u32be(EXT_MAGIC));
-        buf[0xE7] = 2; 
+        buf[0xE7] = 2;
         buf
     }
     #[test]
@@ -184,7 +201,7 @@ mod tests {
             let mut b = Vec::new();
             b.extend_from_slice(&u32be(13));
             b.extend_from_slice(&u32be(8));
-            b.extend_from_slice(&u32be(0)); 
+            b.extend_from_slice(&u32be(0));
             b.extend_from_slice(&u32be(items_size));
             b
         };
@@ -223,9 +240,9 @@ mod tests {
         let meta_block = {
             let mut b = Vec::new();
             b.extend_from_slice(&u32be(2));
-            b.extend_from_slice(&u32be(8)); 
-            b.extend_from_slice(&u32be(0x15)); 
-            b.extend_from_slice(&u32be(0)); 
+            b.extend_from_slice(&u32be(8));
+            b.extend_from_slice(&u32be(0x15));
+            b.extend_from_slice(&u32be(0));
             b
         };
         let header = parse(&probe, |_, _| Ok(meta_block.clone())).unwrap();
@@ -236,7 +253,7 @@ mod tests {
     #[test]
     fn rejects_item_table_size_mismatch() {
         let item_count = 3;
-        let wrong_items_size = item_count * 32 + 16; 
+        let wrong_items_size = item_count * 32 + 16;
         let enc_offset = 0x100;
         let meta_offset = 0x50;
         let probe = synthetic_probe(item_count, item_count * 32, enc_offset, meta_offset);
@@ -258,10 +275,10 @@ mod tests {
         table[4..8].copy_from_slice(&u32be(10));
         table[8..16].copy_from_slice(&u64be(200));
         table[16..24].copy_from_slice(&u64be(50));
-        table[27] = 0; 
+        table[27] = 0;
         table[32..36].copy_from_slice(&u32be(300));
         table[36..40].copy_from_slice(&u32be(20));
-        table[59] = 4; 
+        table[59] = 4;
         let items = parse_items(&table, 2).unwrap();
         assert_eq!(items.len(), 2);
         assert_eq!(items[0].kind, ItemKind::File);
@@ -272,7 +289,7 @@ mod tests {
     }
     #[test]
     fn rejects_truncated_item_table() {
-        let table = vec![0u8; 16]; 
+        let table = vec![0u8; 16];
         assert!(parse_items(&table, 1).is_err());
     }
     #[test]

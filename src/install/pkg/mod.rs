@@ -35,7 +35,11 @@ fn extract_pbp_pkg(pkg_path: &Path, dest_dir: &Path, expected: PkgKind) -> Resul
     file.read_exact(&mut probe)?;
     let hdr = header::parse(&probe, |offset, len| read_at(&mut file, offset, len))?;
     if classify(hdr.content_type) != expected {
-        bail!("not a {:?} pkg (content type {:?})", expected, hdr.content_type);
+        bail!(
+            "not a {:?} pkg (content type {:?})",
+            expected,
+            hdr.content_type
+        );
     }
     if file_len < hdr.total_size {
         bail!("pkg file is shorter than its own header claims");
@@ -51,9 +55,15 @@ fn extract_pbp_pkg(pkg_path: &Path, dest_dir: &Path, expected: PkgKind) -> Resul
         if item.kind != ItemKind::File {
             continue;
         }
-        let mut name_bytes = read_at(&mut file, hdr.enc_offset + item.name_offset, item.name_size as usize)?;
+        let mut name_bytes = read_at(
+            &mut file,
+            hdr.enc_offset + item.name_offset,
+            item.name_size as usize,
+        )?;
         cipher.decrypt_at(item.name_offset, &mut name_bytes);
-        let Ok(name) = String::from_utf8(name_bytes) else { continue };
+        let Ok(name) = String::from_utf8(name_bytes) else {
+            continue;
+        };
         let dest = match name.as_str() {
             "USRDIR/CONTENT/EBOOT.PBP" => {
                 found_eboot = true;
@@ -83,8 +93,9 @@ fn copy_item_data(
     decrypt: bool,
     dest: &Path,
 ) -> Result<()> {
-    const CHUNK: u64 = 1 << 20;
-    let out = std::fs::File::create(dest).with_context(|| format!("couldn't write {}", dest.display()))?;
+    const CHUNK: u64 = 256 * 1024;
+    let out = std::fs::File::create(dest)
+        .with_context(|| format!("couldn't write {}", dest.display()))?;
     let mut out = std::io::BufWriter::with_capacity(256 * 1024, out);
     let mut remaining = item.data_size;
     let mut offset = item.data_offset;

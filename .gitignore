@@ -5,3 +5,5 @@
 .env.*
 !.env.example
 /ux0:data
+/vendor/vitaGL
+/vendor/vitagl-src

@@ -15,10 +15,10 @@ mod vita_runtime {
     pub static SCE_USER_MAIN_THREAD_STACK_SIZE: u32 = 512 * 1024;
     #[used]
     #[unsafe(export_name = "sceLibcHeapSize")]
-    pub static SCE_LIBC_HEAP_SIZE: u32 = 24 * 1024 * 1024;
+    pub static SCE_LIBC_HEAP_SIZE: u32 = 4 * 1024 * 1024;
     #[used]
     #[unsafe(export_name = "_newlib_heap_size_user")]
-    pub static NEWLIB_HEAP_SIZE_USER: u32 = 96 * 1024 * 1024;
+    pub static NEWLIB_HEAP_SIZE_USER: u32 = 192 * 1024 * 1024;
 }
 #[cfg(target_os = "vita")]
 fn install_panic_hook() {
@@ -50,6 +50,15 @@ fn boost_clocks() {
 fn main() -> anyhow::Result<()> {
     #[cfg(target_os = "vita")]
     install_panic_hook();
+    let result = run();
+    if let Err(error) = &result {
+        install::log_file(&format!("FATAL: {error:#}"));
+        eprintln!("VitaForge: {error:#}");
+    }
+    result
+}
+
+fn run() -> anyhow::Result<()> {
     #[cfg(target_os = "vita")]
     boost_clocks();
     #[cfg(target_os = "vita")]
@@ -66,6 +75,8 @@ fn main() -> anyhow::Result<()> {
         .thread_stack_size(256 * 1024)
         .build()?;
     let _guard = runtime.enter();
+    install::log_file("boot: creating app");
     let app = App::new()?;
+    install::log_file("boot: entering shell");
     shell::run(app)
 }

@@ -73,19 +73,40 @@ mod sys {
             unsafe {
                 scePromoterUtilityExit();
                 sceSysmoduleUnloadModuleInternal(SCE_SYSMODULE_INTERNAL_PROMOTER_UTIL);
-                let mut opt = SceSysmoduleOpt { flags: 0, result: std::ptr::null_mut(), unused: [0; 2] };
-                sceSysmoduleUnloadModuleInternalWithArg(SCE_SYSMODULE_INTERNAL_PAF, 0, std::ptr::null_mut(), &mut opt);
+                let mut opt = SceSysmoduleOpt {
+                    flags: 0,
+                    result: std::ptr::null_mut(),
+                    unused: [0; 2],
+                };
+                sceSysmoduleUnloadModuleInternalWithArg(
+                    SCE_SYSMODULE_INTERNAL_PAF,
+                    0,
+                    std::ptr::null_mut(),
+                    &mut opt,
+                );
             }
         }
     }
 }
+#[cfg(target_os = "vita")]
 pub fn promote_package(dir: &str, tx: &tokio::sync::watch::Sender<super::Progress>) -> Result<()> {
-    let _guard = PROMOTER.lock().map_err(|_| anyhow::anyhow!("the promoter lock is poisoned"))?;
+    let _guard = PROMOTER
+        .lock()
+        .map_err(|_| anyhow::anyhow!("the promoter lock is poisoned"))?;
     let session = sys::Session::open()?;
     session.promote(dir, |elapsed_secs| {
         let _ = tx.send(super::Progress::Installing { elapsed_secs });
     })
 }
+#[cfg(not(target_os = "vita"))]
+pub fn promote_package(
+    _dir: &str,
+    _tx: &tokio::sync::watch::Sender<super::Progress>,
+) -> Result<()> {
+    anyhow::bail!("package promotion is only available on PS Vita")
+}
+
+#[cfg(target_os = "vita")]
 pub fn installed_titles(titleids: &[String]) -> Option<Vec<String>> {
     let _guard = PROMOTER.lock().ok()?;
     let session = match sys::Session::open() {
@@ -102,4 +123,8 @@ pub fn installed_titles(titleids: &[String]) -> Option<Vec<String>> {
         }
     }
     Some(found)
+}
+#[cfg(not(target_os = "vita"))]
+pub fn installed_titles(_titleids: &[String]) -> Option<Vec<String>> {
+    None
 }

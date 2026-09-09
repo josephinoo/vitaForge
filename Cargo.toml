@@ -1,6 +1,6 @@
 [package]
 name = "vitaforge"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2024"
 license = "GPL-3.0-only"
 description = "Homebrew catalog browser for games/apps/ports on the PS Vita"
@@ -28,7 +28,7 @@ unic-langid = "0.9.6"
 # and run with plain `cargo test` on a dev machine.
 [target.'cfg(target_os = "vita")'.dependencies]
 vita-newlib-shims = "0.3"
-vitasdk-sys = { version = "0.3", features = ["SceAppUtil_stub", "SceSysmem_stub", "SceSysmodule_stub", "ScePromoterUtil_stub", "SceKernelThreadMgr_stub", "SceIme_stub", "SceCommonDialog_stub", "SceLibKernel_stub", "SceIofilemgr_stub", "SceNotificationUtil_stub", "ScePower_stub", "SceGxm_stub", "SceDisplay_stub", "SceCtrl_stub", "SceTouch_stub", "SceAudio_stub", "SceProcessmgr_stub", "SceAppMgr_stub", "SceJpeg_stub", "SceJpegArm_stub"] }
+vitasdk-sys = { version = "0.3", features = ["SceAppUtil_stub", "SceSysmem_stub", "SceSysmodule_stub", "ScePromoterUtil_stub", "SceKernelThreadMgr_stub", "SceIme_stub", "SceCommonDialog_stub", "SceLibKernel_stub", "SceIofilemgr_stub", "SceNotificationUtil_stub", "ScePower_stub", "SceGxm_stub", "SceDisplay_stub", "SceCtrl_stub", "SceTouch_stub", "SceAudio_stub", "SceProcessmgr_stub", "SceAppMgr_stub", "SceJpeg_stub", "SceJpegArm_stub", "SceShaccCg_stub", "SceKernelDmacMgr_stub"] }
 [build-dependencies]
 cc = "1.0"
 [patch.crates-io]
@@ -40,5 +40,6 @@ title_name = "VitaForge"
 assets = "static"
 vita_make_fself_flags = []
 [profile.release]
+opt-level = "s"
 lto = "fat"
 codegen-units = 1

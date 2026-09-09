@@ -254,6 +254,12 @@ pub struct AppEntry {
     pub data_extract_path: Option<String>,
     #[serde(default)]
     pub data_size_bytes: u64,
+    #[serde(default)]
+    pub plugin_install_path: Option<String>,
+    #[serde(default)]
+    pub plugin_config_section: Option<String>,
+    #[serde(default)]
+    pub plugin_config_line: Option<String>,
     pub size_bytes: u64,
     pub downloads: u64,
     pub rating: f32,

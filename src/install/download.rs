@@ -32,7 +32,9 @@ impl ByteSink for FileSink {
         self.written
     }
     fn write(&mut self, chunk: &[u8]) -> Result<()> {
-        self.file.write_all(chunk).context("couldn't write the download")?;
+        self.file
+            .write_all(chunk)
+            .context("couldn't write the download")?;
         self.written += chunk.len() as u64;
         Ok(())
     }
@@ -52,7 +54,6 @@ impl Drop for FileSink {
 }
 #[derive(Debug, PartialEq, Eq)]
 pub enum ResumePlan {
-
     Continue { from: u64, total: Option<u64> },
     Restart { total: Option<u64> },
     AlreadyDone,
@@ -69,13 +70,18 @@ pub fn plan_resume(
             let total = content_range
                 .and_then(|range| range.rsplit('/').next())
                 .and_then(|total| total.parse::<u64>().ok());
-            Ok(ResumePlan::Continue { from: existing, total })
+            Ok(ResumePlan::Continue {
+                from: existing,
+                total,
+            })
         }
         StatusCode::OK => {
             if existing > 0 {
                 eprintln!("server ignored the Range request, restarting the download from zero");
             }
-            Ok(ResumePlan::Restart { total: content_length })
+            Ok(ResumePlan::Restart {
+                total: content_length,
+            })
         }
         StatusCode::RANGE_NOT_SATISFIABLE => {
             let total = content_range
@@ -208,8 +214,20 @@ mod tests {
     use super::*;
     #[test]
     fn partial_content_resumes_from_existing_bytes() {
-        let plan = plan_resume(1000, reqwest::StatusCode::PARTIAL_CONTENT, Some("bytes 1000-4999/5000"), None).unwrap();
-        assert_eq!(plan, ResumePlan::Continue { from: 1000, total: Some(5000) });
+        let plan = plan_resume(
+            1000,
+            reqwest::StatusCode::PARTIAL_CONTENT,
+            Some("bytes 1000-4999/5000"),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            plan,
+            ResumePlan::Continue {
+                from: 1000,
+                total: Some(5000)
+            }
+        );
     }
     #[test]
     fn ok_status_restarts_even_with_existing_bytes() {
@@ -218,14 +236,24 @@ mod tests {
     }
     #[test]
     fn range_not_satisfiable_with_matching_total_is_already_done() {
-        let plan =
-            plan_resume(5000, reqwest::StatusCode::RANGE_NOT_SATISFIABLE, Some("bytes */5000"), None).unwrap();
+        let plan = plan_resume(
+            5000,
+            reqwest::StatusCode::RANGE_NOT_SATISFIABLE,
+            Some("bytes */5000"),
+            None,
+        )
+        .unwrap();
         assert_eq!(plan, ResumePlan::AlreadyDone);
     }
     #[test]
     fn range_not_satisfiable_with_mismatched_total_restarts() {
-        let plan =
-            plan_resume(9000, reqwest::StatusCode::RANGE_NOT_SATISFIABLE, Some("bytes */5000"), None).unwrap();
+        let plan = plan_resume(
+            9000,
+            reqwest::StatusCode::RANGE_NOT_SATISFIABLE,
+            Some("bytes */5000"),
+            None,
+        )
+        .unwrap();
         assert_eq!(plan, ResumePlan::Restart { total: Some(5000) });
     }
     #[test]

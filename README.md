@@ -16,7 +16,13 @@
 
 ### Overview
 
-**VitaForge** is a homebrew catalog browser and package installer built for the PlayStation Vita natively in Rust, SDL2, and egui.
+**VitaForge** is a homebrew catalog browser and package installer built for the PlayStation Vita natively in Rust.
+
+**Stack:** SDL2 (input / audio / events) + egui (layout / focus / i18n) + **vitaGL** (GPU), following the same init pattern as [VitaDB-Downloader](https://github.com/Rinnegatamante/VitaDB-Downloader): `vglSetCircularPoolSize` → `vglInitExtended(0, 960, 544, 0x1800000, NONE)` → `vglSwapBuffers`. Desktop preview keeps SDL_Renderer.
+
+**Vita3K note:** vitaGL’s boot splash thread often crashes the emulator. We stub splash symbols at link time (same outcome as SRB2Kart’s `make HAVE_SBRK=1 NO_SPLASHSCREEN=1` — see [BUILDING-MODERN-VITAGL.md](https://github.com/Esodland/SRB2Kart-PSVita-PSTV/blob/vitagl-modern/BUILDING-MODERN-VITAGL.md)). Optional SDK rebuild: `make vitagl-nosplash` after cloning vitaGL into `vendor/vitaGL`.
+
+The egui renderer loads precompiled GXP shaders from [imgui-vita2d](assets/shaders/egui/README.md), so its UI shaders do not require `libshacccg.suprx`. `vglInitExtended` returns a resolution-fallback flag: `GL_FALSE` is the normal result for 960×544. Startup stages and returned errors are recorded in `ux0:data/vitaforge/vitaforge.log`.
 
 ---
 
@@ -51,6 +57,15 @@ make vpk
 make ftp VITA_IP=192.168.0.x
 ```
 
+### Device checklist (GPU UI)
+
+After installing a fresh VPK, verify:
+
+- Themes pill shows a **paintbrush** icon; Emulators shows a **gamepad**; Recent shows a **clock**.
+- Scrolling the catalog keeps ~2 rows visible without long freezes while covers stream in.
+- Focused card scales/glows smoothly; changing Home/Games/… pills crossfades.
+- Opening Detail fades in (~150ms) without black flashes.
+
 ---
 
 ### Credits & Acknowledgments
@@ -60,6 +75,8 @@ Special thanks to the following projects and developers powering the PS Vita hom
 - **[DrDecki](https://github.com/DrDecki)** for providing and maintaining the **[VitaDBtoo-db catalog](https://github.com/DrDecki/VitaDBtoo-db)**.
 - **[Rinnegatamante](https://github.com/Rinnegatamante)** for the original [VitaDB](https://vitadb.rinnegatamante.it/) catalog and [VitaDB-Downloader](https://github.com/Rinnegatamante/VitaDB-Downloader).
 - The **vita-rust** team for providing the Rust toolchain for PS Vita.
+- **[Rinnegatamante](https://github.com/Rinnegatamante)** also for [vitaGL](https://github.com/Rinnegatamante/vitaGL), used as the on-device GPU backend for egui meshes.
+- **[Northfear](https://github.com/Northfear)** for SDL2 with vitaGL integration patterns used by Vita homebrew.
 
 ---
 

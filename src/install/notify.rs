@@ -21,21 +21,34 @@ fn encode_notification(text: &str) -> [u16; TEXT_UNITS] {
 pub fn send(text: &str) {
     vita::send(text);
 }
+pub fn install_started(title: &str) {
+    send(&format!("Installing {title}…"));
+}
 pub fn install_finished(title: &str) {
     send(&format!("{title} installed"));
-}
-pub fn install_progress(title: &str, percent: u8) {
-    send(&format!("{title}: {percent}%"));
 }
 pub fn install_failed(title: &str, reason: &str) {
     send(&format!("{title} failed to install: {reason}"));
 }
+pub fn updates_available(count: usize) {
+    if count == 1 {
+        send("1 update available");
+    } else {
+        send(&format!("{count} updates available"));
+    }
+}
+pub fn self_update_available(tag: &str) {
+    let tag = tag.trim_start_matches(['v', 'V']);
+    send(&format!("vitaForge update available: v{tag}"));
+}
+#[cfg(target_os = "vita")]
 mod vita {
     use std::sync::Once;
     static LOAD_MODULE: Once = Once::new();
     fn ensure_module_loaded() {
         LOAD_MODULE.call_once(|| unsafe {
-            let rc = vitasdk_sys::sceSysmoduleLoadModule(vitasdk_sys::SCE_SYSMODULE_NOTIFICATION_UTIL);
+            let rc =
+                vitasdk_sys::sceSysmoduleLoadModule(vitasdk_sys::SCE_SYSMODULE_NOTIFICATION_UTIL);
             if rc < 0 {
                 eprintln!("couldn't load SceNotificationUtil (0x{rc:08x})");
             }
@@ -49,6 +62,10 @@ mod vita {
             eprintln!("notification failed (0x{rc:08x}): {text}");
         }
     }
+}
+#[cfg(not(target_os = "vita"))]
+mod vita {
+    pub fn send(_text: &str) {}
 }
 #[cfg(test)]
 mod tests {
@@ -80,6 +97,9 @@ mod tests {
         text.push(emoji);
         let buf = encode_notification(&text);
         let last_nonzero = buf.iter().rposition(|&u| u != 0).unwrap();
-        assert!(!(0xD800..=0xDBFF).contains(&buf[last_nonzero]), "must not end on a bare high surrogate");
+        assert!(
+            !(0xD800..=0xDBFF).contains(&buf[last_nonzero]),
+            "must not end on a bare high surrogate"
+        );
     }
 }

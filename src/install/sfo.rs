@@ -59,7 +59,12 @@ pub fn read_ids(sfo: &[u8]) -> Result<SfoIds> {
             _ => {}
         }
     }
-    Ok(SfoIds { title_id: title_id.context("param.sfo has no TITLE_ID")?, content_id, disc_id, app_ver })
+    Ok(SfoIds {
+        title_id: title_id.context("param.sfo has no TITLE_ID")?,
+        content_id,
+        disc_id,
+        app_ver,
+    })
 }
 pub fn read_app_ver(param_sfo: &std::path::Path) -> Option<String> {
     let bytes = std::fs::read(param_sfo).ok()?;

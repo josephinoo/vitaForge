@@ -12,7 +12,8 @@ pub fn is_module_present(_module_name: &str) -> bool {
                     ) -> i32;
                 }
                 let mut opt = [0u8; 64];
-                return _vshKernelSearchModuleByName(c_name.as_ptr(), opt.as_mut_ptr() as *mut _) >= 0;
+                return _vshKernelSearchModuleByName(c_name.as_ptr(), opt.as_mut_ptr() as *mut _)
+                    >= 0;
             }
         }
     }
@@ -49,7 +50,10 @@ pub fn resolve_content_id(entry: &crate::data::AppEntry) -> Result<String> {
         return Ok(id_from_url);
     }
     if entry.titleid.is_empty() {
-        bail!("no content ID or title ID available for '{}' — can't build a license", entry.name);
+        bail!(
+            "no content ID or title ID available for '{}' — can't build a license",
+            entry.name
+        );
     }
     let prefix = match entry.region.as_deref() {
         Some(r) if r.eq_ignore_ascii_case("EU") => "EP",
@@ -57,7 +61,10 @@ pub fn resolve_content_id(entry: &crate::data::AppEntry) -> Result<String> {
         Some(r) if r.eq_ignore_ascii_case("ASIA") => "UP",
         _ => "UP",
     };
-    Ok(format!("{prefix}0001-{}_00-0000000000000000", entry.titleid))
+    Ok(format!(
+        "{prefix}0001-{}_00-0000000000000000",
+        entry.titleid
+    ))
 }
 // SceNpDrmLicense layout: account_id at 0x08, content_id at 0x10 (0x30 bytes), signature at 0x70.
 pub fn create_fake_license(content_id: &str) -> Vec<u8> {

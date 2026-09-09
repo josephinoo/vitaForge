@@ -328,6 +328,9 @@ impl Language {
     pub fn tab_discover(self) -> &'static str {
         self.strings(|s| s.tab_discover)
     }
+    pub fn tab_categories(self) -> &'static str {
+        self.strings(|s| s.tab_categories)
+    }
     pub fn tab_library(self) -> &'static str {
         self.strings(|s| s.tab_library)
     }
@@ -338,10 +341,57 @@ impl Language {
         self.strings(|s| s.tab_search)
     }
     pub fn rail_top(self) -> &'static str {
-        self.strings(|s| s.rail_top)
+        self.strings(|s| s.rail_popular)
+    }
+    pub fn rail_popular(self) -> &'static str {
+        self.strings(|s| s.rail_popular)
     }
     pub fn rail_new(self) -> &'static str {
         self.strings(|s| s.rail_new)
+    }
+    pub fn group_label(self, group: crate::input::ContentTypeGroup) -> &'static str {
+        self.strings(|s| match group {
+            crate::input::ContentTypeGroup::Home => s.group_home,
+            crate::input::ContentTypeGroup::Games => s.group_games,
+            crate::input::ContentTypeGroup::Apps => s.group_apps,
+            crate::input::ContentTypeGroup::Emulators => s.group_emulators,
+            crate::input::ContentTypeGroup::Plugins => s.group_plugins,
+        })
+    }
+    pub fn sidebar_platform_label(self, cat: crate::data::Category) -> &'static str {
+        self.strings(|s| match cat {
+            crate::data::Category::PsVitaGame => s.sidebar_vita,
+            crate::data::Category::PspGame => s.sidebar_psp,
+            crate::data::Category::Ps1Game => s.sidebar_ps1,
+            crate::data::Category::Port => s.sidebar_ports,
+            crate::data::Category::Original => s.sidebar_homebrew,
+            other => match other {
+                crate::data::Category::Emulator => s.category_emulator,
+                crate::data::Category::Plugin => s.category_plugin,
+                crate::data::Category::Utility => s.category_utility,
+                crate::data::Category::Tool => s.category_tool,
+                crate::data::Category::Other => s.category_other,
+                _ => s.category_other,
+            },
+        })
+    }
+    pub fn sidebar_featured(self) -> &'static str {
+        self.strings(|s| s.sidebar_featured)
+    }
+    pub fn sidebar_downloads(self) -> &'static str {
+        self.strings(|s| s.sidebar_downloads)
+    }
+    pub fn sidebar_recent(self) -> &'static str {
+        self.strings(|s| s.sidebar_recent)
+    }
+    pub fn sidebar_favorites(self) -> &'static str {
+        self.strings(|s| s.sidebar_favorites)
+    }
+    pub fn btn_sort(self) -> &'static str {
+        self.strings(|s| s.btn_sort)
+    }
+    pub fn btn_filter(self) -> &'static str {
+        self.strings(|s| s.btn_filter)
     }
     pub fn see_all(self) -> &'static str {
         self.strings(|s| s.see_all)
@@ -357,6 +407,19 @@ impl Language {
     }
     pub fn updates_empty(self) -> &'static str {
         self.strings(|s| s.updates_empty)
+    }
+    pub fn all_catalogs(self) -> &'static str {
+        self.strings(|s| s.all_catalogs)
+    }
+    pub fn status_installed(self, count: usize) -> String {
+        let mut args = FluentArgs::new();
+        args.set("count", count);
+        self.with_bundle(|bundle| format_message(bundle, "status-installed", Some(&args)))
+    }
+    pub fn status_updates(self, count: usize) -> String {
+        let mut args = FluentArgs::new();
+        args.set("count", count);
+        self.with_bundle(|bundle| format_message(bundle, "status-updates", Some(&args)))
     }
     pub fn loading_msg(self) -> &'static str {
         self.strings(|s| s.loading_msg)
@@ -462,14 +525,32 @@ struct LocalizedStrings {
     btn_tabs: &'static str,
     btn_clear: &'static str,
     tab_discover: &'static str,
+    tab_categories: &'static str,
     tab_library: &'static str,
     tab_updates: &'static str,
     tab_search: &'static str,
-    rail_top: &'static str,
+    rail_popular: &'static str,
     rail_new: &'static str,
+    group_home: &'static str,
+    group_games: &'static str,
+    group_apps: &'static str,
+    group_emulators: &'static str,
+    group_plugins: &'static str,
+    sidebar_vita: &'static str,
+    sidebar_psp: &'static str,
+    sidebar_ps1: &'static str,
+    sidebar_ports: &'static str,
+    sidebar_homebrew: &'static str,
+    sidebar_featured: &'static str,
+    sidebar_downloads: &'static str,
+    sidebar_recent: &'static str,
+    sidebar_favorites: &'static str,
+    btn_sort: &'static str,
+    btn_filter: &'static str,
     see_all: &'static str,
     see_all_catalog: &'static str,
     see_all_back: &'static str,
+    all_catalogs: &'static str,
     library_empty: &'static str,
     updates_empty: &'static str,
     loading_msg: &'static str,
@@ -561,14 +642,32 @@ impl LocalizedStrings {
             btn_tabs: r("btn-tabs"),
             btn_clear: r("btn-clear"),
             tab_discover: r("tab-discover"),
+            tab_categories: r("tab-categories"),
             tab_library: r("tab-library"),
             tab_updates: r("tab-updates"),
             tab_search: r("tab-search"),
-            rail_top: r("rail-top"),
+            rail_popular: r("rail-popular"),
             rail_new: r("rail-new"),
+            group_home: r("group-home"),
+            group_games: r("group-games"),
+            group_apps: r("group-apps"),
+            group_emulators: r("group-emulators"),
+            group_plugins: r("group-plugins"),
+            sidebar_vita: r("sidebar-vita"),
+            sidebar_psp: r("sidebar-psp"),
+            sidebar_ps1: r("sidebar-ps1"),
+            sidebar_ports: r("sidebar-ports"),
+            sidebar_homebrew: r("sidebar-homebrew"),
+            sidebar_featured: r("sidebar-featured"),
+            sidebar_downloads: r("sidebar-downloads"),
+            sidebar_recent: r("sidebar-recent"),
+            sidebar_favorites: r("sidebar-favorites"),
+            btn_sort: r("btn-sort"),
+            btn_filter: r("btn-filter"),
             see_all: r("see-all"),
             see_all_catalog: r("see-all-catalog"),
             see_all_back: r("see-all-back"),
+            all_catalogs: r("all-catalogs"),
             library_empty: r("library-empty"),
             updates_empty: r("updates-empty"),
             loading_msg: r("loading-msg"),

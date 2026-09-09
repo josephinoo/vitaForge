@@ -21,16 +21,67 @@ pub enum TextTarget {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum StoreTab {
     #[default]
-    Discover,
+    Categories,
     Library,
     Updates,
-    Search,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DiscoverRail {
-    Top,
-    New,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ContentTypeGroup {
+    #[default]
+    Home,
+    Games,
+    Apps,
+    Emulators,
+    Plugins,
+}
+
+impl ContentTypeGroup {
+    pub const ALL: [ContentTypeGroup; 5] = [
+        ContentTypeGroup::Home,
+        ContentTypeGroup::Games,
+        ContentTypeGroup::Apps,
+        ContentTypeGroup::Emulators,
+        ContentTypeGroup::Plugins,
+    ];
+
+    pub fn contains(self, category: crate::data::Category) -> bool {
+        use crate::data::Category;
+        match self {
+            ContentTypeGroup::Home => true,
+            ContentTypeGroup::Games => matches!(
+                category,
+                Category::PsVitaGame
+                    | Category::Port
+                    | Category::Original
+                    | Category::PspGame
+                    | Category::Ps1Game
+            ),
+            ContentTypeGroup::Apps => {
+                matches!(category, Category::Utility | Category::Tool)
+            }
+            ContentTypeGroup::Emulators => matches!(category, Category::Emulator),
+            ContentTypeGroup::Plugins => matches!(category, Category::Plugin),
+        }
+    }
+
+    pub fn sidebar_categories(self) -> &'static [crate::data::Category] {
+        use crate::data::Category;
+        match self {
+            ContentTypeGroup::Home | ContentTypeGroup::Games => &[
+                Category::PsVitaGame,
+                Category::Port,
+                Category::Original,
+            ],
+            ContentTypeGroup::Apps => &[Category::Utility, Category::Tool],
+            ContentTypeGroup::Emulators => &[Category::Emulator],
+            ContentTypeGroup::Plugins => &[Category::Plugin],
+        }
+    }
+
+    pub fn categories(self) -> &'static [crate::data::Category] {
+        self.sidebar_categories()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -40,6 +91,9 @@ pub enum AppCommand {
     RequestSearch,
     CloseSearch,
     SetCategoryFilter(Option<crate::data::Category>),
+    SetContentTypeGroup(ContentTypeGroup),
+    SetFavoritesFilter(bool),
+    CycleCategoryFilter,
     SetGenreFilter(Option<String>),
     SetSourceFilter(Option<crate::data::SourceCatalog>),
     SetSortOrder(crate::data::SortOrder),
@@ -47,8 +101,6 @@ pub enum AppCommand {
     SelectApp { index: usize },
     SelectAppById(String),
     SetStoreTab(StoreTab),
-    SeeAllRail(DiscoverRail),
-    BackToDiscoverHome,
     MoreByAuthor(String),
     OpenScreenshot(usize),
     CloseScreenshot,
@@ -105,10 +157,10 @@ pub fn map_controller_button_event(event: &Event) -> Option<AppCommand> {
     let command = match button {
         Button::A => InputCommand::Confirm,
         Button::B => InputCommand::Back,
-        Button::Y => return Some(AppCommand::RequestSearch),
+        Button::Y => return Some(AppCommand::CycleCategoryFilter),
         Button::Start => return Some(AppCommand::OpenSettings),
-        Button::X => return Some(AppCommand::ToggleLike),
-        Button::Back => return Some(AppCommand::FlipSortDirection),
+        Button::X => return Some(AppCommand::FlipSortDirection),
+        Button::Back => return Some(AppCommand::RequestSearch),
         Button::LeftShoulder => InputCommand::CategoryPrev,
         Button::RightShoulder => InputCommand::CategoryNext,
         _ => return None,

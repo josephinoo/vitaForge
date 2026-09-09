@@ -52,7 +52,11 @@ impl WavSound {
                 for chunk in pcm_bytes.chunks_exact(2) {
                     samples.push(i16::from_le_bytes([chunk[0], chunk[1]]));
                 }
-                return Some(WavSound { sample_rate, channels, samples });
+                return Some(WavSound {
+                    sample_rate,
+                    channels,
+                    samples,
+                });
             }
             pos += chunk_size;
         }
@@ -69,19 +73,71 @@ impl AudioEngine {
         let (tx, rx) = mpsc::channel::<Sfx>();
         std::thread::spawn(move || {
             let mut sounds = HashMap::new();
-            load(&mut sounds, Sfx::Navigate, include_bytes!("../assets/sounds/deck_ui_navigation.wav"));
-            load(&mut sounds, Sfx::ShowModal, include_bytes!("../assets/sounds/deck_ui_show_modal.wav"));
-            load(&mut sounds, Sfx::HideModal, include_bytes!("../assets/sounds/deck_ui_hide_modal.wav"));
-            load(&mut sounds, Sfx::ToggleOn, include_bytes!("../assets/sounds/deck_ui_switch_toggle_on.wav"));
-            load(&mut sounds, Sfx::ToggleOff, include_bytes!("../assets/sounds/deck_ui_switch_toggle_off.wav"));
-            load(&mut sounds, Sfx::Launch, include_bytes!("../assets/sounds/deck_ui_launch_game.wav"));
-            load(&mut sounds, Sfx::IntoDetail, include_bytes!("../assets/sounds/deck_ui_into_game_detail.wav"));
-            load(&mut sounds, Sfx::OutOfDetail, include_bytes!("../assets/sounds/deck_ui_out_of_game_detail.wav"));
-            load(&mut sounds, Sfx::MenuFlyIn, include_bytes!("../assets/sounds/deck_ui_side_menu_fly_in.wav"));
-            load(&mut sounds, Sfx::MenuFlyOut, include_bytes!("../assets/sounds/deck_ui_side_menu_fly_out.wav"));
-            load(&mut sounds, Sfx::TabTransition, include_bytes!("../assets/sounds/deck_ui_tab_transition_01.wav"));
-            load(&mut sounds, Sfx::Activation, include_bytes!("../assets/sounds/deck_ui_default_activation.wav"));
-            load(&mut sounds, Sfx::Typing, include_bytes!("../assets/sounds/deck_ui_typing.wav"));
+            load(
+                &mut sounds,
+                Sfx::Navigate,
+                include_bytes!("../assets/sounds/deck_ui_navigation.wav"),
+            );
+            load(
+                &mut sounds,
+                Sfx::ShowModal,
+                include_bytes!("../assets/sounds/deck_ui_show_modal.wav"),
+            );
+            load(
+                &mut sounds,
+                Sfx::HideModal,
+                include_bytes!("../assets/sounds/deck_ui_hide_modal.wav"),
+            );
+            load(
+                &mut sounds,
+                Sfx::ToggleOn,
+                include_bytes!("../assets/sounds/deck_ui_switch_toggle_on.wav"),
+            );
+            load(
+                &mut sounds,
+                Sfx::ToggleOff,
+                include_bytes!("../assets/sounds/deck_ui_switch_toggle_off.wav"),
+            );
+            load(
+                &mut sounds,
+                Sfx::Launch,
+                include_bytes!("../assets/sounds/deck_ui_launch_game.wav"),
+            );
+            load(
+                &mut sounds,
+                Sfx::IntoDetail,
+                include_bytes!("../assets/sounds/deck_ui_into_game_detail.wav"),
+            );
+            load(
+                &mut sounds,
+                Sfx::OutOfDetail,
+                include_bytes!("../assets/sounds/deck_ui_out_of_game_detail.wav"),
+            );
+            load(
+                &mut sounds,
+                Sfx::MenuFlyIn,
+                include_bytes!("../assets/sounds/deck_ui_side_menu_fly_in.wav"),
+            );
+            load(
+                &mut sounds,
+                Sfx::MenuFlyOut,
+                include_bytes!("../assets/sounds/deck_ui_side_menu_fly_out.wav"),
+            );
+            load(
+                &mut sounds,
+                Sfx::TabTransition,
+                include_bytes!("../assets/sounds/deck_ui_tab_transition_01.wav"),
+            );
+            load(
+                &mut sounds,
+                Sfx::Activation,
+                include_bytes!("../assets/sounds/deck_ui_default_activation.wav"),
+            );
+            load(
+                &mut sounds,
+                Sfx::Typing,
+                include_bytes!("../assets/sounds/deck_ui_typing.wav"),
+            );
 
             // The Vita only allows a small, slowly-reclaimed pool of hardware audio ports
             // system-wide. All bundled sound effects share the same format (48kHz mono), so
@@ -117,12 +173,30 @@ fn load(map: &mut HashMap<Sfx, WavSound>, effect: Sfx, bytes: &[u8]) {
 
 const GRAIN_SIZE: usize = 512;
 
+#[cfg(target_os = "vita")]
 fn open_port(sample_rate: u32, channels: u16) -> i32 {
     use vitasdk_sys::*;
-    let mode = if channels == 1 { SCE_AUDIO_OUT_MODE_MONO } else { SCE_AUDIO_OUT_MODE_STEREO };
-    unsafe { sceAudioOutOpenPort(SCE_AUDIO_OUT_PORT_TYPE_MAIN, GRAIN_SIZE as i32, sample_rate as i32, mode as u32) }
+    let mode = if channels == 1 {
+        SCE_AUDIO_OUT_MODE_MONO
+    } else {
+        SCE_AUDIO_OUT_MODE_STEREO
+    };
+    unsafe {
+        sceAudioOutOpenPort(
+            SCE_AUDIO_OUT_PORT_TYPE_MAIN,
+            GRAIN_SIZE as i32,
+            sample_rate as i32,
+            mode as u32,
+        )
+    }
 }
 
+#[cfg(not(target_os = "vita"))]
+fn open_port(_sample_rate: u32, _channels: u16) -> i32 {
+    -1
+}
+
+#[cfg(target_os = "vita")]
 fn close_port(port: i32) {
     if port >= 0 {
         unsafe {
@@ -131,6 +205,10 @@ fn close_port(port: i32) {
     }
 }
 
+#[cfg(not(target_os = "vita"))]
+fn close_port(_port: i32) {}
+
+#[cfg(target_os = "vita")]
 fn play_sound_on_hardware(port: i32, sound: &WavSound) {
     if port < 0 {
         return;
@@ -149,3 +227,6 @@ fn play_sound_on_hardware(port: i32, sound: &WavSound) {
         }
     }
 }
+
+#[cfg(not(target_os = "vita"))]
+fn play_sound_on_hardware(_port: i32, _sound: &WavSound) {}

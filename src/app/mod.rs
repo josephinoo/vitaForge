@@ -4,7 +4,7 @@ pub mod sysinfo;
 pub mod text;
 pub mod ui;
 use crate::data::{self, AppEntry, Category, SortDirection, SortOrder, SourceCatalog};
-use crate::input::{AppCommand, DiscoverRail, InputCommand, StoreTab};
+use crate::input::{AppCommand, ContentTypeGroup, InputCommand, StoreTab};
 use anyhow::Result;
 use i18n::Language;
 use icons::IconCache;
@@ -26,12 +26,11 @@ fn precache_art_urls(apps: &[AppEntry]) -> Vec<String> {
         .collect()
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DiscoverFocus {
-    Featured,
-    Top(usize),
-    New(usize),
-    BrowseAll,
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum FocusPane {
+    #[default]
+    Grid,
+    Sidebar,
 }
 
 pub struct CatalogState {
@@ -41,6 +40,8 @@ pub struct CatalogState {
     pub search_query: String,
     pub search_requested: bool,
     pub category_filter: Option<Category>,
+    pub content_type_group: ContentTypeGroup,
+    pub favorites_filter: bool,
     pub genre_filter: Option<String>,
     pub source_filter: Option<SourceCatalog>,
     pub sort_order: SortOrder,
@@ -56,15 +57,12 @@ pub struct CatalogState {
     pub genre_counts: Vec<(String, usize)>,
     pub source_scoped_count: usize,
     pub total_unique_count: usize,
-    pub featured_index: Option<usize>,
+    pub group_category_counts: Vec<(Category, usize)>,
+    pub group_total: usize,
     pub tab: StoreTab,
-    pub discover_home: bool,
-    pub discover_focus: DiscoverFocus,
     pub scroll_category_into_view: bool,
-    pub top_rail: Vec<usize>,
-    pub recent_rail: Vec<usize>,
-    top_rail_ids: Vec<String>,
-    recent_rail_ids: Vec<String>,
+    pub focus_pane: FocusPane,
+    pub sidebar_cursor: usize,
 }
 impl CatalogState {
     fn new(apps: Vec<AppEntry>) -> Self {
@@ -76,6 +74,8 @@ impl CatalogState {
             search_query: String::new(),
             search_requested: false,
             category_filter: None,
+            content_type_group: ContentTypeGroup::Home,
+            favorites_filter: false,
             genre_filter: None,
             source_filter: None,
             sort_order: settings.sort_order,
@@ -90,19 +90,19 @@ impl CatalogState {
             genre_counts: Vec::new(),
             source_scoped_count: 0,
             total_unique_count: 0,
-            featured_index: None,
-            tab: StoreTab::Discover,
-            discover_home: true,
-            discover_focus: DiscoverFocus::Featured,
+            group_category_counts: Vec::new(),
+            group_total: 0,
+            tab: StoreTab::Categories,
             scroll_category_into_view: false,
-            top_rail: Vec::new(),
-            recent_rail: Vec::new(),
-            top_rail_ids: Vec::new(),
-            recent_rail_ids: Vec::new(),
+            focus_pane: FocusPane::Grid,
+            sidebar_cursor: 0,
         };
+        if state.content_type_group == ContentTypeGroup::Home {
+            state.sort_order = SortOrder::Recent;
+            state.sort_direction = SortDirection::Desc;
+        }
         state.resort();
-        state.rebuild_rails_from_ids_or_fallback();
-        state.clamp_discover_focus();
+        state.sync_sidebar_cursor();
         state
     }
     fn empty() -> Self {
@@ -113,6 +113,8 @@ impl CatalogState {
             search_query: String::new(),
             search_requested: false,
             category_filter: None,
+            content_type_group: ContentTypeGroup::Home,
+            favorites_filter: false,
             genre_filter: None,
             source_filter: None,
             sort_order: SortOrder::default(),
@@ -127,107 +129,44 @@ impl CatalogState {
             genre_counts: Vec::new(),
             source_scoped_count: 0,
             total_unique_count: 0,
-            featured_index: None,
-            tab: StoreTab::Discover,
-            discover_home: true,
-            discover_focus: DiscoverFocus::Featured,
+            group_category_counts: Vec::new(),
+            group_total: 0,
+            tab: StoreTab::Categories,
             scroll_category_into_view: false,
-            top_rail: Vec::new(),
-            recent_rail: Vec::new(),
-            top_rail_ids: Vec::new(),
-            recent_rail_ids: Vec::new(),
+            focus_pane: FocusPane::Grid,
+            sidebar_cursor: 0,
         }
     }
     fn replace_apps(&mut self, apps: Vec<AppEntry>) {
         self.apps = apps;
         self.sorted_indices = self.sort_order_indices();
         self.recompute_dropdown_counts();
-        self.rebuild_rails_from_ids_or_fallback();
         self.refresh_filter_preserving_selection();
-    }
-    fn set_rail_ids(&mut self, top: Vec<String>, recent: Vec<String>) {
-        self.top_rail_ids = top;
-        self.recent_rail_ids = recent;
-        self.rebuild_rails_from_ids_or_fallback();
-    }
-    fn rebuild_rails_from_ids_or_fallback(&mut self) {
-        let mut top = dedupe_rail_indices(resolve_rail_ids(
-            &self.apps,
-            &self.top_rail_ids,
-            self.source_filter,
-        ));
-        let mut recent = dedupe_rail_indices(resolve_rail_ids(
-            &self.apps,
-            &self.recent_rail_ids,
-            self.source_filter,
-        ));
-        if self.source_filter.is_none() {
-            top = collapse_homebrew_duplicates(&self.apps, top);
-            recent = collapse_homebrew_duplicates(&self.apps, recent);
-        }
-        self.top_rail = top;
-        self.recent_rail = recent;
-        pad_rail_with_fallback(&mut self.top_rail, &self.apps, self.source_filter, RailFallback::Downloads);
-        pad_rail_with_fallback(&mut self.recent_rail, &self.apps, self.source_filter, RailFallback::Recent);
-        self.featured_index = self.top_rail.first().copied();
-        self.strip_featured_from_rails();
-        pad_rail_with_fallback(&mut self.top_rail, &self.apps, self.source_filter, RailFallback::Downloads);
-        pad_rail_with_fallback(&mut self.recent_rail, &self.apps, self.source_filter, RailFallback::Recent);
-        self.strip_featured_from_rails();
-        self.clamp_discover_focus();
-    }
-
-    fn strip_featured_from_rails(&mut self) {
-        let Some(feat) = self.featured_index else {
-            return;
-        };
-        let feat_titleid = self
-            .apps
-            .get(feat)
-            .map(|a| a.titleid_lower.as_str())
-            .unwrap_or("");
-        let is_featured = |apps: &[AppEntry], idx: usize| {
-            if idx == feat {
-                return true;
-            }
-            if feat_titleid.is_empty() {
-                return false;
-            }
-            apps.get(idx)
-                .is_some_and(|a| !a.titleid_lower.is_empty() && a.titleid_lower == feat_titleid)
-        };
-        self.top_rail.retain(|&idx| !is_featured(&self.apps, idx));
-        self.recent_rail.retain(|&idx| !is_featured(&self.apps, idx));
     }
     fn apply_store_tab(&mut self, tab: StoreTab, installed: &crate::install::installed::InstalledIndex) {
         self.tab = tab;
         self.scroll_reset = true;
+        self.focus_pane = FocusPane::Grid;
         match tab {
-            StoreTab::Discover => {
-                self.discover_home = true;
+            StoreTab::Categories => {
                 self.search_query.clear();
                 self.search_requested = false;
                 self.category_filter = None;
+                self.favorites_filter = false;
                 self.refresh_filter();
-                self.clamp_discover_focus();
+                self.sync_sidebar_cursor();
             }
             StoreTab::Library => {
-                self.discover_home = false;
                 self.search_query.clear();
                 self.search_requested = false;
                 self.category_filter = None;
                 self.apply_install_filter(installed, false);
             }
             StoreTab::Updates => {
-                self.discover_home = false;
                 self.search_query.clear();
                 self.search_requested = false;
                 self.category_filter = None;
                 self.apply_install_filter(installed, true);
-            }
-            StoreTab::Search => {
-                self.discover_home = false;
-                self.refresh_filter();
             }
         }
     }
@@ -259,23 +198,6 @@ impl CatalogState {
             self.selected = 0;
             self.selection_active = true;
         }
-    }
-    fn see_all_rail(&mut self, rail: DiscoverRail) {
-        self.discover_home = false;
-        self.tab = StoreTab::Discover;
-        self.search_query.clear();
-        self.category_filter = None;
-        match rail {
-            DiscoverRail::Top => {
-                self.sort_order = SortOrder::Downloads;
-                self.sort_direction = SortDirection::Desc;
-            }
-            DiscoverRail::New => {
-                self.sort_order = SortOrder::Recent;
-                self.sort_direction = SortDirection::Desc;
-            }
-        }
-        self.resort();
     }
     fn source_api_id(&self) -> Option<&'static str> {
         match self.source_filter {
@@ -374,6 +296,8 @@ impl CatalogState {
         let query = self.search_query.trim().to_lowercase();
         let apps = &self.apps;
         let category_filter = self.category_filter;
+        let content_type_group = self.content_type_group;
+        let favorites_filter = self.favorites_filter;
         let genre_filter = self.genre_filter.as_deref();
         let source_filter = self.source_filter;
         self.filtered_indices = self
@@ -382,12 +306,16 @@ impl CatalogState {
             .copied()
             .filter(|&index| {
                 let app = &apps[index];
+                let matches_group = content_type_group.contains(app.category);
                 let matches_cat = category_filter.is_none_or(|c| c as u8 == app.category as u8);
+                let matches_fav = !favorites_filter || app.user_liked;
                 let matches_genre = genre_filter.is_none_or(|genre| {
                     app.genres.iter().any(|app_genre| app_genre.eq_ignore_ascii_case(genre))
                 });
                 let matches_source = source_filter.is_none_or(|s| s.matches(&app.source_catalog));
-                matches_cat
+                matches_group
+                    && matches_cat
+                    && matches_fav
                     && matches_genre
                     && matches_source
                     && (query.is_empty()
@@ -410,19 +338,6 @@ impl CatalogState {
             self.scroll_reset = true;
         }
         self.is_commercial_view = self.source_filter == Some(SourceCatalog::Nps);
-        if self.tab == StoreTab::Discover && self.discover_home {
-        } else {
-            self.featured_index = self
-                .filtered_indices
-                .iter()
-                .copied()
-                .max_by(|&a, &b| {
-                    apps[a]
-                        .downloads
-                        .cmp(&apps[b].downloads)
-                        .then_with(|| apps[a].rating.total_cmp(&apps[b].rating))
-                });
-        }
     }
     fn recompute_dropdown_counts(&mut self) {
         let source_filter = self.source_filter;
@@ -460,7 +375,40 @@ impl CatalogState {
             }
         }
         self.genre_counts = genres.into_iter().collect();
+        self.recompute_group_counts();
     }
+
+    fn recompute_group_counts(&mut self) {
+        let apps = &self.apps;
+        let source_filter = self.source_filter;
+        let group = self.content_type_group;
+        self.group_category_counts = group
+            .sidebar_categories()
+            .iter()
+            .map(|&category| {
+                let count = apps
+                    .iter()
+                    .filter(|app| {
+                        app.category == category
+                            && source_filter.is_none_or(|s| s.matches(&app.source_catalog))
+                    })
+                    .count();
+                (category, count)
+            })
+            .collect();
+        let indices: Vec<usize> = (0..apps.len())
+            .filter(|&i| {
+                group.contains(apps[i].category)
+                    && source_filter.is_none_or(|s| s.matches(&apps[i].source_catalog))
+            })
+            .collect();
+        self.group_total = if source_filter.is_none() {
+            collapse_homebrew_duplicates(apps, indices).len()
+        } else {
+            indices.len()
+        };
+    }
+
     fn move_selection(&mut self, delta: isize) -> bool {
         if self.filtered_indices.is_empty() {
             return false;
@@ -480,131 +428,153 @@ impl CatalogState {
         true
     }
 
-    fn shows_category_pills(&self) -> bool {
-        matches!(self.tab, StoreTab::Discover | StoreTab::Search)
-            && !(self.tab == StoreTab::Discover && self.discover_home)
+    pub fn shows_category_pills(&self) -> bool {
+        self.tab == StoreTab::Categories
     }
 
-    fn shows_discover_home(&self) -> bool {
-        self.tab == StoreTab::Discover && self.discover_home && self.search_query.trim().is_empty()
+    pub fn shows_sidebar(&self) -> bool {
+        self.tab == StoreTab::Categories
     }
 
-    fn featured_available(&self) -> bool {
-        !self.is_commercial_view && self.featured_index.is_some()
+    pub fn sync_sidebar_cursor(&mut self) {
+        let slots = crate::app::ui::sidebar::sidebar_slots(&self.group_category_counts);
+        self.sidebar_cursor = crate::app::ui::sidebar::active_sidebar_index(
+            &slots,
+            self.category_filter,
+            self.favorites_filter,
+            self.sort_order,
+        );
     }
 
-    fn clamp_discover_focus(&mut self) {
-        let featured = self.featured_available();
-        let top_len = self.top_rail.len().min(16);
-        let new_len = self.recent_rail.len().min(16);
-        self.discover_focus = match self.discover_focus {
-            DiscoverFocus::Featured if featured => DiscoverFocus::Featured,
-            DiscoverFocus::Top(i) if top_len > 0 => DiscoverFocus::Top(i.min(top_len - 1)),
-            DiscoverFocus::New(i) if new_len > 0 => DiscoverFocus::New(i.min(new_len - 1)),
-            DiscoverFocus::BrowseAll => DiscoverFocus::BrowseAll,
-            _ if featured => DiscoverFocus::Featured,
-            _ if top_len > 0 => DiscoverFocus::Top(0),
-            _ if new_len > 0 => DiscoverFocus::New(0),
-            _ => DiscoverFocus::Featured,
-        };
+    fn enter_sidebar(&mut self) {
+        if !self.shows_sidebar() {
+            return;
+        }
+        self.sync_sidebar_cursor();
+        self.focus_pane = FocusPane::Sidebar;
     }
 
-    fn discover_focus_app_id(&self) -> Option<&str> {
-        match self.discover_focus {
-            DiscoverFocus::Featured => self
-                .featured_index
-                .and_then(|idx| self.apps.get(idx))
-                .map(|app| app.id.as_str()),
-            DiscoverFocus::Top(i) => self
-                .top_rail
-                .get(i)
-                .and_then(|&idx| self.apps.get(idx))
-                .map(|app| app.id.as_str()),
-            DiscoverFocus::New(i) => self
-                .recent_rail
-                .get(i)
-                .and_then(|&idx| self.apps.get(idx))
-                .map(|app| app.id.as_str()),
-            DiscoverFocus::BrowseAll => None,
+    fn leave_sidebar(&mut self) {
+        self.focus_pane = FocusPane::Grid;
+        if !self.filtered_indices.is_empty() {
+            self.selection_active = true;
         }
     }
 
-    fn move_discover_focus(&mut self, direction: InputCommand) -> bool {
-        self.clamp_discover_focus();
-        let featured = self.featured_available();
-        let top_len = self.top_rail.len().min(16);
-        let new_len = self.recent_rail.len().min(16);
-        let before = self.discover_focus;
-        match direction {
-            InputCommand::MoveLeft | InputCommand::MoveRight => {
-                let delta: isize = if direction == InputCommand::MoveLeft { -1 } else { 1 };
-                match self.discover_focus {
-                    DiscoverFocus::Top(i) if top_len > 0 => {
-                        let next = (i as isize + delta).clamp(0, top_len as isize - 1) as usize;
-                        self.discover_focus = DiscoverFocus::Top(next);
-                    }
-                    DiscoverFocus::New(i) if new_len > 0 => {
-                        let next = (i as isize + delta).clamp(0, new_len as isize - 1) as usize;
-                        self.discover_focus = DiscoverFocus::New(next);
-                    }
-                    _ => {}
+    fn move_sidebar_cursor(&mut self, delta: isize) -> bool {
+        let slots = crate::app::ui::sidebar::sidebar_slots(&self.group_category_counts);
+        if slots.is_empty() {
+            return false;
+        }
+        let last = slots.len() as isize - 1;
+        let next = (self.sidebar_cursor as isize + delta).clamp(0, last) as usize;
+        if next == self.sidebar_cursor && self.focus_pane == FocusPane::Sidebar {
+            return false;
+        }
+        self.sidebar_cursor = next;
+        self.focus_pane = FocusPane::Sidebar;
+        self.apply_sidebar_slot_at_cursor();
+        true
+    }
+
+    fn apply_sidebar_slot_at_cursor(&mut self) {
+        let slots = crate::app::ui::sidebar::sidebar_slots(&self.group_category_counts);
+        let Some(slot) = slots.get(self.sidebar_cursor).copied() else {
+            return;
+        };
+        match slot {
+            crate::app::ui::sidebar::SidebarSlot::All => {
+                self.favorites_filter = false;
+                self.category_filter = None;
+                self.refresh_filter();
+            }
+            crate::app::ui::sidebar::SidebarSlot::Category(category) => {
+                self.favorites_filter = false;
+                self.category_filter = Some(category);
+                self.refresh_filter();
+            }
+            crate::app::ui::sidebar::SidebarSlot::Featured => {
+                self.favorites_filter = false;
+                self.ensure_sort(SortOrder::Rating);
+            }
+            crate::app::ui::sidebar::SidebarSlot::Downloads => {
+                self.favorites_filter = false;
+                self.ensure_sort(SortOrder::Downloads);
+            }
+            crate::app::ui::sidebar::SidebarSlot::Recent => {
+                self.favorites_filter = false;
+                self.ensure_sort(SortOrder::Recent);
+            }
+            crate::app::ui::sidebar::SidebarSlot::Favorites => {
+                self.set_favorites_filter(true);
+            }
+        }
+    }
+
+    fn ensure_sort(&mut self, sort: SortOrder) {
+        if self.sort_order == sort {
+            self.refresh_filter();
+            return;
+        }
+        self.sort_order = sort;
+        self.sort_direction = sort.default_direction();
+        self.resort();
+        let mut settings = data::settings::load();
+        settings.sort_order = self.sort_order;
+        settings.sort_direction = self.sort_direction;
+        data::settings::save(&settings);
+    }
+
+    fn set_content_type_group(&mut self, group: ContentTypeGroup) {
+        self.content_type_group = group;
+        if let Some(cat) = self.category_filter
+            && !group.contains(cat)
+        {
+            self.category_filter = None;
+        }
+        if group == ContentTypeGroup::Home {
+            self.sort_order = SortOrder::Recent;
+            self.sort_direction = SortDirection::Desc;
+            self.resort();
+        } else {
+            self.recompute_group_counts();
+        }
+        self.scroll_reset = true;
+        self.refresh_filter();
+        self.sync_sidebar_cursor();
+        self.focus_pane = FocusPane::Grid;
+    }
+
+    fn cycle_category_filter(&mut self) {
+        let cats = self.content_type_group.sidebar_categories();
+        let next = match self.category_filter {
+            None => cats.first().copied(),
+            Some(current) => {
+                let idx = cats.iter().position(|&c| c == current).unwrap_or(0);
+                if idx + 1 >= cats.len() {
+                    None
+                } else {
+                    Some(cats[idx + 1])
                 }
             }
-            InputCommand::MoveUp => {
-                self.discover_focus = match self.discover_focus {
-                    DiscoverFocus::BrowseAll if new_len > 0 => DiscoverFocus::New(0),
-                    DiscoverFocus::BrowseAll if top_len > 0 => DiscoverFocus::Top(0),
-                    DiscoverFocus::BrowseAll if featured => DiscoverFocus::Featured,
-                    DiscoverFocus::New(i) if top_len > 0 => DiscoverFocus::Top(i.min(top_len - 1)),
-                    DiscoverFocus::New(_) if featured => DiscoverFocus::Featured,
-                    DiscoverFocus::Top(_) if featured => DiscoverFocus::Featured,
-                    other => other,
-                };
-            }
-            InputCommand::MoveDown => {
-                self.discover_focus = match self.discover_focus {
-                    DiscoverFocus::Featured if top_len > 0 => DiscoverFocus::Top(0),
-                    DiscoverFocus::Featured if new_len > 0 => DiscoverFocus::New(0),
-                    DiscoverFocus::Top(i) if new_len > 0 => DiscoverFocus::New(i.min(new_len - 1)),
-                    DiscoverFocus::BrowseAll => DiscoverFocus::BrowseAll,
-                    _ => DiscoverFocus::BrowseAll,
-                };
-            }
-            _ => {}
+        };
+        self.category_filter = next;
+        self.favorites_filter = false;
+        self.scroll_category_into_view = true;
+        self.refresh_filter();
+        self.sync_sidebar_cursor();
+    }
+
+    fn set_favorites_filter(&mut self, on: bool) {
+        self.favorites_filter = on;
+        if on {
+            self.category_filter = None;
         }
-        let changed = self.discover_focus != before;
-        if changed {
-            self.scroll_to_selected = true;
-        }
-        changed
+        self.refresh_filter();
+        self.sync_sidebar_cursor();
     }
 }
 
-enum RailFallback {
-    Downloads,
-    Recent,
-}
-
-fn resolve_rail_ids(
-    apps: &[AppEntry],
-    ids: &[String],
-    source_filter: Option<SourceCatalog>,
-) -> Vec<usize> {
-    let mut out = Vec::new();
-    for id in ids {
-        if let Some((idx, app)) = apps.iter().enumerate().find(|(_, app)| app.id == *id) {
-            if source_filter.is_none_or(|s| s.matches(&app.source_catalog)) {
-                out.push(idx);
-            }
-        }
-    }
-    out
-}
-
-fn dedupe_rail_indices(indices: Vec<usize>) -> Vec<usize> {
-    let mut seen = std::collections::HashSet::new();
-    indices.into_iter().filter(|&idx| seen.insert(idx)).collect()
-}
 
 fn homebrew_source_rank(source: SourceCatalog) -> u8 {
     match source {
@@ -691,62 +661,6 @@ fn collapse_homebrew_duplicates(apps: &[AppEntry], indices: Vec<usize>) -> Vec<u
     out
 }
 
-const RAIL_MIN_LEN: usize = 12;
-
-fn pad_rail_with_fallback(
-    rail: &mut Vec<usize>,
-    apps: &[AppEntry],
-    source_filter: Option<SourceCatalog>,
-    kind: RailFallback,
-) {
-    if rail.len() >= RAIL_MIN_LEN {
-        return;
-    }
-    let existing: std::collections::HashSet<usize> = rail.iter().copied().collect();
-    let fallback = fallback_rail(apps, source_filter, kind, RAIL_MIN_LEN);
-    for idx in fallback {
-        if rail.len() >= RAIL_MIN_LEN {
-            break;
-        }
-        if existing.contains(&idx) {
-            continue;
-        }
-        rail.push(idx);
-    }
-}
-
-fn fallback_rail(
-    apps: &[AppEntry],
-    source_filter: Option<SourceCatalog>,
-    kind: RailFallback,
-    limit: usize,
-) -> Vec<usize> {
-    let mut indices: Vec<usize> = apps
-        .iter()
-        .enumerate()
-        .filter(|(_, app)| source_filter.is_none_or(|s| s.matches(&app.source_catalog)))
-        .map(|(idx, _)| idx)
-        .collect();
-    match kind {
-        RailFallback::Downloads => indices.sort_by(|&a, &b| {
-            apps[b]
-                .downloads
-                .cmp(&apps[a].downloads)
-                .then_with(|| apps[a].name_lower.cmp(&apps[b].name_lower))
-        }),
-        RailFallback::Recent => indices.sort_by(|&a, &b| {
-            apps[b]
-                .sort_epoch()
-                .cmp(&apps[a].sort_epoch())
-                .then_with(|| apps[a].name_lower.cmp(&apps[b].name_lower))
-        }),
-    }
-    if source_filter.is_none() {
-        indices = collapse_homebrew_duplicates(apps, indices);
-    }
-    indices.truncate(limit);
-    indices
-}
 
 pub enum AppState {
     Loading,
@@ -793,13 +707,13 @@ pub struct App {
     self_update_rx: Option<oneshot::Receiver<SelfUpdateInfo>>,
     comments_rx: Option<oneshot::Receiver<(String, Vec<data::api::Comment>)>>,
     social_rx: Option<oneshot::Receiver<(String, data::api::Social)>>,
-    rails_rx: Option<oneshot::Receiver<(Vec<String>, Vec<String>)>>,
     cache_stats_rx: Option<oneshot::Receiver<data::cache_manager::CacheStats>>,
     audio: crate::audio::AudioEngine,
     pub cache_stats: data::cache_manager::CacheStats,
     pub cache_notice: Option<String>,
     icons_need_clear: bool,
     install_notifications: bool,
+    updates_notified: bool,
 }
 const LOAD_WATCHDOG: std::time::Duration = std::time::Duration::from_secs(25);
 pub struct InstallJob {
@@ -809,49 +723,8 @@ pub struct InstallJob {
     pub progress: crate::install::Progress,
     rx: watch::Receiver<crate::install::Progress>,
     cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    last_notification_progress: Option<(u8, u8)>,
 }
 
-fn progress_notification(progress: &crate::install::Progress) -> Option<(u8, u8)> {
-    match progress {
-        crate::install::Progress::DownloadingData { received, total: Some(total), .. } if *total > 0 => {
-            Some((1, ((*received * 100 / *total).min(100)) as u8))
-        }
-        crate::install::Progress::Downloading { received, total: Some(total), .. } if *total > 0 => {
-            Some((2, ((*received * 100 / *total).min(100)) as u8))
-        }
-        crate::install::Progress::Extracting { done, total } if *total > 0 => {
-            Some((3, ((*done as u64 * 100 / *total as u64).min(100)) as u8))
-        }
-        _ => None,
-    }
-}
-
-#[cfg(test)]
-mod install_notification_tests {
-    use super::progress_notification;
-    use crate::install::Progress;
-
-    #[test]
-    fn progress_notifications_only_use_known_totals() {
-        assert_eq!(
-            progress_notification(&Progress::Downloading {
-                received: 50,
-                total: Some(200),
-                elapsed_secs: 1,
-            }),
-            Some((2, 25))
-        );
-        assert_eq!(
-            progress_notification(&Progress::Downloading {
-                received: 50,
-                total: None,
-                elapsed_secs: 1,
-            }),
-            None
-        );
-    }
-}
 impl App {
     pub fn new() -> Result<Self> {
         let (tx, rx) = oneshot::channel();
@@ -894,13 +767,13 @@ impl App {
             self_update_rx: Some(self_update_rx),
             comments_rx: None,
             social_rx: None,
-            rails_rx: None,
             cache_stats_rx: None,
             audio: crate::audio::AudioEngine::new(),
             cache_stats: data::cache_manager::CacheStats::default(),
             cache_notice: None,
             icons_need_clear: false,
             install_notifications: settings.install_notifications,
+            updates_notified: false,
         })
     }
     fn spawn_catalog_fetch(&mut self) {
@@ -935,6 +808,7 @@ impl App {
             self.icons.clear_resident(ctx);
             self.icons_need_clear = false;
         }
+        self.icons.publish_completed(ctx);
         if self.needs_installed_rescan {
             let entries: &[AppEntry] = match &self.state {
                 AppState::Catalog(catalog) => &catalog.apps,
@@ -950,19 +824,17 @@ impl App {
                         _ => {}
                     }
                 }
+                if self.install_notifications && !self.updates_notified {
+                    let (_, outdated) = self.installed.counts();
+                    if outdated > 0 {
+                        crate::install::notify::updates_available(outdated);
+                        self.updates_notified = true;
+                    }
+                }
             }
         }
         if let Some(job) = &mut self.install {
             let previous = std::mem::replace(&mut job.progress, job.rx.borrow_and_update().clone());
-            if self.install_notifications && previous != job.progress {
-                if let Some((stage, percent)) = progress_notification(&job.progress) {
-                    let milestone = percent / 25 * 25;
-                    if job.last_notification_progress != Some((stage, milestone)) {
-                        crate::install::notify::install_progress(&job.title, milestone);
-                        job.last_notification_progress = Some((stage, milestone));
-                    }
-                }
-            }
             if previous != job.progress && job.progress == crate::install::Progress::Done {
                 self.installed.mark_installed(&job.app_id_title);
                 if self.install_notifications {
@@ -986,6 +858,9 @@ impl App {
             && let Ok(info) = rx.try_recv()
         {
             self.self_update_rx = None;
+            if self.install_notifications {
+                crate::install::notify::self_update_available(&info.tag);
+            }
             self.self_update = Some(info);
             ctx.request_repaint();
         }
@@ -1017,19 +892,6 @@ impl App {
                 ctx.request_repaint();
             }
         }
-        if let Some(rx) = &mut self.rails_rx
-            && let Ok((top, recent)) = rx.try_recv()
-        {
-            self.rails_rx = None;
-            if let AppState::Catalog(catalog) = &mut self.state {
-                catalog.set_rail_ids(top, recent);
-                ctx.request_repaint();
-            } else if let AppState::Detail { previous, .. } | AppState::Settings { previous, .. } =
-                &mut self.state
-            {
-                previous.set_rail_ids(top, recent);
-            }
-        }
         if let Some(rx) = &mut self.cache_stats_rx
             && let Ok(stats) = rx.try_recv()
         {
@@ -1047,22 +909,16 @@ impl App {
                             let catalog = CatalogState::new(apps);
                             self.installed.force_refresh(ctx, &catalog.apps);
                             self.icons.precache_background(precache_art_urls(&catalog.apps));
-                            let source = catalog.source_api_id();
-                            self.spawn_rails_fetch(source);
                             self.state = AppState::Catalog(catalog);
                         }
                         AppState::Catalog(catalog) => {
                             catalog.replace_apps(apps);
                             self.installed.force_refresh(ctx, &catalog.apps);
                             self.icons.precache_background(precache_art_urls(&catalog.apps));
-                            let source = catalog.source_api_id();
-                            self.spawn_rails_fetch(source);
                         }
                         AppState::Detail { previous, .. } | AppState::Settings { previous, .. } => {
                             previous.replace_apps(apps);
                             self.installed.force_refresh(ctx, &previous.apps);
-                            let source = previous.source_api_id();
-                            self.spawn_rails_fetch(source);
                         }
                     }
                     ctx.request_repaint();
@@ -1118,11 +974,26 @@ impl App {
                     return self.handle_command(AppCommand::CancelDataPrompt);
                 }
                 if let AppState::Catalog(catalog) = &mut self.state {
-                    if catalog.tab == StoreTab::Discover && !catalog.discover_home {
-                        catalog.discover_home = true;
+                    if catalog.focus_pane == FocusPane::Sidebar {
+                        catalog.leave_sidebar();
+                        self.audio.play(crate::audio::Sfx::Navigate);
+                        return Ok(());
+                    }
+                    if catalog.tab == StoreTab::Categories
+                        && (catalog.category_filter.is_some()
+                            || catalog.favorites_filter
+                            || !catalog.search_query.is_empty()
+                            || catalog.search_requested)
+                    {
                         catalog.category_filter = None;
+                        catalog.favorites_filter = false;
                         catalog.search_query.clear();
+                        catalog.search_requested = false;
                         catalog.refresh_filter();
+                        catalog.sync_sidebar_cursor();
+                        return Ok(());
+                    }
+                    if catalog.tab == StoreTab::Categories {
                         return Ok(());
                     }
                 }
@@ -1136,18 +1007,12 @@ impl App {
                     } else if catalog.tab == StoreTab::Updates {
                         catalog.apply_install_filter(&self.installed, true);
                     } else {
-                        if catalog.tab != StoreTab::Search && !catalog.search_query.is_empty() {
-                            catalog.tab = StoreTab::Search;
-                            catalog.discover_home = false;
-                        }
                         catalog.refresh_filter();
                     }
                 }
             }
             AppCommand::RequestSearch => {
                 if let AppState::Catalog(catalog) = &mut self.state {
-                    catalog.tab = StoreTab::Search;
-                    catalog.discover_home = false;
                     catalog.search_requested = true;
                     self.audio.play(crate::audio::Sfx::Typing);
                 }
@@ -1160,18 +1025,42 @@ impl App {
             AppCommand::SetCategoryFilter(category) => {
                 if let AppState::Catalog(catalog) = &mut self.state {
                     catalog.category_filter = category;
-                    catalog.discover_home = false;
-                    if catalog.tab == StoreTab::Discover || catalog.tab == StoreTab::Search {
+                    catalog.favorites_filter = false;
+                    if catalog.tab == StoreTab::Categories {
                         catalog.refresh_filter();
                     }
+                    catalog.sync_sidebar_cursor();
+                    self.audio.play(crate::audio::Sfx::TabTransition);
+                }
+            }
+            AppCommand::SetContentTypeGroup(group) => {
+                if let AppState::Catalog(catalog) = &mut self.state {
+                    catalog.tab = StoreTab::Categories;
+                    catalog.favorites_filter = false;
+                    catalog.set_content_type_group(group);
+                    self.audio.play(crate::audio::Sfx::TabTransition);
+                }
+            }
+            AppCommand::SetFavoritesFilter(on) => {
+                if let AppState::Catalog(catalog) = &mut self.state {
+                    catalog.tab = StoreTab::Categories;
+                    catalog.set_favorites_filter(on);
+                    self.audio.play(crate::audio::Sfx::TabTransition);
+                }
+            }
+            AppCommand::CycleCategoryFilter => {
+                if let AppState::Catalog(catalog) = &mut self.state {
+                    if catalog.tab != StoreTab::Categories {
+                        catalog.tab = StoreTab::Categories;
+                    }
+                    catalog.cycle_category_filter();
                     self.audio.play(crate::audio::Sfx::TabTransition);
                 }
             }
             AppCommand::SetGenreFilter(genre) => {
                 if let AppState::Catalog(catalog) = &mut self.state {
                     catalog.genre_filter = genre;
-                    catalog.discover_home = false;
-                    if catalog.tab == StoreTab::Discover || catalog.tab == StoreTab::Search {
+                    if catalog.tab == StoreTab::Categories {
                         catalog.refresh_filter();
                     }
                     self.audio.play(crate::audio::Sfx::TabTransition);
@@ -1183,20 +1072,18 @@ impl App {
                     catalog.category_filter = None;
                     catalog.genre_filter = None;
                     catalog.recompute_dropdown_counts();
-                    catalog.rebuild_rails_from_ids_or_fallback();
                     match catalog.tab {
                         StoreTab::Library => catalog.apply_install_filter(&self.installed, false),
                         StoreTab::Updates => catalog.apply_install_filter(&self.installed, true),
                         _ => catalog.refresh_filter(),
                     }
-                    let api_source = catalog.source_api_id();
-                    self.spawn_rails_fetch(api_source);
                     self.audio.play(crate::audio::Sfx::TabTransition);
                 }
             }
             AppCommand::SetSortOrder(sort) => {
                 if let AppState::Catalog(catalog) = &mut self.state {
                     catalog.set_sort(sort);
+                    catalog.sync_sidebar_cursor();
                     self.audio.play(crate::audio::Sfx::Activation);
                 }
             }
@@ -1210,16 +1097,12 @@ impl App {
                 if matches!(self.state, AppState::Detail { data_prompt: true, .. }) {
                     return self.handle_command(AppCommand::InstallCurrent);
                 }
-                if let AppState::Catalog(catalog) = &self.state
-                    && catalog.shows_discover_home()
-                {
-                    if catalog.discover_focus == DiscoverFocus::BrowseAll {
-                        return self.handle_command(AppCommand::SeeAllRail(DiscoverRail::Top));
+                if let AppState::Catalog(catalog) = &mut self.state {
+                    if catalog.focus_pane == FocusPane::Sidebar {
+                        catalog.leave_sidebar();
+                        self.audio.play(crate::audio::Sfx::Navigate);
+                        return Ok(());
                     }
-                    if let Some(id) = catalog.discover_focus_app_id().map(str::to_owned) {
-                        return self.handle_command(AppCommand::SelectAppById(id));
-                    }
-                    return Ok(());
                 }
                 let target = match &mut self.state {
                     AppState::Catalog(catalog) => {
@@ -1247,63 +1130,100 @@ impl App {
             }
             AppCommand::Input(InputCommand::CategoryPrev) => {
                 if let AppState::Catalog(catalog) = &mut self.state {
-                    if catalog.shows_category_pills() {
-                        let next_cat = match catalog.category_filter {
-                            None => Some(Category::ALL[Category::ALL.len() - 1]),
-                            Some(c) => {
-                                let idx = Category::ALL.iter().position(|&x| x == c).unwrap_or(0);
-                                if idx == 0 { None } else { Some(Category::ALL[idx - 1]) }
+                    match catalog.tab {
+                        StoreTab::Categories => {
+                            let groups = ContentTypeGroup::ALL;
+                            let idx = groups
+                                .iter()
+                                .position(|&g| g == catalog.content_type_group)
+                                .unwrap_or(0);
+                            if idx == 0 {
+                                return self.handle_command(AppCommand::SetStoreTab(StoreTab::Updates));
                             }
-                        };
-                        catalog.category_filter = next_cat;
-                        catalog.scroll_category_into_view = true;
-                        catalog.refresh_filter();
-                        self.audio.play(crate::audio::Sfx::TabTransition);
-                    } else {
-                        let prev = match catalog.tab {
-                            StoreTab::Discover => StoreTab::Search,
-                            StoreTab::Library => StoreTab::Discover,
-                            StoreTab::Updates => StoreTab::Library,
-                            StoreTab::Search => StoreTab::Updates,
-                        };
-                        return self.handle_command(AppCommand::SetStoreTab(prev));
+                            catalog.set_content_type_group(groups[idx - 1]);
+                            self.audio.play(crate::audio::Sfx::TabTransition);
+                            return Ok(());
+                        }
+                        StoreTab::Library => {
+                            let last = ContentTypeGroup::ALL[ContentTypeGroup::ALL.len() - 1];
+                            catalog.tab = StoreTab::Categories;
+                            catalog.set_content_type_group(last);
+                            self.audio.play(crate::audio::Sfx::TabTransition);
+                            return Ok(());
+                        }
+                        StoreTab::Updates => {
+                            return self.handle_command(AppCommand::SetStoreTab(StoreTab::Library));
+                        }
                     }
                 }
             }
             AppCommand::Input(InputCommand::CategoryNext) => {
                 if let AppState::Catalog(catalog) = &mut self.state {
-                    if catalog.shows_category_pills() {
-                        let next_cat = match catalog.category_filter {
-                            None => Some(Category::ALL[0]),
-                            Some(c) => {
-                                let idx = Category::ALL.iter().position(|&x| x == c).unwrap_or(0);
-                                if idx + 1 >= Category::ALL.len() { None } else { Some(Category::ALL[idx + 1]) }
+                    match catalog.tab {
+                        StoreTab::Categories => {
+                            let groups = ContentTypeGroup::ALL;
+                            let idx = groups
+                                .iter()
+                                .position(|&g| g == catalog.content_type_group)
+                                .unwrap_or(0);
+                            if idx + 1 >= groups.len() {
+                                return self.handle_command(AppCommand::SetStoreTab(StoreTab::Library));
                             }
-                        };
-                        catalog.category_filter = next_cat;
-                        catalog.scroll_category_into_view = true;
-                        catalog.refresh_filter();
-                        self.audio.play(crate::audio::Sfx::TabTransition);
-                    } else {
-                        let next = match catalog.tab {
-                            StoreTab::Discover => StoreTab::Library,
-                            StoreTab::Library => StoreTab::Updates,
-                            StoreTab::Updates => StoreTab::Search,
-                            StoreTab::Search => StoreTab::Discover,
-                        };
-                        return self.handle_command(AppCommand::SetStoreTab(next));
+                            catalog.set_content_type_group(groups[idx + 1]);
+                            self.audio.play(crate::audio::Sfx::TabTransition);
+                            return Ok(());
+                        }
+                        StoreTab::Library => {
+                            return self.handle_command(AppCommand::SetStoreTab(StoreTab::Updates));
+                        }
+                        StoreTab::Updates => {
+                            catalog.tab = StoreTab::Categories;
+                            catalog.set_content_type_group(ContentTypeGroup::Home);
+                            self.audio.play(crate::audio::Sfx::TabTransition);
+                            return Ok(());
+                        }
                     }
                 }
             }
             AppCommand::Input(direction) => {
                 match &mut self.state {
-                    AppState::Catalog(catalog) if catalog.shows_discover_home() => {
-                        if catalog.move_discover_focus(direction) {
-                            self.audio.play(crate::audio::Sfx::Navigate);
-                        }
-                    }
                     AppState::Catalog(catalog) => {
+                        if catalog.focus_pane == FocusPane::Sidebar
+                            && catalog.shows_sidebar()
+                        {
+                            match direction {
+                                InputCommand::MoveUp => {
+                                    if catalog.move_sidebar_cursor(-1) {
+                                        self.audio.play(crate::audio::Sfx::Navigate);
+                                    }
+                                }
+                                InputCommand::MoveDown => {
+                                    if catalog.move_sidebar_cursor(1) {
+                                        self.audio.play(crate::audio::Sfx::Navigate);
+                                    }
+                                }
+                                InputCommand::MoveRight => {
+                                    catalog.leave_sidebar();
+                                    self.audio.play(crate::audio::Sfx::Navigate);
+                                }
+                                InputCommand::MoveLeft => {}
+                                _ => {}
+                            }
+                            return Ok(());
+                        }
+
                         let columns = crate::app::ui::GRID_COLUMNS as isize;
+                        let at_left_edge = !catalog.selection_active
+                            || catalog.selected % crate::app::ui::GRID_COLUMNS == 0;
+                        if matches!(direction, InputCommand::MoveLeft)
+                            && at_left_edge
+                            && catalog.shows_sidebar()
+                        {
+                            catalog.enter_sidebar();
+                            self.audio.play(crate::audio::Sfx::Navigate);
+                            return Ok(());
+                        }
+
                         let delta = match direction {
                             InputCommand::MoveLeft => -1,
                             InputCommand::MoveRight => 1,
@@ -1357,28 +1277,8 @@ impl App {
                         original.rating = app.rating;
                     }
                     previous.apply_store_tab(tab, &self.installed);
-                    if tab == StoreTab::Search {
-                        previous.search_requested = true;
-                    }
                     self.state = AppState::Catalog(previous);
                     self.needs_installed_rescan = true;
-                    self.audio.play(crate::audio::Sfx::TabTransition);
-                }
-            }
-            AppCommand::SeeAllRail(rail) => {
-                if let AppState::Catalog(catalog) = &mut self.state {
-                    catalog.see_all_rail(rail);
-                    self.audio.play(crate::audio::Sfx::Activation);
-                }
-            }
-            AppCommand::BackToDiscoverHome => {
-                if let AppState::Catalog(catalog) = &mut self.state {
-                    catalog.tab = StoreTab::Discover;
-                    catalog.discover_home = true;
-                    catalog.category_filter = None;
-                    catalog.search_query.clear();
-                    catalog.refresh_filter();
-                    catalog.clamp_discover_focus();
                     self.audio.play(crate::audio::Sfx::TabTransition);
                 }
             }
@@ -1396,9 +1296,8 @@ impl App {
                         original.rating = app.rating;
                     }
                     let mut previous = std::mem::replace(previous.as_mut(), CatalogState::empty());
-                    previous.tab = StoreTab::Search;
-                    previous.discover_home = false;
-                    previous.search_query = author;
+                    previous.tab = StoreTab::Categories;
+                                        previous.search_query = author;
                     previous.category_filter = None;
                     previous.refresh_filter();
                     self.state = AppState::Catalog(previous);
@@ -1442,13 +1341,15 @@ impl App {
                     self.install = Some(InstallJob {
                         app_id,
                         app_id_title,
-                        title,
+                        title: title.clone(),
                         progress,
                         rx,
                         cancel,
-                        last_notification_progress: None,
                     });
                     self.audio.play(crate::audio::Sfx::Launch);
+                    if self.install_notifications {
+                        crate::install::notify::install_started(&title);
+                    }
                     if let AppState::Detail { data_prompt, .. } = &mut self.state {
                         *data_prompt = false;
                     }
@@ -1503,6 +1404,9 @@ impl App {
                         data_url: None,
                         data_extract_path: None,
                         data_size_bytes: 0,
+                        plugin_install_path: None,
+                        plugin_config_section: None,
+                        plugin_config_line: None,
                         size_bytes: 0,
                         downloads: 0,
                         rating: 5.0,
@@ -1523,13 +1427,15 @@ impl App {
                     self.install = Some(InstallJob {
                         app_id,
                         app_id_title,
-                        title,
+                        title: title.clone(),
                         progress,
                         rx,
                         cancel,
-                        last_notification_progress: None,
                     });
                     self.audio.play(crate::audio::Sfx::Launch);
+                    if self.install_notifications {
+                        crate::install::notify::install_started(&title);
+                    }
                 }
             }
             AppCommand::CancelInstall => {
@@ -1668,14 +1574,6 @@ impl App {
         }
         Ok(())
     }
-    fn spawn_rails_fetch(&mut self, source: Option<&'static str>) {
-        let (tx, rx) = oneshot::channel();
-        self.rails_rx = Some(rx);
-        tokio::spawn(async move {
-            let rails = data::api::fetch_discover_rails(source).await;
-            let _ = tx.send(rails);
-        });
-    }
     fn open_app(&mut self, filtered_index: usize) {
         let entry = match &self.state {
             AppState::Catalog(catalog) => catalog
@@ -1777,7 +1675,7 @@ impl App {
             return;
         }
         if let AppState::Catalog(catalog) = &mut self.state {
-            if catalog.tab == StoreTab::Search
+            if catalog.tab == StoreTab::Categories
                 && (!catalog.search_query.is_empty() || catalog.search_requested)
             {
                 catalog.search_query.clear();
@@ -1835,7 +1733,7 @@ mod sort_tests {
             requirements: String::new(),
             changelog: String::new(),
             release_page: None,
-            category: Category::Tool,
+            category: Category::PsVitaGame,
             genres: Vec::new(),
             platform: crate::data::Platform::Vita,
             kind: String::new(),
@@ -1855,6 +1753,9 @@ mod sort_tests {
             data_url: None,
             data_extract_path: None,
             data_size_bytes: 0,
+            plugin_install_path: None,
+            plugin_config_section: None,
+            plugin_config_line: None,
             size_bytes,
             downloads,
             rating,
@@ -2013,23 +1914,6 @@ mod sort_tests {
         assert!(ids.contains(&"nps".to_owned()));
     }
 
-    #[test]
-    fn discover_rails_exclude_featured_app() {
-        let apps = vec![
-            entry_titled("top1", "AAA000001", "vitadb", 1000),
-            entry_titled("top2", "AAA000002", "vitadb", 900),
-            entry_titled("top3", "AAA000003", "vitadb", 800),
-        ];
-        let mut catalog = CatalogState::new(apps);
-        catalog.sort_order = SortOrder::Downloads;
-        catalog.sort_direction = SortDirection::Desc;
-        catalog.rebuild_rails_from_ids_or_fallback();
-        let feat = catalog.featured_index.expect("featured");
-        assert_eq!(catalog.apps[feat].id, "top1");
-        assert!(!catalog.top_rail.contains(&feat));
-        assert!(!catalog.recent_rail.contains(&feat));
-        assert!(catalog.top_rail.iter().any(|&i| catalog.apps[i].id == "top2"));
-    }
 }
 
 #[cfg(test)]
@@ -2070,59 +1954,5 @@ mod precache_tests {
             .map(|_| art(crate::data::Platform::NpsVita, None, Some("https://x/c.jpg")))
             .collect();
         assert_eq!(precache_art_urls(&apps).len(), MAX_PRECACHE_PER_LAUNCH);
-    }
-
-    fn discover_catalog() -> CatalogState {
-        let apps = vec![
-            entry("a", "vitadb", 1_000, 900, 4.0, "2024-06-01"),
-            entry("b", "vitadb", 1_000, 800, 4.0, "2024-06-02"),
-        ];
-        let mut catalog = CatalogState::new(apps);
-        catalog.top_rail = vec![0, 1];
-        catalog.recent_rail = vec![1, 0];
-        catalog.featured_index = Some(0);
-        catalog.discover_focus = DiscoverFocus::Featured;
-        catalog
-    }
-
-    #[test]
-    fn browse_all_is_reachable_going_down_past_both_rails() {
-        let mut catalog = discover_catalog();
-        assert!(catalog.move_discover_focus(InputCommand::MoveDown));
-        assert_eq!(catalog.discover_focus, DiscoverFocus::Top(0));
-        assert!(catalog.move_discover_focus(InputCommand::MoveDown));
-        assert_eq!(catalog.discover_focus, DiscoverFocus::New(0));
-        assert!(catalog.move_discover_focus(InputCommand::MoveDown));
-        assert_eq!(catalog.discover_focus, DiscoverFocus::BrowseAll);
-        assert!(!catalog.move_discover_focus(InputCommand::MoveDown));
-        assert_eq!(catalog.discover_focus, DiscoverFocus::BrowseAll);
-    }
-
-    #[test]
-    fn browse_all_gives_the_focus_back_going_up() {
-        let mut catalog = discover_catalog();
-        catalog.discover_focus = DiscoverFocus::BrowseAll;
-        assert!(catalog.move_discover_focus(InputCommand::MoveUp));
-        assert_eq!(catalog.discover_focus, DiscoverFocus::New(0));
-    }
-
-    #[test]
-    fn browse_all_is_reachable_with_no_rails_at_all() {
-        let mut catalog = discover_catalog();
-        catalog.top_rail.clear();
-        catalog.recent_rail.clear();
-        assert!(catalog.move_discover_focus(InputCommand::MoveDown));
-        assert_eq!(catalog.discover_focus, DiscoverFocus::BrowseAll);
-        assert!(catalog.move_discover_focus(InputCommand::MoveUp));
-        assert_eq!(catalog.discover_focus, DiscoverFocus::Featured);
-    }
-
-    #[test]
-    fn browse_all_focus_is_a_button_not_an_app() {
-        let mut catalog = discover_catalog();
-        catalog.discover_focus = DiscoverFocus::BrowseAll;
-        assert_eq!(catalog.discover_focus_app_id(), None);
-        catalog.clamp_discover_focus();
-        assert_eq!(catalog.discover_focus, DiscoverFocus::BrowseAll); // survives a clamp
     }
 }

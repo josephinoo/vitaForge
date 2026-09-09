@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Cursor;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -15,9 +15,9 @@ const MAX_CONCURRENT_FETCHES: usize = 6;
 const MAX_CONCURRENT_DECODES: usize = 2;
 const LIVE_RESERVED_SLOTS: usize = 2;
 const MAX_BACKOFF: Duration = Duration::from_secs(15 * 60);
-pub const MAX_ICON_SIDE: u32 = 256;
+pub const MAX_ICON_SIDE: u32 = 128;
 pub const MAX_SCREENSHOT_SIDE: u32 = 480;
-pub const HERO_SIDE: u32 = 480;
+pub const HERO_SIDE: u32 = 320;
 const MAX_RESIDENT_BYTES: usize = 24 * 1024 * 1024;
 const MAX_RESIDENT_READY: usize = 96;
 const RECENT_USE_TICKS: u64 = 128;
@@ -33,6 +33,9 @@ const DEFAULT_THROTTLE: Duration = Duration::from_secs(2);
 const RETRY_DEFERRED: Duration = Duration::from_millis(80);
 const BACKGROUND_PACING: Duration = Duration::from_millis(15);
 const LIVE_PRIORITY_WINDOW: Duration = Duration::from_millis(100);
+const SCROLL_SETTLE_DELAY: Duration = Duration::from_millis(150);
+const READY_RESULTS_PER_FRAME: usize = 2;
+const MAX_COMPLETED_RESULTS: usize = 8;
 enum IconState {
     Loading,
     Ready { texture: egui::TextureHandle, last_used: u64, byte_size: usize },
@@ -53,6 +56,16 @@ impl IconState {
     }
 }
 type Bucket = HashMap<String, IconState>;
+struct CompletedIcon {
+    generation: usize,
+    result: CompletedResult,
+}
+enum CompletedResult {
+    Ready { url: String, max_side: u32, image: egui::ColorImage },
+    Deferred { url: String, max_side: u32, retry_in: Duration, attempts: u32 },
+    RateLimited { url: String, max_side: u32, after: Duration, attempts: u32 },
+    Failed { url: String, max_side: u32, attempts: u32 },
+}
 fn texture_name(url: &str, max_side: u32) -> String {
     format!("{url}@{max_side}")
 }
@@ -61,6 +74,7 @@ pub struct IconCache {
     entries: Arc<Mutex<HashMap<u32, Bucket>>>,
     disk_index: Arc<Mutex<HashSet<String>>>,
     fetch_limit: Arc<Semaphore>,
+    decode_limit: Arc<Semaphore>,
     clock: Arc<Mutex<u64>>,
     gate: Arc<Mutex<Instant>>,
     precache_gate: Arc<Mutex<Instant>>,
@@ -70,6 +84,9 @@ pub struct IconCache {
     resident_bytes: Arc<AtomicUsize>,
     in_flight: Arc<AtomicUsize>,
     gpu_backlog: Arc<AtomicUsize>,
+    completed: Arc<Mutex<VecDeque<CompletedIcon>>>,
+    scrolling_until: Arc<Mutex<Instant>>,
+    generation: Arc<AtomicUsize>,
 }
 impl IconCache {
     pub fn new() -> Self {
@@ -86,6 +103,7 @@ impl IconCache {
             entries: Arc::new(Mutex::new(HashMap::new())),
             disk_index,
             fetch_limit: Arc::new(Semaphore::new(MAX_CONCURRENT_FETCHES)),
+            decode_limit: Arc::new(Semaphore::new(MAX_CONCURRENT_DECODES)),
             clock: Arc::new(Mutex::new(0)),
             gate: Arc::new(Mutex::new(Instant::now())),
             precache_gate: Arc::new(Mutex::new(Instant::now())),
@@ -95,6 +113,9 @@ impl IconCache {
             resident_bytes: Arc::new(AtomicUsize::new(0)),
             in_flight: Arc::new(AtomicUsize::new(0)),
             gpu_backlog: Arc::new(AtomicUsize::new(0)),
+            completed: Arc::new(Mutex::new(VecDeque::new())),
+            scrolling_until: Arc::new(Mutex::new(Instant::now())),
+            generation: Arc::new(AtomicUsize::new(0)),
         }
     }
     fn disk_has(&self, digest: &str) -> bool {
@@ -115,6 +136,64 @@ impl IconCache {
     }
     pub fn set_gpu_backlog(&self, n: usize) {
         self.gpu_backlog.store(n, Ordering::Relaxed);
+    }
+    pub fn note_scrolling(&self) {
+        *lock(&self.scrolling_until) = Instant::now() + SCROLL_SETTLE_DELAY;
+    }
+    fn is_scrolling(&self) -> bool {
+        *lock(&self.scrolling_until) > Instant::now()
+    }
+    pub fn publish_completed(&self, ctx: &egui::Context) {
+        let mut ready = Vec::with_capacity(READY_RESULTS_PER_FRAME);
+        {
+            let mut completed = lock(&self.completed);
+            for _ in 0..READY_RESULTS_PER_FRAME {
+                let Some(result) = completed.pop_front() else { break };
+                ready.push(result);
+            }
+        }
+        for CompletedIcon { generation, result } in ready {
+            if generation != self.generation.load(Ordering::Relaxed) {
+                continue;
+            }
+            let stamp = self.tick();
+            let (url, max_side, state) = match result {
+                CompletedResult::Ready { url, max_side, image } => {
+                    let [w, h] = image.size;
+                    let byte_size = w * h * 4;
+                    let texture = ctx.load_texture(texture_name(&url, max_side), image, egui::TextureOptions::LINEAR);
+                    (url, max_side, IconState::Ready { texture, last_used: stamp, byte_size })
+                }
+                CompletedResult::Deferred { url, max_side, retry_in, attempts } => {
+                    (url, max_side, IconState::Throttled { until: Instant::now() + retry_in.max(RETRY_DEFERRED), attempts })
+                }
+                CompletedResult::RateLimited { url, max_side, after, attempts } => {
+                    (url, max_side, IconState::Throttled { until: Instant::now() + after, attempts })
+                }
+                CompletedResult::Failed { url, max_side, attempts } => {
+                    if attempts >= MAX_ATTEMPTS {
+                        eprintln!("giving up on {url} after {attempts} attempts");
+                    }
+                    (url, max_side, IconState::Failed { at: Instant::now(), attempts })
+                }
+            };
+            let added_bytes = match &state {
+                IconState::Ready { byte_size, .. } => Some(*byte_size),
+                _ => None,
+            };
+            let mut entries = lock(&self.entries);
+            entries.entry(max_side).or_default().insert(url, state);
+            if let Some(byte_size) = added_bytes {
+                self.ready_count.fetch_add(1, Ordering::Relaxed);
+                self.resident_bytes.fetch_add(byte_size, Ordering::Relaxed);
+            }
+            prune_meta(&mut entries);
+            let protect = stamp.saturating_sub(RECENT_USE_TICKS);
+            evict_stale(&mut entries, ctx, protect, &self.ready_count, &self.resident_bytes);
+        }
+        if !lock(&self.completed).is_empty() {
+            ctx.request_repaint_after(Duration::from_millis(16));
+        }
     }
     fn tick(&self) -> u64 {
         let mut clock = lock(&self.clock);
@@ -253,6 +332,7 @@ impl IconCache {
             if from_disk { MAX_CONCURRENT_DECODES } else { MAX_CONCURRENT_FETCHES };
         if self.gpu_backlog.load(Ordering::Relaxed) >= MAX_GPU_BACKLOG_FOR_SPAWN
             || self.in_flight.load(Ordering::Relaxed) >= spawn_budget
+            || lock(&self.completed).len() >= MAX_COMPLETED_RESULTS
         {
             return None;
         }
@@ -262,59 +342,26 @@ impl IconCache {
         let cache = self.clone();
         let ctx = ctx.clone();
         let url = url.to_owned();
+        let generation = self.generation.load(Ordering::Relaxed);
         tokio::spawn(async move {
             let outcome = load_icon(&url, max_side, &cache, skip_disk).await;
-            let stamp = cache.tick();
-            let mut entries = lock(&cache.entries);
-            let bucket = entries.entry(max_side).or_default();
-            match outcome {
-                LoadOutcome::Ready(color_image) => {
-                    let [w, h] = color_image.size;
-                    let byte_size = w * h * 4;
-                    let name = texture_name(&url, max_side);
-                    let texture = ctx.load_texture(name, color_image, egui::TextureOptions::LINEAR);
-                    bucket.insert(url, IconState::Ready { texture, last_used: stamp, byte_size });
-                    cache.ready_count.fetch_add(1, Ordering::Relaxed);
-                    cache.resident_bytes.fetch_add(byte_size, Ordering::Relaxed);
-                    let protect = stamp.saturating_sub(RECENT_USE_TICKS);
-                    prune_meta(&mut entries);
-                    evict_stale(
-                        &mut entries,
-                        &ctx,
-                        protect,
-                        &cache.ready_count,
-                        &cache.resident_bytes,
-                    );
-                }
-                LoadOutcome::Deferred { retry_in } => {
-                    let until = Instant::now() + retry_in.max(RETRY_DEFERRED);
-                    bucket.insert(url, IconState::Throttled { until, attempts: attempts + 1 });
-                    prune_meta(&mut entries);
-                }
-                LoadOutcome::RateLimited { after } => {
-                    bucket.insert(
-                        url,
-                        IconState::Throttled { until: Instant::now() + after, attempts: attempts + 1 },
-                    );
-                    prune_meta(&mut entries);
-                }
-                LoadOutcome::Failed => {
-                    let attempts = attempts + 1;
-                    if attempts >= MAX_ATTEMPTS {
-                        eprintln!("giving up on {url} after {attempts} attempts");
-                    }
-                    bucket.insert(url, IconState::Failed { at: Instant::now(), attempts });
-                    prune_meta(&mut entries);
-                }
-            }
+            let completed = match outcome {
+                LoadOutcome::Ready(image) => CompletedResult::Ready { url, max_side, image },
+                LoadOutcome::Deferred { retry_in } => CompletedResult::Deferred { url, max_side, retry_in, attempts: attempts + 1 },
+                LoadOutcome::RateLimited { after } => CompletedResult::RateLimited { url, max_side, after, attempts: attempts + 1 },
+                LoadOutcome::Failed => CompletedResult::Failed { url, max_side, attempts: attempts + 1 },
+            };
+            lock(&cache.completed).push_back(CompletedIcon { generation, result: completed });
             cache.in_flight.fetch_sub(1, Ordering::Relaxed);
-            drop(entries);
             ctx.request_repaint_after(Duration::from_millis(16));
         });
         None
     }
 
     pub fn prefetch_urls(&self, ctx: &egui::Context, urls: Vec<String>) {
+        if self.is_scrolling() {
+            return;
+        }
         if self.gpu_backlog.load(Ordering::Relaxed) >= MAX_GPU_BACKLOG_FOR_SPAWN {
             return;
         }
@@ -373,14 +420,16 @@ impl IconCache {
             ctx.forget_image(&texture_name(&url, max_side));
             let _ = self
                 .ready_count
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| Some(n.saturating_sub(1)));
-            let _ = self.resident_bytes.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| Some(n.saturating_sub(1)));
+            let _ = self.resident_bytes.try_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
                 Some(n.saturating_sub(byte_size))
             });
         }
     }
 
     pub fn clear_resident(&self, ctx: &egui::Context) {
+        self.generation.fetch_add(1, Ordering::Relaxed);
+        lock(&self.completed).clear();
         let mut entries = lock(&self.entries);
         for (&max_side, bucket) in entries.iter() {
             for (url, state) in bucket.iter() {
@@ -566,6 +615,11 @@ fn evict_stale(
     ready_count: &AtomicUsize,
     resident_bytes_atom: &AtomicUsize,
 ) {
+    if ready_count.load(Ordering::Relaxed) <= MAX_RESIDENT_READY
+        && resident_bytes_atom.load(Ordering::Relaxed) <= MAX_RESIDENT_BYTES
+    {
+        return;
+    }
     let mut by_age: Vec<(u32, String, u64, usize)> = entries
         .iter()
         .flat_map(|(size, bucket)| {
@@ -672,6 +726,9 @@ async fn load_icon(url: &str, max_side: u32, cache: &IconCache, skip_disk: bool)
             .is_some_and(|d| cache.disk_has(d));
     if try_disk {
         if let Some(path) = path.clone() {
+            let Ok(_decode_permit) = cache.decode_limit.acquire().await else {
+                return LoadOutcome::Deferred { retry_in: RETRY_DEFERRED };
+            };
             let cached = tokio::task::spawn_blocking(move || {
                 let bytes = std::fs::read(&path).ok()?;
                 if bytes.is_empty() {
@@ -743,6 +800,9 @@ async fn load_icon(url: &str, max_side: u32, cache: &IconCache, skip_disk: bool)
         }
     };
     let digest_for_write = digest.clone();
+    let Ok(_decode_permit) = cache.decode_limit.acquire().await else {
+        return LoadOutcome::Deferred { retry_in: RETRY_DEFERRED };
+    };
     let decoded = tokio::task::spawn_blocking(move || {
         let Some(decoded) = decode_image(&bytes, max_side) else {
             eprintln!("couldn't decode the image ({} bytes)", bytes.len());
@@ -862,8 +922,57 @@ unsafe extern "C" {
     ) -> i32;
 }
 
+fn downsample_box(rgba: image::RgbaImage, max_side: u32) -> image::RgbaImage {
+    let src_w = rgba.width() as usize;
+    let src_h = rgba.height() as usize;
+    let max_side = max_side.max(1) as usize;
+    if src_w <= max_side && src_h <= max_side {
+        return rgba;
+    }
+    let (dst_w, dst_h) = if src_w >= src_h {
+        (max_side, (src_h * max_side / src_w).max(1))
+    } else {
+        ((src_w * max_side / src_h).max(1), max_side)
+    };
+    let src = rgba.as_raw();
+    let mut out = vec![0_u8; dst_w * dst_h * 4];
+    for dy in 0..dst_h {
+        let sy0 = dy * src_h / dst_h;
+        let sy1 = ((dy + 1) * src_h).div_ceil(dst_h).max(sy0 + 1).min(src_h);
+        for dx in 0..dst_w {
+            let sx0 = dx * src_w / dst_w;
+            let sx1 = ((dx + 1) * src_w).div_ceil(dst_w).max(sx0 + 1).min(src_w);
+            let mut sums = [0_u64; 4];
+            for sy in sy0..sy1 {
+                for sx in sx0..sx1 {
+                    let offset = (sy * src_w + sx) * 4;
+                    sums[0] += src[offset] as u64;
+                    sums[1] += src[offset + 1] as u64;
+                    sums[2] += src[offset + 2] as u64;
+                    sums[3] += src[offset + 3] as u64;
+                }
+            }
+            let count = ((sx1 - sx0) * (sy1 - sy0)) as u64;
+            let offset = (dy * dst_w + dx) * 4;
+            out[offset] = (sums[0] / count) as u8;
+            out[offset + 1] = (sums[1] / count) as u8;
+            out[offset + 2] = (sums[2] / count) as u8;
+            out[offset + 3] = (sums[3] / count) as u8;
+        }
+    }
+    image::RgbaImage::from_raw(dst_w as u32, dst_h as u32, out)
+        .expect("box downsampler output dimensions match the buffer")
+}
+
+fn color_image_from_rgba(rgba: Vec<u8>, width: u32, height: u32, max_side: u32) -> Option<egui::ColorImage> {
+    let rgba = image::RgbaImage::from_raw(width, height, rgba)?;
+    let rgba = downsample_box(rgba, max_side);
+    let size = [rgba.width() as usize, rgba.height() as usize];
+    Some(egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw()))
+}
+
 #[cfg(target_os = "vita")]
-fn try_decode_fast_native(bytes: &[u8]) -> Option<egui::ColorImage> {
+fn try_decode_fast_native(bytes: &[u8], max_side: u32) -> Option<egui::ColorImage> {
     if bytes.len() < 4 {
         return None;
     }
@@ -887,7 +996,7 @@ fn try_decode_fast_native(bytes: &[u8]) -> Option<egui::ColorImage> {
             let size = (w as usize) * (h as usize) * 4;
             if size <= rgba_buf.len() {
                 rgba_buf.truncate(size);
-                return Some(egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &rgba_buf));
+                return color_image_from_rgba(rgba_buf, w as u32, h as u32, max_side);
             }
         }
     } else if bytes[0] == 0x89 && bytes[1] == b'P' && bytes[2] == b'N' && bytes[3] == b'G' {
@@ -905,7 +1014,7 @@ fn try_decode_fast_native(bytes: &[u8]) -> Option<egui::ColorImage> {
             let size = (w as usize) * (h as usize) * 4;
             if size <= rgba_buf.len() {
                 rgba_buf.truncate(size);
-                return Some(egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &rgba_buf));
+                return color_image_from_rgba(rgba_buf, w as u32, h as u32, max_side);
             }
         }
     }
@@ -914,22 +1023,19 @@ fn try_decode_fast_native(bytes: &[u8]) -> Option<egui::ColorImage> {
 
 fn decode_image(bytes: &[u8], max_side: u32) -> Option<egui::ColorImage> {
     #[cfg(target_os = "vita")]
-    if let Some(color_img) = try_decode_fast_native(bytes) {
+    if let Some(color_img) = try_decode_fast_native(bytes, max_side) {
         return Some(color_img);
     }
 
     let reader = image::ImageReader::new(Cursor::new(bytes)).with_guessed_format().ok()?;
-    let mut decoded = match reader.decode() {
+    let decoded = match reader.decode() {
         Ok(decoded) => decoded,
         Err(err) => {
             eprintln!("image decoder rejected {} bytes: {err}", bytes.len());
             return None;
         }
     };
-    if decoded.width() > max_side || decoded.height() > max_side {
-        decoded = decoded.resize(max_side, max_side, image::imageops::FilterType::Triangle);
-    }
-    let rgba = decoded.into_rgba8();
+    let rgba = downsample_box(decoded.into_rgba8(), max_side);
     let size = [rgba.width() as usize, rgba.height() as usize];
     Some(egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw()))
 }
