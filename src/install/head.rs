@@ -23,11 +23,15 @@ fn fpkg_hmac(data: &[u8]) -> [u8; 16] {
     hmac
 }
 fn be_u32(bytes: &[u8], offset: usize) -> Result<usize> {
-    let slice = bytes.get(offset..offset + 4).context("head template truncated")?;
+    let slice = bytes
+        .get(offset..offset + 4)
+        .context("head template truncated")?;
     Ok(u32::from_be_bytes([slice[0], slice[1], slice[2], slice[3]]) as usize)
 }
 fn write_at(buffer: &mut [u8], offset: usize, bytes: &[u8]) -> Result<()> {
-    let slot = buffer.get_mut(offset..offset + bytes.len()).context("head.bin write out of range")?;
+    let slot = buffer
+        .get_mut(offset..offset + bytes.len())
+        .context("head.bin write out of range")?;
     slot.copy_from_slice(bytes);
     Ok(())
 }
@@ -51,7 +55,9 @@ pub fn write(dir: &Path) -> Result<()> {
     let info_len = be_u32(&head, 0x10)?;
     let info_out = be_u32(&head, 0xD4)?;
     let info_end = info_offset + info_len.saturating_sub(64);
-    let info_slice = head.get(info_offset..info_end).context("head.bin info range out of bounds")?;
+    let info_slice = head
+        .get(info_offset..info_end)
+        .context("head.bin info range out of bounds")?;
     let hmac = fpkg_hmac(info_slice);
     write_at(&mut head, info_out, &hmac)?;
     let total_len = be_u32(&head, 0xE8)?;

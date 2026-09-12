@@ -2,25 +2,35 @@
 unsafe extern "C" {}
 #[cfg(target_os = "vita")]
 #[link(name = "vitaGL", kind = "static")]
+#[link(name = "vitashark", kind = "static")]
+#[link(name = "SceShaccCgExt", kind = "static")]
+#[link(name = "SceShaccCg_stub")]
+#[link(name = "taihen_stub")]
+#[link(name = "SceKernelDmacMgr_stub")]
 #[link(name = "vita2d", kind = "static")]
 #[link(name = "mathneon", kind = "static")]
+#[link(name = "stdc++")]
 unsafe extern "C" {}
+#[cfg(target_os = "vita")]
+mod vgl;
+#[cfg(target_os = "vita")]
+pub(crate) mod vgl_splash_stub;
+#[cfg(target_os = "vita")]
+mod gl_egui_painter;
 mod egui_painter;
 mod ime;
 mod surface;
-use crate::app::ui::build_ui;
 use crate::app::App;
+use crate::app::ui::build_ui;
 use crate::input::{
-    Pointer, held_stick_direction, map_controller_button_event, map_keyboard_event,
-    open_first_controller, register_vita_controller_mapping, AppCommand, TextTarget,
+    AppCommand, Pointer, TextTarget, held_stick_direction, map_controller_button_event,
+    map_keyboard_event, open_first_controller, register_vita_controller_mapping,
 };
 use anyhow::Result;
-use std::thread::sleep;
 use std::time::{Duration, Instant};
 use surface::{FramePaintStats, HEIGHT, VitaSurface, WIDTH};
 const UI_SCALE: f32 = 1.3;
 const ACTIVE_FRAME_TIME: Duration = Duration::from_millis(16);
-const INPUT_POLL_INTERVAL: Duration = Duration::from_millis(4);
 const STICK_REPEAT_DELAY: Duration = Duration::from_millis(200);
 const STICK_REPEAT_INTERVAL: Duration = Duration::from_millis(70);
 const FRAME_STATS_INTERVAL: Duration = Duration::from_secs(5);
@@ -28,11 +38,26 @@ const SLOW_FRAME_THRESHOLD: Duration = Duration::from_millis(20);
 const FRAME_LOG_DIR: &str = "ux0:data/vitaforge";
 const FRAME_LOG_FILE: &str = "ux0:data/vitaforge/frame_stats.log";
 fn log_line(line: &str) {
-    eprintln!("{line}");
-    use std::io::Write;
-    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(FRAME_LOG_FILE) {
-        let _ = writeln!(file, "{line}");
-    }
+    static LOGGER: std::sync::OnceLock<std::sync::mpsc::SyncSender<String>> =
+        std::sync::OnceLock::new();
+    let sender = LOGGER.get_or_init(|| {
+        let (sender, receiver) = std::sync::mpsc::sync_channel::<String>(8);
+        std::thread::spawn(move || {
+            use std::io::Write;
+            while let Ok(line) = receiver.recv() {
+                eprintln!("{line}");
+                if let Ok(mut file) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(FRAME_LOG_FILE)
+                {
+                    let _ = writeln!(file, "{line}");
+                }
+            }
+        });
+        sender
+    });
+    let _ = sender.try_send(line.to_owned());
 }
 const LONG_GAP_THRESHOLD: Duration = Duration::from_millis(25);
 #[derive(Default)]
@@ -48,6 +73,8 @@ struct FrameStats {
     draw_calls: u64,
     textures_uploaded: u64,
     vertices_drawn: u64,
+    missing_textures: u64,
+    stalled_frames: u32,
     iterations: u32,
     commands: u32,
     keyboard_commands: u32,
@@ -58,6 +85,7 @@ struct FrameStats {
     last_repeat_at: Option<Instant>,
     repeats: u32,
     max_repeat_gap: Duration,
+    frame_times: Vec<Duration>,
     pending_log: Vec<String>,
 }
 impl FrameStats {
@@ -82,7 +110,27 @@ impl FrameStats {
         self.last_repeat_at = Some(now);
         self.repeats += 1;
     }
-    fn record(&mut self, tick: Duration, build_ui: Duration, tessellate: Duration, paint: FramePaintStats) {
+    const STALL_THRESHOLD: u32 = 30;
+    fn note_stall(&mut self, draw_calls: u32, missing_textures: u32) -> bool {
+        if draw_calls == 0 && missing_textures == 0 {
+            self.stalled_frames += 1;
+        } else {
+            self.stalled_frames = 0;
+        }
+        if self.stalled_frames >= Self::STALL_THRESHOLD {
+            self.stalled_frames = 0;
+            true
+        } else {
+            false
+        }
+    }
+    fn record(
+        &mut self,
+        tick: Duration,
+        build_ui: Duration,
+        tessellate: Duration,
+        paint: FramePaintStats,
+    ) {
         let now = Instant::now();
         let texture_apply = Duration::from_secs_f64(paint.texture_apply_secs);
         let geometry = Duration::from_secs_f64(paint.geometry_secs);
@@ -97,8 +145,10 @@ impl FrameStats {
         self.draw_calls += paint.draw_calls as u64;
         self.textures_uploaded += paint.textures_uploaded as u64;
         self.vertices_drawn += paint.vertices_drawn as u64;
+        self.missing_textures += paint.missing_textures as u64;
         let paint_total = texture_apply + geometry + present;
         let total = tick + build_ui + tessellate + paint_total;
+        self.frame_times.push(total);
         if let Some(previous) = self.last_painted_at {
             let gap = now.duration_since(previous);
             self.max_gap = self.max_gap.max(gap);
@@ -132,7 +182,9 @@ impl FrameStats {
         }
     }
     fn maybe_flush(&mut self) {
-        let Some(window_started_at) = self.window_started_at else { return };
+        let Some(window_started_at) = self.window_started_at else {
+            return;
+        };
         let elapsed = window_started_at.elapsed();
         if elapsed < FRAME_STATS_INTERVAL {
             return;
@@ -157,9 +209,10 @@ impl FrameStats {
             LONG_GAP_THRESHOLD.as_millis(),
         ));
         if self.frames > 0 {
+            let (p95, p99) = frame_percentiles(&self.frame_times);
             self.pending_log.push(format!(
                 "  avg per painted frame: tick={:.2}ms build_ui={:.2}ms tessellate={:.2}ms \
-                 texture_apply={:.2}ms ({:.1} uploads) geometry={:.2}ms ({:.1} draws, {:.0} verts) present={:.2}ms",
+                 texture_apply={:.2}ms ({:.1} uploads) geometry={:.2}ms ({:.1} draws, {:.0} verts, {} missing textures) present={:.2}ms",
                 self.tick.as_secs_f64() * 1000.0 / frames,
                 self.build_ui.as_secs_f64() * 1000.0 / frames,
                 self.tessellate.as_secs_f64() * 1000.0 / frames,
@@ -168,27 +221,50 @@ impl FrameStats {
                 self.geometry.as_secs_f64() * 1000.0 / frames,
                 self.draw_calls as f64 / frames,
                 self.vertices_drawn as f64 / frames,
+                self.missing_textures,
                 self.present.as_secs_f64() * 1000.0 / frames,
+            ));
+            self.pending_log.push(format!(
+                "  measured frame p95={:.2}ms p99={:.2}ms (present wait included)",
+                p95.as_secs_f64() * 1000.0,
+                p99.as_secs_f64() * 1000.0,
             ));
         }
         log_line(&self.pending_log.join("\n"));
         let last_painted_at = self.last_painted_at;
         let last_repeat_at = self.last_repeat_at;
-        *self = FrameStats { last_painted_at, last_repeat_at, ..FrameStats::default() };
+        *self = FrameStats {
+            last_painted_at,
+            last_repeat_at,
+            ..FrameStats::default()
+        };
     }
+}
+fn frame_percentiles(samples: &[Duration]) -> (Duration, Duration) {
+    if samples.is_empty() {
+        return (Duration::ZERO, Duration::ZERO);
+    }
+    let mut sorted = samples.to_vec();
+    sorted.sort_unstable();
+    let percentile = |numerator: usize| sorted[(sorted.len() - 1) * numerator / 100];
+    (percentile(95), percentile(99))
 }
 struct ImeSession {
     target: TextTarget,
     query_before: String,
 }
 pub fn run(mut app: App) -> Result<()> {
+    crate::install::log_file("boot: SDL init");
     let sdl = sdl2::init().map_err(anyhow::Error::msg)?;
+    crate::install::log_file("boot: SDL video init");
     let video = sdl.video().map_err(anyhow::Error::msg)?;
     register_vita_controller_mapping(&sdl).map_err(anyhow::Error::msg)?;
     let controllers = sdl.game_controller().map_err(anyhow::Error::msg)?;
     let mut controller = open_first_controller(&controllers);
     let mut event_pump = sdl.event_pump().map_err(anyhow::Error::msg)?;
+    crate::install::log_file("boot: surface init");
     let mut surface = VitaSurface::new(&video)?;
+    crate::install::log_file("boot: surface ready");
     let egui_ctx = egui::Context::default();
     crate::app::ui::apply_theme(&egui_ctx);
     let start_time = Instant::now();
@@ -198,10 +274,15 @@ pub fn run(mut app: App) -> Result<()> {
     let mut held_since = Instant::now();
     let mut last_repeat_at = Instant::now();
     let mut last_state_kind = std::mem::discriminant(&app.state);
+    let mut transition_started_at = Instant::now();
+    const SCREEN_FADE_SECS: f32 = 0.15;
     let mut frame_stats = FrameStats::default();
     let _ = std::fs::create_dir_all(FRAME_LOG_DIR);
     let _ = std::fs::write(FRAME_LOG_FILE, "");
-    log_line(&format!("=== vitaforge b{} — new session ===", env!("BUILD_STAMP")));
+    log_line(&format!(
+        "=== vitaforge b{} — new session ===",
+        env!("BUILD_STAMP")
+    ));
     loop {
         frame_stats.note_iteration();
         frame_stats.maybe_flush();
@@ -214,9 +295,12 @@ pub fn run(mut app: App) -> Result<()> {
                 sdl2::event::Event::Quit { .. }
                 | sdl2::event::Event::AppWillEnterBackground { .. }
                 | sdl2::event::Event::AppDidEnterBackground { .. } => {
+                    #[cfg(target_os = "vita")]
                     unsafe {
                         vitasdk_sys::sceKernelExitProcess(0);
                     }
+                    #[cfg(not(target_os = "vita"))]
+                    return Ok(());
                 }
                 sdl2::event::Event::ControllerDeviceAdded { .. } if controller.is_none() => {
                     controller = open_first_controller(&controllers);
@@ -244,7 +328,9 @@ pub fn run(mut app: App) -> Result<()> {
                 ime::close(&video);
                 match result {
                     ime::ImeResult::Confirmed(text) => match session.target {
-                        TextTarget::Search => app.handle_command(AppCommand::SetSearchQuery(text))?,
+                        TextTarget::Search => {
+                            app.handle_command(AppCommand::SetSearchQuery(text))?
+                        }
                         TextTarget::Comment => {
                             if !text.is_empty() {
                                 app.handle_command(AppCommand::SubmitComment(text))?;
@@ -268,10 +354,15 @@ pub fn run(mut app: App) -> Result<()> {
         let current_state_kind = std::mem::discriminant(&app.state);
         if current_state_kind != last_state_kind {
             last_state_kind = current_state_kind;
+            transition_started_at = Instant::now();
             held_direction = None;
             held_since = Instant::now();
             last_repeat_at = Instant::now();
         }
+        let fade_t = (transition_started_at.elapsed().as_secs_f32() / SCREEN_FADE_SECS)
+            .clamp(0.0, 1.0);
+        let fade_alpha = fade_t * fade_t * (3.0 - 2.0 * fade_t);
+        surface.set_frame_alpha(0.82 + 0.18 * fade_alpha);
         if ime.is_none() {
             match held_stick_direction(controller.as_ref()) {
                 Some(direction) if held_direction == Some(direction) => {
@@ -294,7 +385,6 @@ pub fn run(mut app: App) -> Result<()> {
             }
         }
         frame_stats.note_commands(direct_commands.len());
-        let had_input = !egui_events.is_empty() || !direct_commands.is_empty();
         for command in direct_commands {
             app.handle_command(command)?;
         }
@@ -304,13 +394,15 @@ pub fn run(mut app: App) -> Result<()> {
         app.tick(&egui_ctx)?;
         let tick_elapsed = tick_started_at.elapsed();
         let text_target = match &app.state {
-            crate::app::AppState::Catalog(catalog) if catalog.search_requested => Some(TextTarget::Search),
-            crate::app::AppState::Detail { comment_entry_requested: true, .. } => Some(TextTarget::Comment),
+            crate::app::AppState::Catalog(catalog) if catalog.search_requested => {
+                Some(TextTarget::Search)
+            }
+            crate::app::AppState::Detail {
+                comment_entry_requested: true,
+                ..
+            } => Some(TextTarget::Comment),
             _ => None,
         };
-        let app_busy = app.install_busy()
-            || matches!(app.state, crate::app::AppState::Loading)
-            || text_target.is_some();
         let raw_input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -319,7 +411,10 @@ pub fn run(mut app: App) -> Result<()> {
             viewport_id: egui::ViewportId::ROOT,
             viewports: std::iter::once((
                 egui::ViewportId::ROOT,
-                egui::ViewportInfo { native_pixels_per_point: Some(UI_SCALE), ..Default::default() },
+                egui::ViewportInfo {
+                    native_pixels_per_point: Some(UI_SCALE),
+                    ..Default::default()
+                },
             ))
             .collect(),
             time: Some(start_time.elapsed().as_secs_f64()),
@@ -338,8 +433,10 @@ pub fn run(mut app: App) -> Result<()> {
             app.handle_command(command)?;
         }
         let tessellate_started_at = Instant::now();
-        let clipped_primitives = egui_ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
+        let clipped_primitives =
+            egui_ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
         let tessellate_elapsed = tessellate_started_at.elapsed();
+        surface.set_common_dialog(ime.is_some());
         surface.draw_scene();
         let paint_stats: FramePaintStats = surface.paint_egui(
             full_output.pixels_per_point,
@@ -347,13 +444,24 @@ pub fn run(mut app: App) -> Result<()> {
             &full_output.textures_delta,
         )?;
         app.icons.set_gpu_backlog(surface.pending_texture_uploads());
-        let dropped = surface.take_dropped_textures();
+        let mut dropped = surface.take_dropped_textures();
+        if frame_stats.note_stall(paint_stats.draw_calls, paint_stats.missing_textures) {
+            log_line("frame loop looked stalled for 30 frames straight, forcing texture recovery");
+            dropped.extend(surface.force_recover());
+            egui_ctx.request_repaint();
+        }
         if !dropped.is_empty() {
             app.icons.forget_textures(&egui_ctx, &dropped);
             egui_ctx.request_repaint();
         }
-        frame_stats.record(tick_elapsed, build_ui_elapsed, tessellate_elapsed, paint_stats);
+        frame_stats.record(
+            tick_elapsed,
+            build_ui_elapsed,
+            tessellate_elapsed,
+            paint_stats,
+        );
         crate::install::process_pending_bgdl();
+        #[cfg(target_os = "vita")]
         unsafe {
             vitasdk_sys::sceKernelPowerTick(vitasdk_sys::SCE_KERNEL_POWER_TICK_DEFAULT);
         }
@@ -373,7 +481,10 @@ pub fn run(mut app: App) -> Result<()> {
                 TextTarget::Comment => "",
             };
             if ime::open(&video, surface.window(), purpose, initial) {
-                ime = Some(ImeSession { target, query_before });
+                ime = Some(ImeSession {
+                    target,
+                    query_before,
+                });
                 pointer.forget_touch(); // the keyboard eats the events that would have ended this touch
             } else {
                 match target {

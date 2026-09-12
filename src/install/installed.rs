@@ -1,3 +1,4 @@
+use crate::data::{AppEntry, Platform};
 use md5::{Digest, Md5};
 use std::collections::HashMap;
 use std::io::Read;
@@ -5,7 +6,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use crate::data::{AppEntry, Platform};
 const APP_ROOTS: &[&str] = &["ux0:app", "ur0:app", "uma0:app"];
 const PSP_ROOTS: &[&str] = &["ux0:pspemu/PSP/GAME", "ur0:pspemu/PSP/GAME"];
 const META_ROOTS: &[&str] = &["ux0:appmeta", "ur0:appmeta"];
@@ -29,8 +29,15 @@ struct Wanted {
 }
 impl Wanted {
     fn from_entry(entry: &AppEntry) -> Option<Self> {
-        let psp = matches!(entry.platform, Platform::Psp | Platform::NpsPsp | Platform::NpsPsx);
-        let folder = if psp { entry.id.trim().to_owned() } else { key_of(&entry.titleid) };
+        let psp = matches!(
+            entry.platform,
+            Platform::Psp | Platform::NpsPsp | Platform::NpsPsx
+        );
+        let folder = if psp {
+            entry.id.trim().to_owned()
+        } else {
+            key_of(&entry.titleid)
+        };
         if folder.is_empty() {
             return None;
         }
@@ -55,7 +62,10 @@ impl Wanted {
     }
 }
 pub fn index_key(entry: &AppEntry) -> String {
-    if matches!(entry.platform, Platform::Psp | Platform::NpsPsp | Platform::NpsPsx) {
+    if matches!(
+        entry.platform,
+        Platform::Psp | Platform::NpsPsp | Platform::NpsPsx
+    ) {
         format!("PSP-{}", entry.id.trim())
     } else {
         key_of(&entry.titleid)
@@ -73,8 +83,14 @@ pub struct InstalledVersionInfo {
     pub installed_at: Option<String>, // "YYYY-MM-DD", formatted here so the UI stays date-library-free
 }
 fn installed_at(titleid: &str) -> Option<String> {
-    let modified = std::fs::metadata(hash_file_path(titleid)).ok()?.modified().ok()?;
-    let secs = modified.duration_since(std::time::SystemTime::UNIX_EPOCH).ok()?.as_secs();
+    let modified = std::fs::metadata(hash_file_path(titleid))
+        .ok()?
+        .modified()
+        .ok()?;
+    let secs = modified
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
     Some(format_ymd(secs))
 }
 fn format_ymd(unix_secs: u64) -> String {
@@ -177,33 +193,57 @@ impl InstalledIndex {
         if key.is_empty() {
             return InstallState::Absent;
         }
-        self.states.lock().unwrap().get(key).copied().unwrap_or(InstallState::Absent)
+        self.states
+            .lock()
+            .unwrap()
+            .get(key)
+            .copied()
+            .unwrap_or(InstallState::Absent)
     }
-    pub fn installed_info(&self, ctx: &egui::Context, entry: &AppEntry) -> Option<InstalledVersionInfo> {
+    pub fn installed_info(
+        &self,
+        ctx: &egui::Context,
+        entry: &AppEntry,
+    ) -> Option<InstalledVersionInfo> {
         let key = index_key(entry);
         if key.is_empty() || self.state_by_key(&key) == InstallState::Absent {
             return None;
         }
         if let Some(app_ver) = self.version_cache.lock().unwrap().get(&key) {
-            return Some(InstalledVersionInfo { app_ver: app_ver.clone(), installed_at: installed_at(&key) });
+            return Some(InstalledVersionInfo {
+                app_ver: app_ver.clone(),
+                installed_at: installed_at(&key),
+            });
         }
         self.version_cache.lock().unwrap().insert(key.clone(), None); // placeholder: lookup in flight
-        let psp = matches!(entry.platform, Platform::Psp | Platform::NpsPsp | Platform::NpsPsx);
-        let folder = if psp { entry.id.trim().to_owned() } else { key_of(&entry.titleid) };
+        let psp = matches!(
+            entry.platform,
+            Platform::Psp | Platform::NpsPsp | Platform::NpsPsx
+        );
+        let folder = if psp {
+            entry.id.trim().to_owned()
+        } else {
+            key_of(&entry.titleid)
+        };
         let index = self.clone();
         let ctx = ctx.clone();
         let stamped_key = key.clone();
-        std::thread::spawn(move || {
+        tokio::task::spawn_blocking(move || {
             let roots: &[&str] = if psp { PSP_ROOTS } else { APP_ROOTS };
             let app_ver = read_version_file(&stamped_key).or_else(|| {
                 roots.iter().find_map(|root| {
-                    super::sfo::read_app_ver(&PathBuf::from(format!("{root}/{folder}/sce_sys/param.sfo")))
+                    super::sfo::read_app_ver(&PathBuf::from(format!(
+                        "{root}/{folder}/sce_sys/param.sfo"
+                    )))
                 })
             });
             index.version_cache.lock().unwrap().insert(key, app_ver);
             ctx.request_repaint();
         });
-        Some(InstalledVersionInfo { app_ver: None, installed_at: installed_at(&index_key(entry)) })
+        Some(InstalledVersionInfo {
+            app_ver: None,
+            installed_at: installed_at(&index_key(entry)),
+        })
     }
     pub fn force_refresh(&self, ctx: &egui::Context, entries: &[AppEntry]) {
         *self.scanned_at.lock().unwrap() = None;
@@ -224,7 +264,11 @@ impl InstalledIndex {
         }
         self.scanning.store(true, Ordering::Release);
         let wanted: Vec<Wanted> = entries.iter().filter_map(Wanted::from_entry).collect();
-        let hash_gap = if self.states.lock().unwrap().is_empty() { FIRST_SCAN_HASH_GAP } else { HASH_GAP };
+        let hash_gap = if self.states.lock().unwrap().is_empty() {
+            FIRST_SCAN_HASH_GAP
+        } else {
+            HASH_GAP
+        };
         let index = self.clone();
         let ctx = ctx.clone();
         let spawned = std::thread::Builder::new()
@@ -293,7 +337,11 @@ pub fn stamp_pending_install(titleid: &str, hash: &str, version: &str, extract_d
         return;
     }
     let hash = hash.trim();
-    let lower_hash = if hash.len() == HASH_LEN { hash.to_lowercase() } else { String::new() };
+    let lower_hash = if hash.len() == HASH_LEN {
+        hash.to_lowercase()
+    } else {
+        String::new()
+    };
     let dir = PathBuf::from(HASH_CACHE_DIR);
     let _ = std::fs::create_dir_all(&dir);
     let _ = std::fs::write(hash_file_path(titleid), &lower_hash);
@@ -322,10 +370,16 @@ fn read_version_file(titleid: &str) -> Option<String> {
 }
 fn ledger() -> Vec<String> {
     let mut out = Vec::new();
-    let Ok(dir) = std::fs::read_dir(HASH_CACHE_DIR) else { return out };
+    let Ok(dir) = std::fs::read_dir(HASH_CACHE_DIR) else {
+        return out;
+    };
     for entry in dir.flatten() {
-        let Ok(name) = entry.file_name().into_string() else { continue };
-        let Some(titleid) = name.strip_suffix(".hash") else { continue };
+        let Ok(name) = entry.file_name().into_string() else {
+            continue;
+        };
+        let Some(titleid) = name.strip_suffix(".hash") else {
+            continue;
+        };
         out.push(key_of(titleid));
     }
     out
@@ -341,7 +395,10 @@ fn scan(
     let (listing, listed) = list_app_dirs(&mut log);
     let by_listing = listed && !listing.is_empty();
     if !by_listing {
-        note(&mut log, "nothing could be listed, asking by title id instead".to_owned());
+        note(
+            &mut log,
+            "nothing could be listed, asking by title id instead".to_owned(),
+        );
     }
     let mut found: HashMap<String, PathBuf> = HashMap::new();
     for entry in wanted {
@@ -356,8 +413,11 @@ fn scan(
     }
     let mut asked_system = false;
     if found.is_empty() {
-        let titleids: Vec<String> =
-            wanted.iter().filter(|entry| !entry.psp).map(|entry| entry.folder.clone()).collect();
+        let titleids: Vec<String> = wanted
+            .iter()
+            .filter(|entry| !entry.psp)
+            .map(|entry| entry.folder.clone())
+            .collect();
         let started = Instant::now();
         match super::promoter::installed_titles(&titleids) {
             Some(installed) => {
@@ -372,25 +432,38 @@ fn scan(
                     ),
                 );
                 for titleid in installed {
-                    found.insert(titleid.clone(), PathBuf::from(format!("{}/{titleid}", APP_ROOTS[0])));
+                    found.insert(
+                        titleid.clone(),
+                        PathBuf::from(format!("{}/{titleid}", APP_ROOTS[0])),
+                    );
                 }
             }
-            None => note(&mut log, "the system would not say what is installed".to_owned()),
+            None => note(
+                &mut log,
+                "the system would not say what is installed".to_owned(),
+            ),
         }
     }
     let authoritative = !found.is_empty();
     note(
         &mut log,
-        format!("{} folders listed, {} catalog entries installed", listing.len(), found.len()),
+        format!(
+            "{} folders listed, {} catalog entries installed",
+            listing.len(),
+            found.len()
+        ),
     );
-    let first_pass: HashMap<String, InstallState> =
-        found.keys().map(|key| (key.clone(), InstallState::Installed)).collect();
+    let first_pass: HashMap<String, InstallState> = found
+        .keys()
+        .map(|key| (key.clone(), InstallState::Installed))
+        .collect();
     publish(first_pass, authoritative);
     let ledger = ledger();
-    let expected: HashMap<&str, (&str, &str)> = wanted
-        .iter()
-        .map(|entry| (entry.key.as_str(), (entry.hash.as_str(), entry.hash2.as_str())))
-        .collect();
+    let grouped: HashMap<&str, Vec<&Wanted>> =
+        wanted.iter().fold(HashMap::new(), |mut groups, entry| {
+            groups.entry(entry.key.as_str()).or_default().push(entry);
+            groups
+        });
     let mut from_ledger = HashMap::new();
     for key in &ledger {
         if authoritative && !found.contains_key(key) {
@@ -398,15 +471,20 @@ fn scan(
             let _ = std::fs::remove_file(version_file_path(key));
             continue;
         }
-        let catalog_digest = expected
-            .get(key.as_str())
-            .is_some_and(|(e1, e2)| e1.len() == HASH_LEN || e2.len() == HASH_LEN);
+        let catalog_digest = grouped.get(key.as_str()).is_some_and(|entries| {
+            entries
+                .iter()
+                .any(|entry| entry.hash.len() == HASH_LEN || entry.hash2.len() == HASH_LEN)
+        });
         if catalog_digest {
             continue;
         }
         from_ledger.insert(key.clone(), InstallState::Installed);
     }
-    note(&mut log, format!("{} titles installed from vitaforge", from_ledger.len()));
+    note(
+        &mut log,
+        format!("{} titles installed from vitaforge", from_ledger.len()),
+    );
     report(format!(
         "b{} · found {} · dirs {} · vf {} · {}",
         env!("BUILD_STAMP"),
@@ -424,17 +502,76 @@ fn scan(
     }
     write_log(&log);
     let mut batch = HashMap::new();
-    for entry in wanted {
-        if entry.hash.len() != HASH_LEN && entry.hash2.len() != HASH_LEN {
+    for (key, entries) in grouped {
+        let Some(app_dir) = found.get(key) else {
             continue;
-        }
-        let Some(app_dir) = found.get(&entry.key) else { continue };
-        std::thread::sleep(hash_gap);
-        if hash_state(&entry.key, app_dir, &entry.hash, &entry.hash2) == InstallState::Outdated
-            && !installed_is_newer(&entry.key, &entry.catalog_version)
-        {
-            batch.insert(entry.key.clone(), InstallState::Outdated);
-        }
+        };
+        let stamped_version = read_version_file(key);
+        let sfo_version = if stamped_version.is_none() {
+            let psp = entries.first().is_some_and(|e| e.psp);
+            let sfo_name = if psp {
+                "PARAM.SFO"
+            } else {
+                "sce_sys/param.sfo"
+            };
+            super::sfo::read_app_ver(&app_dir.join(sfo_name))
+        } else {
+            None
+        };
+        let effective_version = stamped_version.as_deref().or(sfo_version.as_deref());
+        let already_current = effective_version.is_some_and(|installed| {
+            entries
+                .iter()
+                .all(|entry| !version_is_older(installed, &entry.catalog_version))
+        });
+        let state = if already_current {
+            InstallState::Installed
+        } else {
+            let hash_entries: Vec<&Wanted> = entries
+                .iter()
+                .copied()
+                .filter(|entry| entry.hash.len() == HASH_LEN || entry.hash2.len() == HASH_LEN)
+                .collect();
+            if !hash_entries.is_empty() {
+                std::thread::sleep(hash_gap);
+                if hash_entries.iter().any(|entry| {
+                    hash_state(key, app_dir, &entry.hash, &entry.hash2) == InstallState::Installed
+                }) {
+                    InstallState::Installed
+                } else if effective_version.is_some_and(|installed| {
+                    entries
+                        .iter()
+                        .all(|entry| !version_is_older(installed, &entry.catalog_version))
+                }) {
+                    InstallState::Installed
+                } else {
+                    InstallState::Outdated
+                }
+            } else if let Some(installed) = effective_version {
+                if entries
+                    .iter()
+                    .all(|entry| version_is_older(installed, &entry.catalog_version))
+                {
+                    InstallState::Outdated
+                } else {
+                    InstallState::Installed
+                }
+            } else {
+                InstallState::Installed
+            }
+        };
+        note(
+            &mut log,
+            format!(
+                "{key}: {} (installed version: {})",
+                match state {
+                    InstallState::Outdated => "outdated",
+                    _ => "installed",
+                },
+                effective_version.unwrap_or("unknown"),
+            ),
+        );
+        batch.insert(key.to_owned(), state);
         if batch.len() >= HASH_BATCH {
             publish(std::mem::take(&mut batch), false);
         }
@@ -442,27 +579,9 @@ fn scan(
     if !batch.is_empty() {
         publish(batch, false);
     }
-    let mut version_batch = HashMap::new();
-    for entry in wanted {
-        if entry.hash.len() == HASH_LEN || entry.hash2.len() == HASH_LEN {
-            continue; // already covered by the hash-based comparison above
-        }
-        if !found.contains_key(&entry.key) {
-            continue;
-        }
-        let Some(installed_ver) = read_version_file(&entry.key) else { continue };
-        if version_is_older(&installed_ver, &entry.catalog_version) {
-            version_batch.insert(entry.key.clone(), InstallState::Outdated);
-        }
-    }
-    if !version_batch.is_empty() {
-        publish(version_batch, false);
-    }
+    write_log(&log);
 }
-fn installed_is_newer(key: &str, catalog_version: &str) -> bool {
-    read_version_file(key).is_some_and(|stamped| version_is_older(catalog_version, &stamped))
-}
-fn version_is_older(installed: &str, catalog: &str) -> bool {
+pub fn version_is_older(installed: &str, catalog: &str) -> bool {
     fn parts(v: &str) -> Option<Vec<u64>> {
         let nums: Vec<u64> = v
             .trim()
@@ -471,10 +590,20 @@ fn version_is_older(installed: &str, catalog: &str) -> bool {
             .filter(|s| !s.is_empty())
             .filter_map(|s| s.parse::<u64>().ok())
             .collect();
-        (!nums.is_empty()).then_some(nums)
+        if nums.is_empty() {
+            return None;
+        }
+        let mut nums = nums;
+        while nums.last() == Some(&0) {
+            nums.pop();
+        }
+        Some(nums)
+    }
+    fn looks_like_date(nums: &[u64]) -> bool {
+        nums.first().is_some_and(|&first| first >= 1000)
     }
     match (parts(installed), parts(catalog)) {
-        (Some(a), Some(b)) => a < b,
+        (Some(a), Some(b)) if looks_like_date(&a) == looks_like_date(&b) => a < b,
         _ => false,
     }
 }
@@ -509,10 +638,13 @@ fn write_log(lines: &[String]) {
 fn key_of(titleid: &str) -> String {
     titleid.trim().to_uppercase()
 }
+#[cfg(target_os = "vita")]
 pub mod vita_fs {
     use std::ffi::CString;
     pub fn list_dir(path: &str) -> Result<Vec<String>, i32> {
-        let Ok(path) = CString::new(path) else { return Err(-1) };
+        let Ok(path) = CString::new(path) else {
+            return Err(-1);
+        };
         let mut names = Vec::new();
         unsafe {
             let fd = vitasdk_sys::sceIoDopen(path.as_ptr());
@@ -537,16 +669,22 @@ pub mod vita_fs {
         stat_code(path) >= 0
     }
     pub fn stat_code(path: &str) -> i32 {
-        let Ok(path) = CString::new(path) else { return -1 };
+        let Ok(path) = CString::new(path) else {
+            return -1;
+        };
         let mut stat: vitasdk_sys::SceIoStat = unsafe { std::mem::zeroed() };
         unsafe { vitasdk_sys::sceIoGetstat(path.as_ptr(), &mut stat) }
     }
     pub fn mkdir(path: &str, mode: i32) -> i32 {
-        let Ok(path) = CString::new(path) else { return -1 };
+        let Ok(path) = CString::new(path) else {
+            return -1;
+        };
         unsafe { vitasdk_sys::sceIoMkdir(path.as_ptr(), mode as vitasdk_sys::SceMode) }
     }
     pub fn rmdir(path: &str) -> i32 {
-        let Ok(path) = CString::new(path) else { return -1 };
+        let Ok(path) = CString::new(path) else {
+            return -1;
+        };
         unsafe { vitasdk_sys::sceIoRmdir(path.as_ptr()) }
     }
     fn name_of(dirent: &vitasdk_sys::SceIoDirent) -> String {
@@ -559,6 +697,28 @@ pub mod vita_fs {
         String::from_utf8_lossy(&bytes).into_owned()
     }
 }
+#[cfg(not(target_os = "vita"))]
+pub mod vita_fs {
+    pub fn list_dir(path: &str) -> Result<Vec<String>, i32> {
+        std::fs::read_dir(path).map_err(|_| -1).map(|dir| {
+            dir.flatten()
+                .filter_map(|entry| entry.file_name().into_string().ok())
+                .collect()
+        })
+    }
+    pub fn exists(path: &str) -> bool {
+        std::path::Path::new(path).exists()
+    }
+    pub fn stat_code(path: &str) -> i32 {
+        if exists(path) { 0 } else { -1 }
+    }
+    pub fn mkdir(path: &str, _mode: i32) -> i32 {
+        std::fs::create_dir(path).map_or(-1, |_| 0)
+    }
+    pub fn rmdir(path: &str) -> i32 {
+        std::fs::remove_dir(path).map_or(-1, |_| 0)
+    }
+}
 fn list_app_dirs(log: &mut Vec<String>) -> (HashMap<String, PathBuf>, bool) {
     let mut present: HashMap<String, PathBuf> = HashMap::new();
     let mut listed = false;
@@ -566,15 +726,20 @@ fn list_app_dirs(log: &mut Vec<String>) -> (HashMap<String, PathBuf>, bool) {
         let (names, how) = match vita_fs::list_dir(root) {
             Ok(names) => (names, "sceIo".to_owned()),
             Err(code) => {
-                match std::fs::read_dir(root).or_else(|err| {
-                    std::fs::read_dir(format!("{root}/")).map_err(|_| err)
-                }) {
+                match std::fs::read_dir(root)
+                    .or_else(|err| std::fs::read_dir(format!("{root}/")).map_err(|_| err))
+                {
                     Ok(dir) => (
-                        dir.flatten().filter_map(|e| e.file_name().into_string().ok()).collect(),
+                        dir.flatten()
+                            .filter_map(|e| e.file_name().into_string().ok())
+                            .collect(),
                         format!("readdir after sceIo {code:#x}"),
                     ),
                     Err(err) => {
-                        note(log, format!("couldn't list {root}: sceIo {code:#x}, readdir {err}"));
+                        note(
+                            log,
+                            format!("couldn't list {root}: sceIo {code:#x}, readdir {err}"),
+                        );
                         continue;
                     }
                 }
@@ -583,7 +748,9 @@ fn list_app_dirs(log: &mut Vec<String>) -> (HashMap<String, PathBuf>, bool) {
         listed = true;
         note(log, format!("{root} -> {} folders ({how})", names.len()));
         for name in names {
-            present.entry(key_of(&name)).or_insert_with(|| PathBuf::from(root).join(&name));
+            present
+                .entry(key_of(&name))
+                .or_insert_with(|| PathBuf::from(root).join(&name));
         }
     }
     (present, listed)
@@ -605,24 +772,35 @@ fn hash_state(titleid: &str, app_dir: &Path, expected: &str, expected_aux: &str)
     executable_state(titleid, app_dir, expected)
 }
 fn aux_state(app_dir: &Path, expected: &str) -> Option<InstallState> {
+    let asset = AUX_MAIN_FILES
+        .iter()
+        .map(|name| app_dir.join(name))
+        .find(|path| path.is_file())?;
     let cache = app_dir.join("aux_hash.vdb");
-    if let Some(cached) = read_hash_file(&cache) {
+    if is_cache_fresh(&cache, &asset)
+        && let Some(cached) = read_hash_file(&cache)
+    {
         return Some(compare(&cached, expected));
     }
-    let asset = AUX_MAIN_FILES.iter().map(|name| app_dir.join(name)).find(|path| path.is_file())?;
     let digest = md5_file(&asset)?;
     let _ = std::fs::write(&cache, &digest);
     Some(compare(&digest, expected))
 }
 fn executable_state(titleid: &str, app_dir: &Path, expected: &str) -> InstallState {
-    if let Some(cached) = read_hash_file(&app_dir.join("hash.vdb"))
-        .or_else(|| read_hash_file(&app_dir.join("HASH.VDB")))
-    {
+    let caches = [app_dir.join("hash.vdb"), app_dir.join("HASH.VDB")];
+    let Some(executable) = find_executable(app_dir) else {
+        return caches
+            .iter()
+            .find_map(|cache| read_hash_file(cache))
+            .map_or(InstallState::Installed, |cached| compare(&cached, expected));
+    };
+    let cached = caches
+        .iter()
+        .find(|cache| is_cache_fresh(cache, &executable))
+        .and_then(|cache| read_hash_file(cache));
+    if let Some(cached) = cached {
         return compare(&cached, expected);
     }
-    let Some(executable) = find_executable(app_dir) else {
-        return InstallState::Installed;
-    };
     let Some(digest) = md5_file(&executable) else {
         return InstallState::Installed;
     };
@@ -631,8 +809,25 @@ fn executable_state(titleid: &str, app_dir: &Path, expected: &str) -> InstallSta
     let _ = std::fs::write(app_dir.join("hash.vdb"), &digest);
     compare(&digest, expected)
 }
+fn is_cache_fresh(cache: &Path, described: &Path) -> bool {
+    let (Ok(cache_meta), Ok(described_meta)) = (cache.metadata(), described.metadata()) else {
+        return false;
+    };
+    let (Ok(cache_time), Ok(described_time)) = (cache_meta.modified(), described_meta.modified())
+    else {
+        return true;
+    };
+    cache_time >= described_time
+}
 fn find_executable(app_dir: &Path) -> Option<PathBuf> {
-    for name in &["eboot.bin", "EBOOT.BIN", "Eboot.bin", "eboot.pbp", "EBOOT.PBP", "Eboot.pbp"] {
+    for name in &[
+        "eboot.bin",
+        "EBOOT.BIN",
+        "Eboot.bin",
+        "eboot.pbp",
+        "EBOOT.PBP",
+        "Eboot.pbp",
+    ] {
         let p = app_dir.join(name);
         if p.is_file() {
             return Some(p);
@@ -641,7 +836,8 @@ fn find_executable(app_dir: &Path) -> Option<PathBuf> {
     if let Ok(dir) = std::fs::read_dir(app_dir) {
         for entry in dir.flatten() {
             if let Ok(name) = entry.file_name().into_string() {
-                if name.eq_ignore_ascii_case("eboot.bin") || name.eq_ignore_ascii_case("eboot.pbp") {
+                if name.eq_ignore_ascii_case("eboot.bin") || name.eq_ignore_ascii_case("eboot.pbp")
+                {
                     return Some(entry.path());
                 }
             }
@@ -686,8 +882,8 @@ fn md5_file(path: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        HASH_CACHE_DIR, InstallState, compare, count_states, format_ymd, hash_file_path, hash_state,
-        installed_is_newer, md5_file, read_hash_file, version_file_path, version_is_older,
+        HASH_CACHE_DIR, InstallState, compare, count_states, format_ymd, hash_file_path,
+        hash_state, md5_file, read_hash_file, version_is_older,
     };
     use std::collections::HashMap;
     #[test]
@@ -714,12 +910,20 @@ mod tests {
         assert!(!version_is_older("1.10", "1.9"));
         assert!(!version_is_older("2.0", "2.0"));
         assert!(!version_is_older("3.0", "1.0"));
+        assert!(!version_is_older("1.0", "1.0.0"));
+        assert!(!version_is_older("v1.0.0", "1.0"));
     }
     #[test]
     fn unparseable_versions_never_produce_a_false_outdated() {
         assert!(!version_is_older("custom-build", "1.0"));
         assert!(!version_is_older("1.0", "latest"));
         assert!(!version_is_older("", ""));
+    }
+    #[test]
+    fn a_date_shaped_version_is_never_compared_against_a_semver_one() {
+        assert!(!version_is_older("2024.01.05", "1.2"));
+        assert!(!version_is_older("1.2", "2024.01.05"));
+        assert!(version_is_older("2024.01.04", "2024.01.05"));
     }
 
     fn scratch_app_dir(name: &str) -> std::path::PathBuf {
@@ -735,7 +939,10 @@ mod tests {
     #[test]
     fn a_matching_digest_is_current() {
         assert_eq!(compare(CURRENT, CURRENT), InstallState::Installed);
-        assert_eq!(compare(&CURRENT.to_uppercase(), CURRENT), InstallState::Installed);
+        assert_eq!(
+            compare(&CURRENT.to_uppercase(), CURRENT),
+            InstallState::Installed
+        );
         assert_eq!(compare(CURRENT, ALTERNATE), InstallState::Outdated);
     }
 
@@ -749,8 +956,14 @@ mod tests {
     fn the_apps_own_hash_file_decides_when_it_is_there() {
         let dir = scratch_app_dir("hashvdb");
         std::fs::write(dir.join("hash.vdb"), CURRENT).unwrap();
-        assert_eq!(hash_state("TESTID01", &dir, CURRENT, ""), InstallState::Installed);
-        assert_eq!(hash_state("TESTID01", &dir, ALTERNATE, ""), InstallState::Outdated);
+        assert_eq!(
+            hash_state("TESTID01", &dir, CURRENT, ""),
+            InstallState::Installed
+        );
+        assert_eq!(
+            hash_state("TESTID01", &dir, ALTERNATE, ""),
+            InstallState::Outdated
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -761,8 +974,14 @@ mod tests {
         std::fs::write(dir.join("hash.vdb"), CURRENT).unwrap();
         std::fs::write(dir.join("game_data/game.pck"), b"old assets").unwrap();
         let assets = md5_file(&dir.join("game_data/game.pck")).unwrap();
-        assert_eq!(hash_state("TESTID04", &dir, CURRENT, ALTERNATE), InstallState::Outdated);
-        assert_eq!(hash_state("TESTID04", &dir, CURRENT, &assets), InstallState::Installed);
+        assert_eq!(
+            hash_state("TESTID04", &dir, CURRENT, ALTERNATE),
+            InstallState::Outdated
+        );
+        assert_eq!(
+            hash_state("TESTID04", &dir, CURRENT, &assets),
+            InstallState::Installed
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -770,19 +989,18 @@ mod tests {
     fn an_asset_digest_with_no_asset_file_falls_back_to_the_executable() {
         let dir = scratch_app_dir("noassets");
         std::fs::write(dir.join("hash.vdb"), CURRENT).unwrap();
-        assert_eq!(hash_state("TESTID05", &dir, CURRENT, ALTERNATE), InstallState::Installed);
+        assert_eq!(
+            hash_state("TESTID05", &dir, CURRENT, ALTERNATE),
+            InstallState::Installed
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn running_ahead_of_a_stale_catalog_entry_is_not_outdated() {
-        std::fs::create_dir_all(HASH_CACHE_DIR).ok();
-        std::fs::write(version_file_path("TESTID06"), "v0.1.2").ok();
-        assert!(installed_is_newer("TESTID06", "v.0.1.0"));
-        assert!(!installed_is_newer("TESTID06", "v.0.2.0")); // catalog genuinely ahead
-        assert!(!installed_is_newer("TESTID06", "v0.1.2")); // same release
-        let _ = std::fs::remove_file(version_file_path("TESTID06"));
-        assert!(!installed_is_newer("TESTID07", "v.0.1.0"));
+        assert!(!version_is_older("v0.1.2", "v.0.1.0"));
+        assert!(version_is_older("v0.1.2", "v.0.2.0"));
+        assert!(!version_is_older("v0.1.2", "v0.1.2"));
     }
 
     #[test]
@@ -790,8 +1008,32 @@ mod tests {
         let dir = scratch_app_dir("eboot");
         std::fs::write(dir.join("eboot.bin"), b"vitaforge").unwrap();
         let digest = md5_file(&dir.join("eboot.bin")).expect("digest");
-        assert_eq!(hash_state("TESTID02", &dir, &digest, ""), InstallState::Installed);
-        assert_eq!(read_hash_file(&dir.join("hash.vdb")).as_deref(), Some(digest.as_str()));
+        assert_eq!(
+            hash_state("TESTID02", &dir, &digest, ""),
+            InstallState::Installed
+        );
+        assert_eq!(
+            read_hash_file(&dir.join("hash.vdb")).as_deref(),
+            Some(digest.as_str())
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_hash_vdb_older_than_a_reinstall_done_elsewhere_is_ignored() {
+        let dir = scratch_app_dir("elsewhere");
+        std::fs::write(dir.join("hash.vdb"), CURRENT).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        std::fs::write(dir.join("eboot.bin"), b"a fresh reinstall").unwrap();
+        let fresh_digest = md5_file(&dir.join("eboot.bin")).unwrap();
+        assert_eq!(
+            hash_state("TESTID06", &dir, &fresh_digest, ""),
+            InstallState::Installed
+        );
+        assert_eq!(
+            read_hash_file(&dir.join("hash.vdb")).as_deref(),
+            Some(fresh_digest.as_str())
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -802,7 +1044,10 @@ mod tests {
         let on_disk = md5_file(&dir.join("eboot.bin")).expect("digest");
         std::fs::create_dir_all(HASH_CACHE_DIR).ok();
         std::fs::write(hash_file_path("TESTID03"), CURRENT).ok();
-        assert_eq!(hash_state("TESTID03", &dir, &on_disk, ""), InstallState::Installed);
+        assert_eq!(
+            hash_state("TESTID03", &dir, &on_disk, ""),
+            InstallState::Installed
+        );
         let _ = std::fs::remove_file(hash_file_path("TESTID03"));
         let _ = std::fs::remove_dir_all(&dir);
     }

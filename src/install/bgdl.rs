@@ -1,14 +1,13 @@
-use anyhow::{Result, bail};
 #[cfg(target_os = "vita")]
-use anyhow::Context;
+use super::installed::vita_fs;
+#[cfg(target_os = "vita")]
+use anyhow::{Context, Result, bail};
 #[cfg(target_os = "vita")]
 use std::ffi::CString;
 #[cfg(target_os = "vita")]
 use std::sync::OnceLock;
 #[cfg(target_os = "vita")]
 use vitasdk_sys::*;
-#[cfg(target_os = "vita")]
-use super::installed::vita_fs;
 pub const BGDL_TYPE_PSP: u32 = 0x00;
 #[allow(dead_code)]
 pub const BGDL_TYPE_PSM: u32 = 0x06;
@@ -106,13 +105,8 @@ struct SceDownloadClassHeader {
     buf_10000: *mut u32,
 }
 #[cfg(target_os = "vita")]
-type SceDownloadInit = extern "C" fn(
-    *mut *mut u32,
-    *mut u32,
-    i32,
-    *mut ShellSvcInitStruct,
-    i32,
-) -> i32;
+type SceDownloadInit =
+    extern "C" fn(*mut *mut u32, *mut u32, i32, *mut ShellSvcInitStruct, i32) -> i32;
 #[cfg(target_os = "vita")]
 type SceDownloadChangeState = extern "C" fn(
     *mut *mut u32,
@@ -163,21 +157,42 @@ fn get_download_class() -> Result<&'static SceDownloadClass> {
         let mod_name = CString::new("SceShellSvc").unwrap();
         let mut func_4e255c31_addr: usize = 0;
         let mut func_b282b430_addr: usize = 0;
-        let res1 = taiGetModuleExportFunc(mod_name.as_ptr(), 0xF4E34EDB, 0x4E255C31, &mut func_4e255c31_addr);
-        let res2 = taiGetModuleExportFunc(mod_name.as_ptr(), 0xF4E34EDB, 0xB282B430, &mut func_b282b430_addr);
+        let res1 = taiGetModuleExportFunc(
+            mod_name.as_ptr(),
+            0xF4E34EDB,
+            0x4E255C31,
+            &mut func_4e255c31_addr,
+        );
+        let res2 = taiGetModuleExportFunc(
+            mod_name.as_ptr(),
+            0xF4E34EDB,
+            0xB282B430,
+            &mut func_b282b430_addr,
+        );
         if func_4e255c31_addr == 0 || func_b282b430_addr == 0 {
             let err = format!(
                 "Failed to resolve SceShellSvc exports (module load: {load_res:#010x}, \
                  export 0x4E255C31: {} [tai rc {res1:#010x}], \
                  export 0xB282B430: {} [tai rc {res2:#010x}]) — \
                  check that taiHEN is installed and up to date for this firmware",
-                if func_4e255c31_addr == 0 { "not found" } else { "found" },
-                if func_b282b430_addr == 0 { "not found" } else { "found" },
+                if func_4e255c31_addr == 0 {
+                    "not found"
+                } else {
+                    "found"
+                },
+                if func_b282b430_addr == 0 {
+                    "not found"
+                } else {
+                    "found"
+                },
             );
             log_bgdl(&err);
             return Err(err);
         }
-        log_bgdl(&format!("SceShellSvc NIDs resolved! 0x4E255C31={:#010x}, 0xB282B430={:#010x}", func_4e255c31_addr, func_b282b430_addr));
+        log_bgdl(&format!(
+            "SceShellSvc NIDs resolved! 0x4E255C31={:#010x}, 0xB282B430={:#010x}",
+            func_4e255c31_addr, func_b282b430_addr
+        ));
         let sce_ipmi_4e255c31: extern "C" fn(*const u8, i32) -> i32 =
             std::mem::transmute(func_4e255c31_addr);
         let sce_ipmi_b282b430: extern "C" fn(
@@ -268,13 +283,19 @@ fn probe_fs() {
         "ur0:",
     ];
     for path in PATHS {
-        log_probe(&format!("stat({path}) -> {:#010x}", vita_fs::stat_code(path)));
+        log_probe(&format!(
+            "stat({path}) -> {:#010x}",
+            vita_fs::stat_code(path)
+        ));
     }
     let probe_dir = "ux0:vitaforge_probe";
     let mk = vita_fs::mkdir(probe_dir, 0o777);
     log_probe(&format!("mkdir({probe_dir}) -> {mk:#010x}"));
     if mk >= 0 {
-        log_probe(&format!("rmdir({probe_dir}) -> {:#010x}", vita_fs::rmdir(probe_dir)));
+        log_probe(&format!(
+            "rmdir({probe_dir}) -> {:#010x}",
+            vita_fs::rmdir(probe_dir)
+        ));
     }
 }
 #[cfg(target_os = "vita")]
@@ -289,7 +310,10 @@ pub fn start_bgdl(title: &str, url: &str, rif: Option<&[u8]>, bgdl_type: u32) ->
     log_bgdl(&format!("sceIoMkdir(ux0:bgdl) -> {mk:#010x} (advisory)"));
     match vita_fs::list_dir("ux0:bgdl/t") {
         Ok(entries) => {
-            log_bgdl(&format!("ux0:bgdl/t holds {} queued entries", entries.len()));
+            log_bgdl(&format!(
+                "ux0:bgdl/t holds {} queued entries",
+                entries.len()
+            ));
             if entries.len() >= MAX_QUEUED {
                 bail!(
                     "There are too many pending installs on this console. Install them from the \
@@ -301,7 +325,10 @@ pub fn start_bgdl(title: &str, url: &str, rif: Option<&[u8]>, bgdl_type: u32) ->
             "couldn't read ux0:bgdl/t ({code:#010x}); skipping the queue-depth check"
         )),
     }
-    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
     let license_path = format!("ux0:bgdl/temp_{nanos}.dat");
     let rif_str = if let Some(rif_data) = rif {
         let max = match bgdl_type {
@@ -310,8 +337,12 @@ pub fn start_bgdl(title: &str, url: &str, rif: Option<&[u8]>, bgdl_type: u32) ->
             _ => RIF_SIZE,
         };
         let rif_data = &rif_data[..rif_data.len().min(max)];
-        vita_save_file(&license_path, rif_data).context("Failed to write temporary license file")?;
-        log_bgdl(&format!("wrote {} license bytes to {license_path}", rif_data.len()));
+        vita_save_file(&license_path, rif_data)
+            .context("Failed to write temporary license file")?;
+        log_bgdl(&format!(
+            "wrote {} license bytes to {license_path}",
+            rif_data.len()
+        ));
         license_path
     } else {
         String::new()
@@ -370,7 +401,9 @@ pub fn start_bgdl(title: &str, url: &str, rif: Option<&[u8]>, bgdl_type: u32) ->
         (*addr_dc0).type_[0] = bgdl_type;
         (*addr_dc0).type_[1] = bgdl_type;
         let p_ptr_to_dc0_ptr = (*init).ptr_to_dc0_ptr;
-        log_bgdl(&format!("start_bgdl title='{title}', url='{url}', rif='{rif_str}'"));
+        log_bgdl(&format!(
+            "start_bgdl title='{title}', url='{url}', rif='{rif_str}'"
+        ));
         let res_change = sce_download_obj.change_state.unwrap()(
             (*sce_download_obj.class_header).func_table,
             0x12340012,
@@ -378,9 +411,13 @@ pub fn start_bgdl(title: &str, url: &str, rif: Option<&[u8]>, bgdl_type: u32) ->
             1,
             std::ptr::read(&*params),
         );
-        log_bgdl(&format!("change_state #1 res={res_change:#010x}, result={result:#010x}, bgdlid={bgdlid}"));
+        log_bgdl(&format!(
+            "change_state #1 res={res_change:#010x}, result={result:#010x}, bgdlid={bgdlid}"
+        ));
         if res_change < 0 || result < 0 || bgdlid < 0 {
-            let err_msg = format!("SceDownload change_state failed. res:{res_change:#010x} result:{result:#010x} bgdlid:{bgdlid}");
+            let err_msg = format!(
+                "SceDownload change_state failed. res:{res_change:#010x} result:{result:#010x} bgdlid:{bgdlid}"
+            );
             log_bgdl(&err_msg);
             bail!("{err_msg}");
         }
@@ -395,7 +432,9 @@ pub fn start_bgdl(title: &str, url: &str, rif: Option<&[u8]>, bgdl_type: u32) ->
             unk_7: 0x00000A0A,
         };
         let params2 = SceIpmiDownloadParam {
-            u: SceIpmiDownloadParamUnion { state: std::mem::ManuallyDrop::new(state_param) },
+            u: SceIpmiDownloadParamUnion {
+                state: std::mem::ManuallyDrop::new(state_param),
+            },
             addr_2e0: std::ptr::null_mut(),
             size2e0: 0,
             unk_4: 0,
@@ -412,9 +451,13 @@ pub fn start_bgdl(title: &str, url: &str, rif: Option<&[u8]>, bgdl_type: u32) ->
             0,
             params2,
         );
-        log_bgdl(&format!("change_state #2 res={res_change2:#010x}, result={result:#010x}"));
+        log_bgdl(&format!(
+            "change_state #2 res={res_change2:#010x}, result={result:#010x}"
+        ));
         if res_change2 < 0 || result < 0 {
-            let err_msg = format!("SceDownload second change_state failed. res:{res_change2:#010x} result:{result:#010x}");
+            let err_msg = format!(
+                "SceDownload second change_state failed. res:{res_change2:#010x} result:{result:#010x}"
+            );
             log_bgdl(&err_msg);
             bail!("{err_msg}");
         }
@@ -434,7 +477,11 @@ fn log_probe(msg: &str) {
 }
 fn log_tagged(tag: &str, msg: &str) {
     let _ = std::fs::create_dir_all("ux0:data/vitaforge");
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("ux0:data/vitaforge/vitaforge.log") {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("ux0:data/vitaforge/vitaforge.log")
+    {
         use std::io::Write;
         let _ = writeln!(f, "{tag} {msg}");
     }
@@ -444,7 +491,6 @@ fn vita_save_file(path: &str, data: &[u8]) -> Result<()> {
     if let Some(parent) = std::path::Path::new(path).parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    std::fs::write(path, data)
-        .with_context(|| format!("failed to write '{path}'"))?;
+    std::fs::write(path, data).with_context(|| format!("failed to write '{path}'"))?;
     Ok(())
 }

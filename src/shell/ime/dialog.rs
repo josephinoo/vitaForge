@@ -56,7 +56,11 @@ pub fn open(
     let max_len = purpose_max_len(purpose);
     state.title = to_utf16_null_terminated(purpose_title(purpose));
     state.buffer = vec![0u16; max_len + 1];
-    for (slot, ch) in state.buffer.iter_mut().zip(initial.encode_utf16().take(max_len)) {
+    for (slot, ch) in state
+        .buffer
+        .iter_mut()
+        .zip(initial.encode_utf16().take(max_len))
+    {
         *slot = ch;
     }
     if let Some(last) = state.buffer.last_mut() {
@@ -80,8 +84,7 @@ pub fn open(
         param.initialText = state.buffer.as_mut_ptr();
         param.inputTextBuffer = state.buffer.as_mut_ptr();
         param.type_ = SCE_IME_TYPE_BASIC_LATIN as u32;
-        param.supportedLanguages =
-            u64::from(SCE_IME_LANGUAGE_ENGLISH | SCE_IME_LANGUAGE_SPANISH);
+        param.supportedLanguages = u64::from(SCE_IME_LANGUAGE_ENGLISH | SCE_IME_LANGUAGE_SPANISH);
         param.languagesForced = 0;
         param.dialogMode = SCE_IME_DIALOG_DIALOG_MODE_WITH_CANCEL;
         param.textBoxMode = SCE_IME_DIALOG_TEXTBOX_MODE_WITH_CLEAR;
@@ -114,7 +117,9 @@ pub fn poll() -> Option<ImeResult> {
                 let _ = sceImeDialogTerm();
                 state.active = false;
                 if res >= 0 && result.button as u32 == SCE_IME_DIALOG_BUTTON_ENTER as u32 {
-                    Some(ImeResult::Confirmed(from_utf16_null_terminated(&state.buffer)))
+                    Some(ImeResult::Confirmed(from_utf16_null_terminated(
+                        &state.buffer,
+                    )))
                 } else {
                     Some(ImeResult::Canceled)
                 }

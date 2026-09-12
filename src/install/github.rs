@@ -61,7 +61,9 @@ pub async fn latest_release(repo_url: &str) -> Option<LatestRelease> {
         .ok()?;
     if !response.status().is_success() {
         if response.status() == reqwest::StatusCode::NOT_FOUND {
-            eprintln!("github release not found (404) for {owner}/{repo}: repo has no releases yet or is private");
+            eprintln!(
+                "github release not found (404) for {owner}/{repo}: repo has no releases yet or is private"
+            );
         } else {
             eprintln!("github api returned status {} for {api}", response.status());
         }
@@ -75,7 +77,10 @@ pub async fn latest_release(repo_url: &str) -> Option<LatestRelease> {
         .assets
         .into_iter()
         .find(|asset| asset.name.to_lowercase().ends_with(".vpk"))?;
-    Some(LatestRelease { vpk_url: asset.browser_download_url, tag: release.tag_name })
+    Some(LatestRelease {
+        vpk_url: asset.browser_download_url,
+        tag: release.tag_name,
+    })
 }
 
 #[cfg(test)]

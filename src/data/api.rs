@@ -1,5 +1,5 @@
 use super::client_id;
-use super::{AppEntry, Category, Platform};
+use super::{AppEntry, Category, Platform, SourceCatalog};
 use serde::{Deserialize, Deserializer};
 const DEFAULT_API_URL: &str = "https://vitaforge.josephinoo.dev/api/v1";
 pub fn api_url() -> &'static str {
@@ -56,6 +56,18 @@ fn force_format(url: &str) -> String {
     let value_end = url[value_start..].find('&').map_or(url.len(), |i| value_start + i);
     format!("{}{wanted}{}", &url[..value_start], &url[value_end..])
 }
+fn force_min_size(url: &str, wanted: &str) -> String {
+    let Some(start) = url.find("size=") else {
+        let separator = if url.contains('?') { '&' } else { '?' };
+        return format!("{url}{separator}size={wanted}");
+    };
+    let value_start = start + "size=".len();
+    let value_end = url[value_start..].find('&').map_or(url.len(), |i| value_start + i);
+    if &url[value_start..value_end] == "large" {
+        return url.to_owned();
+    }
+    format!("{}{wanted}{}", &url[..value_start], &url[value_end..])
+}
 #[derive(Debug, Deserialize)]
 struct RawApp {
     id: i64,
@@ -87,8 +99,6 @@ struct RawApp {
     #[serde(rename = "type", default)]
     kind: String,
     #[serde(default)]
-    icon_hash: Option<String>,
-    #[serde(default)]
     hash: Option<String>,
     #[serde(default)]
     hash2: Option<String>,
@@ -116,6 +126,12 @@ struct RawApp {
     data_extract_path: Option<String>,
     #[serde(default)]
     data_size: Option<String>,
+    #[serde(default)]
+    plugin_install_path: Option<String>,
+    #[serde(default)]
+    plugin_config_section: Option<String>,
+    #[serde(default)]
+    plugin_config_line: Option<String>,
     #[serde(default)]
     source_catalog: Option<String>,
     #[serde(default)]
@@ -216,12 +232,8 @@ impl RawApp {
             .and_then(|s| s.parse::<u64>().ok())
             .unwrap_or(0);
         let updated_at = self.release_date.unwrap_or_default();
-        let has_valid_icon = self.icon_hash.as_ref().is_some_and(|h| h != "default");
-        let icon_url = if has_valid_icon {
-            self.icon_url.map(|u| absolute(&u))
-        } else {
-            None
-        };
+        let is_pkgj = SourceCatalog::Nps.matches(&source_catalog);
+        let icon_url = self.icon_url.and_then(non_empty).map(|u| absolute(&u));
         let cover_url = self
             .cover_url
             .as_ref()
@@ -236,6 +248,14 @@ impl RawApp {
                     )))
                 }
             });
+        let (icon_url, cover_url) = if is_pkgj {
+            (
+                icon_url.map(|u| force_min_size(&u, "medium")),
+                cover_url.map(|u| force_min_size(&u, "medium")),
+            )
+        } else {
+            (icon_url, cover_url)
+        };
         let mut entry = AppEntry {
             id: self.id.to_string(),
             titleid,
@@ -281,6 +301,9 @@ impl RawApp {
                 .as_deref()
                 .and_then(|s| s.parse::<u64>().ok())
                 .unwrap_or(0),
+            plugin_install_path: self.plugin_install_path.and_then(non_empty),
+            plugin_config_section: self.plugin_config_section.and_then(non_empty),
+            plugin_config_line: self.plugin_config_line.and_then(non_empty),
             size_bytes,
             downloads: self.install_count,
             rating: self.average_rating,
@@ -343,16 +366,19 @@ fn save_cached_catalog_blocking(entries: &[AppEntry], version_info: CatalogVersi
     if let Some(parent) = std::path::Path::new(cache_path).parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    if let Ok(cache_bytes) = serde_json::to_vec(entries) {
-        if std::fs::write(cache_path, cache_bytes).is_err() {
-            return;
-        }
-    } else {
+    let Ok(cache_file) = std::fs::File::create(cache_path) else {
+        return;
+    };
+    let mut cache_file = std::io::BufWriter::with_capacity(64 * 1024, cache_file);
+    if serde_json::to_writer(&mut cache_file, entries).is_err()
+        || std::io::Write::flush(&mut cache_file).is_err()
+    {
         return;
     }
-    if let Ok(version_bytes) = serde_json::to_vec(&version_info) {
-        let _ = std::fs::write(version_path, version_bytes);
-    }
+    let Ok(version_file) = std::fs::File::create(version_path) else { return };
+    let mut version_file = std::io::BufWriter::with_capacity(4 * 1024, version_file);
+    let _ = serde_json::to_writer(&mut version_file, &version_info);
+    let _ = std::io::Write::flush(&mut version_file);
 }
 fn drop_unavailable_platforms(mut entries: Vec<AppEntry>) -> Vec<AppEntry> {
     entries.retain(|entry| !matches!(entry.platform, Platform::NpsPsp | Platform::NpsPsx));
@@ -619,6 +645,63 @@ mod tests {
     }
 
     #[test]
+    fn pkgj_images_get_upgraded_from_thumb_to_medium() {
+        assert_eq!(
+            force_min_size("https://h/api/v1/images/icon/abc.png?size=thumb&format=png", "medium"),
+            "https://h/api/v1/images/icon/abc.png?size=medium&format=png"
+        );
+        assert_eq!(
+            force_min_size("https://h/api/v1/images/icon/abc.png", "medium"),
+            "https://h/api/v1/images/icon/abc.png?size=medium"
+        );
+        assert_eq!(
+            force_min_size("https://h/api/v1/images/icon/abc.png?size=large", "medium"),
+            "https://h/api/v1/images/icon/abc.png?size=large"
+        );
+    }
+
+    #[test]
+    fn pkgj_entries_get_their_icon_and_cover_upgraded_to_medium() {
+        let raw: RawApp = serde_json::from_str(
+            r#"{"id":1,"title_id":"PCSE00001","name":"n","download_url":"http://x",
+                "source_catalog":"nps","icon_hash":"abc",
+                "icon_url":"/api/v1/images/icon/PCSE00001.png?size=thumb",
+                "cover_url":"/api/v1/images/cover/PCSE00001.png?size=thumb"}"#,
+        )
+        .expect("parses");
+        let entry = raw.into_app_entry().expect("has a download url");
+        assert!(entry.icon_url.unwrap().contains("size=medium"));
+        assert!(entry.cover_url.unwrap().contains("size=medium"));
+    }
+
+    #[test]
+    fn non_pkgj_entries_keep_the_size_the_server_sent() {
+        let raw: RawApp = serde_json::from_str(
+            r#"{"id":1,"title_id":"X","name":"n","download_url":"http://x",
+                "source_catalog":"vitadb","icon_hash":"abc",
+                "icon_url":"/api/v1/images/icon/X.png?size=thumb"}"#,
+        )
+        .expect("parses");
+        let entry = raw.into_app_entry().expect("has a download url");
+        assert!(entry.icon_url.unwrap().contains("size=thumb"));
+    }
+
+    #[test]
+    fn keeps_an_enrichment_icon_when_the_source_has_no_icon_hash() {
+        let raw: RawApp = serde_json::from_str(
+            r#"{"id":1,"title_id":"X","name":"n","download_url":"http://x",
+                "source_catalog":"vitadb",
+                "icon_url":"https://raw.githubusercontent.com/example/icon.png"}"#,
+        )
+        .expect("parses");
+        let entry = raw.into_app_entry().expect("has a download url");
+        assert_eq!(
+            entry.icon_url.as_deref(),
+            Some("https://raw.githubusercontent.com/example/icon.png")
+        );
+    }
+
+    #[test]
     fn the_catalogs_executable_digests_reach_the_entry() {
         let raw: RawApp = serde_json::from_str(
             r#"{"id":1,"title_id":"MGBA00001","name":"mGBA","download_url":"http://x",
@@ -693,6 +776,9 @@ mod tests {
             data_url: None,
             data_extract_path: None,
             data_size_bytes: 0,
+            plugin_install_path: None,
+            plugin_config_section: None,
+            plugin_config_line: None,
             size_bytes: 0,
             downloads: 0,
             rating: 0.0,
