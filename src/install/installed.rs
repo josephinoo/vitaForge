@@ -12,7 +12,7 @@ const META_ROOTS: &[&str] = &["ux0:appmeta", "ur0:appmeta"];
 const WORK_DIR: &str = "ux0:data/vitaforge";
 const HASH_CACHE_DIR: &str = "ux0:data/vitaforge/hashes";
 const SCAN_LOG: &str = "ux0:data/vitaforge/scan.log";
-const HASH_LEN: usize = 32;
+pub(super) const HASH_LEN: usize = 32;
 const RESCAN_INTERVAL: Duration = Duration::from_secs(60);
 const INSTALLED_CACHE_FILE: &str = "ux0:data/vitaforge/installed_cache.json";
 const HASH_CHUNK: usize = 64 * 1024;
@@ -311,6 +311,17 @@ impl InstalledIndex {
         };
         save_installed_cache(&snapshot);
     }
+    pub fn mark_removed(&self, key: &str) {
+        if key.is_empty() {
+            return;
+        }
+        let mut states = self.states.lock().unwrap();
+        states.remove(key);
+        *self.counts.lock().unwrap() = count_states(&states);
+        save_installed_cache(&states);
+        self.version_cache.lock().unwrap().remove(key);
+        clear_pending_install(key);
+    }
     pub fn mark_installed(&self, key: &str) {
         if key.is_empty() {
             return;
@@ -356,6 +367,18 @@ pub fn stamp_pending_install(titleid: &str, hash: &str, version: &str, extract_d
     {
         let _ = std::fs::write(extract_dir.join("hash.vdb"), &lower_hash);
     }
+}
+
+/// Record the running VitaForge build so update scans compare semver (0.1.4),
+/// not the Vita display APP_VER in param.sfo (01.04).
+pub fn stamp_running_self() {
+    const TITLE: &str = "VITAFORGE";
+    let version = env!("CARGO_PKG_VERSION").trim();
+    if version.is_empty() {
+        return;
+    }
+    let _ = std::fs::create_dir_all(HASH_CACHE_DIR);
+    let _ = std::fs::write(version_file_path(TITLE), version);
 }
 pub fn clear_pending_install(titleid: &str) {
     if !titleid.is_empty() {
@@ -866,7 +889,7 @@ fn read_hash_file(path: &Path) -> Option<String> {
     }
     None
 }
-fn md5_file(path: &Path) -> Option<String> {
+pub(super) fn md5_file(path: &Path) -> Option<String> {
     let mut file = std::fs::File::open(path).ok()?;
     let mut hasher = Md5::new();
     let mut buffer = vec![0u8; HASH_CHUNK];

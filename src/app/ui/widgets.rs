@@ -126,7 +126,7 @@ pub(crate) fn search_chip_sized(ui: &mut egui::Ui, label: &str, fill_width: Opti
     let icon = chrome_icons::SEARCH_ICON;
     let natural = galley.size().x + 16.0 + icon + 10.0;
     let width = fill_width.unwrap_or(natural).max(natural);
-    let size = egui::vec2(width, 26.0);
+    let size = egui::vec2(width, 30.0);
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
     let fill = if response.hovered() {
         BG_CARD_HOVER
@@ -238,73 +238,6 @@ pub(crate) fn search_field(
         open_requested: response.clicked() && !cleared,
         cleared,
     }
-}
-
-pub(crate) fn source_dropdown(
-    ui: &mut egui::Ui,
-    lang: Language,
-    total_apps: usize,
-    source_counts: &[(crate::data::SourceCatalog, usize)],
-    source_filter: Option<crate::data::SourceCatalog>,
-) -> Option<Option<crate::data::SourceCatalog>> {
-    let popup_id = ui.make_persistent_id("source_dropdown");
-    let label = source_filter.map_or(lang.all_catalogs(), crate::data::SourceCatalog::label);
-    let galley = ui.fonts(|f| f.layout_no_wrap(label.to_owned(), font(FONT_SMALL), ACCENT_CYAN));
-    let size = egui::vec2((galley.size().x + 34.0).max(72.0), 26.0);
-    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
-    let hover_t = if response.hovered() { 1.0_f32 } else { 0.0_f32 };
-    let open = ui.memory(|mem| mem.is_popup_open(popup_id));
-    let border = if open || source_filter.is_some() {
-        ACCENT_CYAN
-    } else {
-        SEPARATOR
-    };
-    ui.painter().rect_filled(
-        rect,
-        rect.height() / 2.0,
-        BG_CARD.lerp_to_gamma(BG_CARD_HOVER, hover_t),
-    );
-    ui.painter().rect_stroke(
-        rect,
-        rect.height() / 2.0,
-        egui::Stroke::new(1.0_f32, border),
-        egui::StrokeKind::Inside,
-    );
-    ui.painter().galley(
-        egui::pos2(rect.left() + 12.0, rect.center().y - galley.size().y / 2.0),
-        galley,
-        ACCENT_CYAN,
-    );
-    chevron(
-        ui.painter(),
-        egui::pos2(rect.right() - 12.0, rect.center().y),
-        open,
-    );
-    if response.clicked() {
-        ui.memory_mut(|mem| mem.toggle_popup(popup_id));
-    }
-    let mut picked = None;
-    egui::popup_below_widget(
-        ui,
-        popup_id,
-        &response,
-        egui::PopupCloseBehavior::CloseOnClick,
-        |ui| {
-            ui.set_min_width(180.0);
-            ui.spacing_mut().item_spacing.y = 2.0;
-            let all_label = format!("{} ({total_apps})", lang.all_catalogs());
-            if dropdown_row(ui, &all_label, source_filter.is_none()) {
-                picked = Some(None);
-            }
-            for &(source, count) in source_counts {
-                let row_label = format!("{} ({count})", source.label());
-                if dropdown_row(ui, &row_label, source_filter == Some(source)) {
-                    picked = Some(Some(source));
-                }
-            }
-        },
-    );
-    picked
 }
 
 pub(crate) fn genre_dropdown(
@@ -512,9 +445,9 @@ pub(crate) fn top_nav_button(
     let color = if active { TEXT_WHITE } else { TEXT_DIM };
     let galley = ui.fonts(|f| f.layout_no_wrap(label.to_owned(), font(FONT_MICRO), color));
     let height = TAB_PILL_HEIGHT;
-    let icon_pad = chrome_icons::NAV_ICON + 3.0;
+    let icon_pad = chrome_icons::NAV_ICON + 7.0;
     let (rect, response) = ui.allocate_exact_size(
-        egui::vec2((galley.size().x + 10.0 + icon_pad).max(36.0), height),
+        egui::vec2((galley.size().x + 16.0 + icon_pad).max(42.0), height),
         egui::Sense::click(),
     );
     let radius = height / 2.0;
@@ -522,14 +455,14 @@ pub(crate) fn top_nav_button(
         .ctx()
         .animate_bool_with_time(ui.id().with(("nav", label)), active, 0.14);
     if active_t > 0.01 {
-        let fill = BLUE_PLAY.gamma_multiply(0.55 + 0.45 * active_t);
+        let fill = BLUE_PLAY.gamma_multiply(0.62 + 0.38 * active_t);
         ui.painter().rect_filled(rect, radius, fill);
     } else if response.hovered() {
         ui.painter().rect_filled(rect, radius, BG_CARD_HOVER);
     }
     let icon_rect = egui::Rect::from_center_size(
         egui::pos2(
-            rect.left() + 5.0 + chrome_icons::NAV_ICON * 0.5,
+            rect.left() + 8.0 + chrome_icons::NAV_ICON * 0.5,
             rect.center().y,
         ),
         egui::vec2(chrome_icons::NAV_ICON, chrome_icons::NAV_ICON),
@@ -537,7 +470,7 @@ pub(crate) fn top_nav_button(
     chrome_icons::paint(ui, icon, icon_rect, color);
     ui.painter().galley(
         egui::pos2(
-            rect.left() + 5.0 + icon_pad,
+            rect.left() + 8.0 + icon_pad,
             rect.center().y - galley.size().y / 2.0,
         ),
         galley,
@@ -624,40 +557,6 @@ pub(crate) fn chevron(painter: &egui::Painter, center: egui::Pos2, open: bool) {
     painter.line_segment([mid, right], stroke);
 }
 
-pub(crate) fn source_chip_colors(source: crate::data::SourceCatalog) -> (egui::Color32, egui::Color32) {
-    match source {
-        crate::data::SourceCatalog::VitaDb => (
-            egui::Color32::from_rgb(0x7d, 0xd3, 0xfc),
-            egui::Color32::from_rgba_unmultiplied(0x0e, 0xa5, 0xe9, 55),
-        ),
-        crate::data::SourceCatalog::VitaDbToo => (
-            egui::Color32::from_rgb(0xd8, 0xb4, 0xfe),
-            egui::Color32::from_rgba_unmultiplied(0xa8, 0x55, 0xf7, 55),
-        ),
-        crate::data::SourceCatalog::Nps => (
-            egui::Color32::from_rgb(0x6e, 0xe7, 0xb7),
-            egui::Color32::from_rgba_unmultiplied(0x10, 0xb9, 0x81, 55),
-        ),
-    }
-}
-
-pub(crate) fn source_chip(ui: &mut egui::Ui, source: crate::data::SourceCatalog) {
-    let (fg, bg) = source_chip_colors(source);
-    let galley =
-        ui.fonts(|f| f.layout_no_wrap(source.short_label().to_owned(), font(FONT_MICRO), fg));
-    let size = egui::vec2(galley.size().x + 10.0, 16.0);
-    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
-    ui.painter().rect_filled(rect, RADIUS_XS, bg);
-    ui.painter().rect_stroke(
-        rect,
-        RADIUS_XS,
-        egui::Stroke::new(1.0_f32, fg.gamma_multiply(0.55)),
-        egui::StrokeKind::Inside,
-    );
-    ui.painter()
-        .galley(rect.center() - galley.size() / 2.0, galley, fg);
-}
-
 pub(crate) fn install_marker(painter: &egui::Painter, rect: egui::Rect, state: InstallState) {
     let color = match state {
         InstallState::Absent => return,
@@ -731,6 +630,24 @@ pub(crate) fn category_badge(ui: &mut egui::Ui, category: Category) {
         .rect_filled(rect, RADIUS_XS, color.gamma_multiply(0.3));
     ui.painter()
         .galley(rect.center() - galley.size() / 2.0, galley, TEXT_WHITE);
+}
+
+pub(crate) fn game_data_badge(ui: &mut egui::Ui, label: &str) {
+    let galley = ui.fonts(|f| {
+        f.layout_no_wrap(label.to_owned(), font(FONT_MICRO), STAR_GOLD)
+    });
+    let size = egui::vec2(galley.size().x + 12.0, 14.0);
+    let rect = ui.allocate_exact_size(size, egui::Sense::hover()).0;
+    ui.painter()
+        .rect_filled(rect, RADIUS_XS, STAR_GOLD.gamma_multiply(0.22));
+    ui.painter().rect_stroke(
+        rect,
+        RADIUS_XS,
+        egui::Stroke::new(1.0_f32, STAR_GOLD.gamma_multiply(0.55)),
+        egui::StrokeKind::Inside,
+    );
+    ui.painter()
+        .galley(rect.center() - galley.size() / 2.0, galley, STAR_GOLD);
 }
 
 pub(crate) fn genre_badge(ui: &mut egui::Ui, lang: Language, genre: &str) {
@@ -831,22 +748,12 @@ pub(crate) fn region_badge(ui: &mut egui::Ui, region: &str) {
         .galley(rect.center() - galley.size() / 2.0, galley, TEXT_WHITE);
 }
 
-pub(crate) fn source_badge(ui: &mut egui::Ui, label: &str) {
-    let galley = ui.fonts(|f| f.layout_no_wrap(label.to_uppercase(), font(FONT_MICRO), TEXT_WHITE));
-    let size = egui::vec2(galley.size().x + 10.0, 14.0);
-    let rect = ui.allocate_exact_size(size, egui::Sense::hover()).0;
-    ui.painter().rect_filled(rect, RADIUS_XS, BG_CARD_HOVER);
-    ui.painter().rect_stroke(
-        rect,
-        RADIUS_XS,
-        egui::Stroke::new(1.0_f32, ACCENT_CYAN),
-        egui::StrokeKind::Inside,
-    );
-    ui.painter()
-        .galley(rect.center() - galley.size() / 2.0, galley, TEXT_WHITE);
-}
-
-pub(crate) fn warning_glyph(painter: &egui::Painter, center: egui::Pos2, radius: f32, color: egui::Color32) {
+pub(crate) fn warning_glyph(
+    painter: &egui::Painter,
+    center: egui::Pos2,
+    radius: f32,
+    color: egui::Color32,
+) {
     let stroke = egui::Stroke::new(1.4_f32, color);
     let top = center + egui::vec2(0.0, -radius);
     let left = center + egui::vec2(-radius * 0.95, radius * 0.75);

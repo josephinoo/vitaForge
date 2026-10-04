@@ -1,5 +1,5 @@
 use super::client_id;
-use super::{AppEntry, Category, Platform, SourceCatalog};
+use super::{AppEntry, Category, Platform};
 use serde::{Deserialize, Deserializer};
 const DEFAULT_API_URL: &str = "https://vitaforge.josephinoo.dev/api/v1";
 pub fn api_url() -> &'static str {
@@ -224,7 +224,11 @@ impl RawApp {
         let requirements = self.requirements.unwrap_or_default();
         let changelog = self.changelog.unwrap_or_default();
         let version = self.version.unwrap_or_else(|| "1.0".to_owned());
-        let source_catalog = self.source_catalog.unwrap_or_else(|| "vitadb".to_owned());
+        // Single VitaForge catalog — no per-feed source tags from the API.
+        let source_catalog = self
+            .source_catalog
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| "vitaforge".to_owned());
         let release_page = self.release_page.and_then(non_empty);
         let source = self.source.and_then(non_empty);
         let size_bytes = self.size
@@ -232,7 +236,9 @@ impl RawApp {
             .and_then(|s| s.parse::<u64>().ok())
             .unwrap_or(0);
         let updated_at = self.release_date.unwrap_or_default();
-        let is_pkgj = SourceCatalog::Nps.matches(&source_catalog);
+        let is_pkgj = platform.is_commercial()
+            || self.region.as_ref().is_some_and(|r| !r.trim().is_empty())
+            || self.zrif.as_ref().is_some_and(|z| !z.trim().is_empty());
         let icon_url = self.icon_url.and_then(non_empty).map(|u| absolute(&u));
         let cover_url = self
             .cover_url
@@ -291,7 +297,7 @@ impl RawApp {
             region: self.region,
             zrif: self.zrif.and_then(non_empty),
             source_catalog,
-            source_labels: self.source_labels,
+            source_labels: Vec::new(),
             hash: self.hash.and_then(non_empty).unwrap_or_default(),
             hash2: self.hash2.and_then(non_empty).unwrap_or_default(),
             data_url: self.data_url.and_then(non_empty),
@@ -386,22 +392,9 @@ fn drop_unavailable_platforms(mut entries: Vec<AppEntry>) -> Vec<AppEntry> {
     entries
 }
 
-fn catalog_has_vitadb_official(entries: &[AppEntry]) -> bool {
-    use super::SourceCatalog;
-    entries
-        .iter()
-        .any(|entry| SourceCatalog::VitaDb.matches(&entry.source_catalog))
-}
-
-fn catalog_has_nps(entries: &[AppEntry]) -> bool {
-    use super::SourceCatalog;
-    entries
-        .iter()
-        .any(|entry| SourceCatalog::Nps.matches(&entry.source_catalog))
-}
-
 fn catalog_cache_complete(entries: &[AppEntry]) -> bool {
-    catalog_has_vitadb_official(entries) && catalog_has_nps(entries)
+    // One merged snapshot from /apps/snapshot — any non-empty cache is complete.
+    !entries.is_empty()
 }
 
 fn catalog_cache_has_genres(entries: &[AppEntry]) -> bool {
@@ -410,7 +403,7 @@ fn catalog_cache_has_genres(entries: &[AppEntry]) -> bool {
 
 async fn fetch_remote_version() -> anyhow::Result<CatalogVersionInfo> {
     let response = request(reqwest::Method::GET, "/apps/version")
-        .timeout(std::time::Duration::from_secs(3))
+        .timeout(std::time::Duration::from_secs(10))
         .send()
         .await?;
     if !response.status().is_success() {
@@ -664,12 +657,16 @@ mod tests {
     fn pkgj_entries_get_their_icon_and_cover_upgraded_to_medium() {
         let raw: RawApp = serde_json::from_str(
             r#"{"id":1,"title_id":"PCSE00001","name":"n","download_url":"http://x",
-                "source_catalog":"nps","icon_hash":"abc",
+                "type":"psv_game","region":"US","icon_hash":"abc",
                 "icon_url":"/api/v1/images/icon/PCSE00001.png?size=thumb",
                 "cover_url":"/api/v1/images/cover/PCSE00001.png?size=thumb"}"#,
         )
         .expect("parses");
         let entry = raw.into_app_entry().expect("has a download url");
+        assert_eq!(entry.category, crate::data::Category::PsVitaGame);
+        assert!(entry.platform.is_commercial());
+        assert_eq!(entry.source_catalog, "vitaforge");
+        assert!(entry.source_labels.is_empty());
         assert!(entry.icon_url.unwrap().contains("size=medium"));
         assert!(entry.cover_url.unwrap().contains("size=medium"));
     }
@@ -678,7 +675,7 @@ mod tests {
     fn non_pkgj_entries_keep_the_size_the_server_sent() {
         let raw: RawApp = serde_json::from_str(
             r#"{"id":1,"title_id":"X","name":"n","download_url":"http://x",
-                "source_catalog":"vitadb","icon_hash":"abc",
+                "icon_hash":"abc",
                 "icon_url":"/api/v1/images/icon/X.png?size=thumb"}"#,
         )
         .expect("parses");
@@ -690,7 +687,6 @@ mod tests {
     fn keeps_an_enrichment_icon_when_the_source_has_no_icon_hash() {
         let raw: RawApp = serde_json::from_str(
             r#"{"id":1,"title_id":"X","name":"n","download_url":"http://x",
-                "source_catalog":"vitadb",
                 "icon_url":"https://raw.githubusercontent.com/example/icon.png"}"#,
         )
         .expect("parses");

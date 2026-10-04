@@ -1,6 +1,6 @@
 [package]
 name = "vitaforge"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2024"
 license = "GPL-3.0-only"
 description = "Homebrew catalog browser for games/apps/ports on the PS Vita"
@@ -13,13 +13,18 @@ egui = "0.31"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 md-5 = "0.10"
-reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"], default-features = false }
+percent-encoding = "2"
+qrcodegen = "1.8"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = "1"
+reqwest = { version = "0.12", features = ["gzip", "json", "rustls-tls", "stream"], default-features = false }
 sdl2 = { version = "0.38", features = ["use-pkgconfig", "unsafe_textures"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
 sha1 = "0.10"
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "2", default-features = false, features = ["deflate-flate2", "flate2"] }
+flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
 fluent-bundle = "0.16.0"
 unic-langid = "0.9.6"
 # Console-only. Every use site is already behind `cfg(target_os = "vita")`;
@@ -28,7 +33,7 @@ unic-langid = "0.9.6"
 # and run with plain `cargo test` on a dev machine.
 [target.'cfg(target_os = "vita")'.dependencies]
 vita-newlib-shims = "0.3"
-vitasdk-sys = { version = "0.3", features = ["SceAppUtil_stub", "SceSysmem_stub", "SceSysmodule_stub", "ScePromoterUtil_stub", "SceKernelThreadMgr_stub", "SceIme_stub", "SceCommonDialog_stub", "SceLibKernel_stub", "SceIofilemgr_stub", "SceNotificationUtil_stub", "ScePower_stub", "SceGxm_stub", "SceDisplay_stub", "SceCtrl_stub", "SceTouch_stub", "SceAudio_stub", "SceProcessmgr_stub", "SceAppMgr_stub", "SceJpeg_stub", "SceJpegArm_stub", "SceShaccCg_stub", "SceKernelDmacMgr_stub"] }
+vitasdk-sys = { version = "0.3", features = ["SceAppUtil_stub", "SceSysmem_stub", "SceSysmodule_stub", "ScePromoterUtil_stub", "SceKernelThreadMgr_stub", "SceIme_stub", "SceCommonDialog_stub", "SceLibKernel_stub", "SceIofilemgr_stub", "SceNotificationUtil_stub", "ScePower_stub", "SceGxm_stub", "SceDisplay_stub", "SceCtrl_stub", "SceTouch_stub", "SceAudio_stub", "SceProcessmgr_stub", "SceAppMgr_stub", "SceJpeg_stub", "SceJpegArm_stub", "SceShaccCg_stub", "SceKernelDmacMgr_stub", "SceShellSvc_stub"] }
 [build-dependencies]
 cc = "1.0"
 [patch.crates-io]
@@ -39,6 +44,9 @@ title_id = "VITAFORGE"
 title_name = "VitaForge"
 assets = "static"
 vita_make_fself_flags = []
+# Vita/Vita3K read APP_VER from param.sfo (XX.YY). Keep in sync with package.version
+# 0.1.5 → 01.05 (minor.patch). Catalog update checks use stamped semver, not this field.
+vita_mksfoex_flags = ["-d", "ATTRIBUTE2=12", "-s", "APP_VER=01.05"]
 [profile.release]
 opt-level = "s"
 lto = "fat"

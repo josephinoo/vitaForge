@@ -47,6 +47,19 @@ fn boost_clocks() {
         vitasdk_sys::scePowerSetGpuXbarClockFrequency(166);
     }
 }
+/// Network, decoding and file work runs one step below the UI thread (the way
+/// VitaOS runs its image loader), so a burst of icon decodes cannot take the
+/// CPU from a frame that is about to be drawn.
+#[cfg(target_os = "vita")]
+fn lower_background_priority() {
+    const BELOW_UI: i32 = 0x1000_0110;
+    unsafe {
+        vitasdk_sys::sceKernelChangeThreadPriority(0, BELOW_UI);
+    }
+}
+#[cfg(not(target_os = "vita"))]
+fn lower_background_priority() {}
+
 fn main() -> anyhow::Result<()> {
     #[cfg(target_os = "vita")]
     install_panic_hook();
@@ -69,10 +82,11 @@ fn run() -> anyhow::Result<()> {
         env!("BUILD_STAMP"),
     ));
     let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(1)
+        .worker_threads(2)
         .enable_all()
-        .max_blocking_threads(2)
+        .max_blocking_threads(4)
         .thread_stack_size(256 * 1024)
+        .on_thread_start(lower_background_priority)
         .build()?;
     let _guard = runtime.enter();
     install::log_file("boot: creating app");

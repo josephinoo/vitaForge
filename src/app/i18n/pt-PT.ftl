@@ -76,3 +76,36 @@ status-installed = { $count } instaladas
 status-updates = { $count } updates
 library-empty = Ainda não há aplicações instaladas
 updates-empty = Está tudo atualizado
+about-app = Sobre esta app
+also-needs = Também precisa
+ready-to-play = Pronto para jogar
+needs-your-files = Faltam os teus ficheiros
+data-not-auto = Ficheiros de dados: não instalados automaticamente
+game-data-badge = DADOS DO JOGO
+needs-game-data = PRECISA DE DADOS EXTRA DO JOGO
+installed-reinstall = Instalado · reinstalar
+update-to = Atualizar para { $version }
+open-btn = ABRIR
+uninstall-btn = DESINSTALAR
+uninstall-body = Remove a app e a sua bolha LiveArea. Os saves e as pastas de dados são mantidos.
+report-btn = REPORTAR
+get-btn = OBTER
+uninstall-title = Desinstalar { $name }?
+no-space = Sem espaço - precisa de { $size }
+update-all = Atualizar tudo ({ $count })
+notify-uninstalled = { $name } desinstalada
+notify-uninstall-failed = Não foi possível desinstalar { $name }
+notify-open-failed = Não foi possível abrir { $name }
+notify-updates-done = { $count } app(s) atualizada(s)
+notify-updates-failed = { $count } atualização(ões) falhada(s)
+notify-updates-mixed = { $done } atualizadas, { $failed } falhadas
+notify-restart-manual = vitaForge atualizado. Fecha e abre de novo para usar a nova versão.
+data-heavy-title = Transferência pesada ({ $size })
+data-heavy-body = Pelo Wi-Fi da Vita pode demorar uma hora ou mais. Mais rápido pelo PC:
+    1. Lê o QR ou abre o link abaixo no PC.
+    2. Transfere os dados do jogo (.zip) dessa página.
+    3. Liga a Vita ao PC (VitaShell: USB ou FTP).
+    4. Extrai o zip para { $path } sem mudar as pastas.
+    5. Volta aqui e carrega em INSTALAR SÓ A APP.
+data-heavy-app-only = INSTALAR SÓ A APP
+data-heavy-download-here = TRANSFERIR NA VITA

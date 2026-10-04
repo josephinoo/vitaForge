@@ -4,6 +4,14 @@
 -include .env
 export SERVER_URL
 RUSTFLAGS ?= -C target-feature=-neon -A internal_features
+# vitaForge's renderer is validated against the stock VitaSDK libvitaGL. The SDK
+# copy is shared with other projects and may be rebuilt with other flags or from
+# upstream HEAD (that left Vita3K drawing nothing), so link a pinned copy when
+# one is present: cp <stock libvitaGL.a> vendor/vitagl-stock/
+VITAGL_STOCK := $(CURDIR)/vendor/vitagl-stock
+ifneq ($(wildcard $(VITAGL_STOCK)/libvitaGL.a),)
+RUSTFLAGS += -L native=$(VITAGL_STOCK)
+endif
 CARGO_VITA ?= cargo +nightly vita
 VPK := target/armv7-sony-vita-newlibeabihf/release/vitaforge.vpk
 VITA_UPLOAD_DIR ?= ux0:/data/

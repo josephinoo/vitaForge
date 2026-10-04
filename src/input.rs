@@ -95,7 +95,6 @@ pub enum AppCommand {
     SetFavoritesFilter(bool),
     CycleCategoryFilter,
     SetGenreFilter(Option<String>),
-    SetSourceFilter(Option<crate::data::SourceCatalog>),
     SetSortOrder(crate::data::SortOrder),
     FlipSortDirection,
     SelectApp { index: usize },
@@ -109,6 +108,7 @@ pub enum AppCommand {
     DismissInstall,
     CancelInstall,
     CancelDataPrompt,
+    InstallAppOnly,
     OpenSettings,
     CloseSettings,
     SetLanguage(crate::app::i18n::Language),
@@ -122,6 +122,16 @@ pub enum AppCommand {
     CloseCommentEntry,
     SubmitComment(String),
     SelfUpdate,
+    LaunchCurrent,
+    UninstallCurrent,
+    ConfirmUninstall,
+    CancelUninstall,
+    ReportError,
+    InstallDependency { id: String, dir: String, file: String },
+    UpdateAll,
+    ScreenshotStep(i32),
+    SecondaryAction,
+    TertiaryAction,
 }
 impl From<InputCommand> for AppCommand {
     fn from(cmd: InputCommand) -> Self {

@@ -40,6 +40,14 @@ mod sys {
 
             Some(ret >= 0 && res == 1)
         }
+        pub fn delete(&self, titleid: &str) -> Result<()> {
+            let id = CString::new(titleid)?;
+            let ret = unsafe { scePromoterUtilityDeletePkg(id.as_ptr()) };
+            if ret < 0 {
+                bail!("scePromoterUtilityDeletePkg failed (0x{ret:08x})");
+            }
+            Ok(())
+        }
         pub fn promote(&self, dir: &str, mut on_tick: impl FnMut(u32)) -> Result<()> {
             let path = CString::new(dir)?;
             let started_at = std::time::Instant::now();
@@ -104,6 +112,18 @@ pub fn promote_package(
     _tx: &tokio::sync::watch::Sender<super::Progress>,
 ) -> Result<()> {
     anyhow::bail!("package promotion is only available on PS Vita")
+}
+
+#[cfg(target_os = "vita")]
+pub fn delete_package(titleid: &str) -> Result<()> {
+    let _guard = PROMOTER
+        .lock()
+        .map_err(|_| anyhow::anyhow!("the promoter lock is poisoned"))?;
+    sys::Session::open()?.delete(titleid)
+}
+#[cfg(not(target_os = "vita"))]
+pub fn delete_package(_titleid: &str) -> Result<()> {
+    anyhow::bail!("uninstalling is only available on PS Vita")
 }
 
 #[cfg(target_os = "vita")]

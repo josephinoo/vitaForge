@@ -63,6 +63,7 @@ download-btn = DOWNLOAD
 requirements-label = Requirements
 changelog-label = What's new
 needs-game-data = NEEDS EXTRA GAME DATA
+game-data-badge = GAME DATA
 overview-label = Overview
 needs-nonpdrm = Requires NoNpDrm / fake license
 description-label = Description
@@ -141,3 +142,34 @@ updates-empty = Everything is up to date
 data-prompt-title = Extra game data needed
 data-prompt-body = This app needs an extra data download before it will run.
 data-prompt-accept = DOWNLOAD
+about-app = About this app
+also-needs = Also needs
+ready-to-play = Ready to play
+needs-your-files = Needs your files
+data-not-auto = Data files: not installed automatically
+installed-reinstall = Installed · reinstall
+update-to = Update to { $version }
+open-btn = OPEN
+uninstall-btn = UNINSTALL
+uninstall-body = Removes the app and its LiveArea bubble. Saves and data folders stay.
+report-btn = REPORT
+get-btn = GET
+uninstall-title = Uninstall { $name }?
+no-space = Not enough space - needs { $size }
+update-all = Update all ({ $count })
+notify-uninstalled = { $name } uninstalled
+notify-uninstall-failed = Couldn't uninstall { $name }
+notify-open-failed = Couldn't open { $name }
+notify-updates-done = { $count } app(s) updated
+notify-updates-failed = { $count } update(s) failed
+notify-updates-mixed = { $done } updated, { $failed } failed
+notify-restart-manual = vitaForge updated. Close and reopen it to use the new version.
+data-heavy-title = Heavy download ({ $size })
+data-heavy-body = Over the Vita's Wi-Fi this can take an hour or more. Faster from a PC:
+    1. Scan the QR or open the link below on your PC.
+    2. Download the game data (.zip) from that page.
+    3. Connect the Vita to the PC (VitaShell: USB or FTP).
+    4. Extract the zip into { $path } keeping its folders as they are.
+    5. Back here, press INSTALL APP ONLY.
+data-heavy-app-only = INSTALL APP ONLY
+data-heavy-download-here = DOWNLOAD ON VITA

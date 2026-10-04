@@ -76,3 +76,36 @@ status-installed = { $count } installées
 status-updates = { $count } MAJ
 library-empty = Aucune appli installée
 updates-empty = Tout est à jour
+about-app = À propos de cette appli
+also-needs = Nécessite aussi
+ready-to-play = Prêt à jouer
+needs-your-files = Vos fichiers manquent
+data-not-auto = Fichiers de données : non installés automatiquement
+game-data-badge = DONNÉES JEU
+needs-game-data = DONNÉES DE JEU REQUISES
+installed-reinstall = Installé · réinstaller
+update-to = Mettre à jour vers { $version }
+open-btn = OUVRIR
+uninstall-btn = DÉSINSTALLER
+uninstall-body = Supprime l'appli et sa bulle LiveArea. Les sauvegardes et dossiers de données sont conservés.
+report-btn = SIGNALER
+get-btn = OBTENIR
+uninstall-title = Désinstaller { $name } ?
+no-space = Espace insuffisant - il faut { $size }
+update-all = Tout mettre à jour ({ $count })
+notify-uninstalled = { $name } désinstallée
+notify-uninstall-failed = Impossible de désinstaller { $name }
+notify-open-failed = Impossible d'ouvrir { $name }
+notify-updates-done = { $count } appli(s) mise(s) à jour
+notify-updates-failed = { $count } mise(s) à jour échouée(s)
+notify-updates-mixed = { $done } mises à jour, { $failed } échecs
+notify-restart-manual = vitaForge est à jour. Fermez-le et rouvrez-le pour utiliser la nouvelle version.
+data-heavy-title = Téléchargement lourd ({ $size })
+data-heavy-body = Via le Wi-Fi de la Vita, cela peut prendre une heure ou plus. Plus rapide depuis un PC :
+    1. Scannez le QR ou ouvrez le lien ci-dessous sur votre PC.
+    2. Téléchargez les données du jeu (.zip) depuis cette page.
+    3. Connectez la Vita au PC (VitaShell : USB ou FTP).
+    4. Extrayez le zip dans { $path } sans changer ses dossiers.
+    5. Revenez ici et appuyez sur INSTALLER L'APP SEULE.
+data-heavy-app-only = INSTALLER L'APP SEULE
+data-heavy-download-here = TÉLÉCHARGER SUR LA VITA
