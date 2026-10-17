@@ -76,9 +76,7 @@ pub fn apply_sidebar_slot(slot: SidebarSlot, commands: &mut Vec<AppCommand>) {
 }
 
 pub(crate) fn catalog_sidebar(
-    ctx: &egui::Context,
-    left: f32,
-    top: f32,
+    ui: &mut egui::Ui,
     lang: Language,
     total: usize,
     category_counts: &[(Category, usize)],
@@ -91,98 +89,99 @@ pub(crate) fn catalog_sidebar(
     let slots = sidebar_slots(category_counts);
     let platform_end = 1 + category_counts.len();
 
-    egui::Area::new(egui::Id::new("catalog_sidebar"))
-        .order(egui::Order::Foreground)
-        .fixed_pos(egui::pos2(left, top))
-        .show(ctx, |ui| {
-            egui::Frame::NONE
-                .fill(BG_HEADER)
-                .inner_margin(egui::Margin::symmetric(4, 4))
-                .show(ui, |ui| {
-                    ui.set_width(SIDEBAR_WIDTH - 8.0);
-                    ui.spacing_mut().item_spacing.y = 0.0;
+    egui::Frame::NONE
+        .fill(BG_HEADER)
+        .corner_radius(RADIUS_MD)
+        .inner_margin(egui::Margin::symmetric(4, 4))
+        .show(ui, |ui| {
+            ui.set_width(SIDEBAR_WIDTH - 8.0);
+            ui.spacing_mut().item_spacing.y = 0.0;
 
-                    for (index, &slot) in slots.iter().enumerate() {
-                        if index == platform_end {
-                            ui.add_space(8.0);
-                            let sep = ui
-                                .allocate_exact_size(
-                                    egui::vec2(ui.available_width(), 1.0),
-                                    egui::Sense::hover(),
-                                )
-                                .0;
-                            ui.painter().hline(
-                                sep.x_range(),
-                                sep.center().y,
-                                egui::Stroke::new(1.0_f32, SEPARATOR),
-                            );
-                            ui.add_space(6.0);
-                        }
+            for (index, &slot) in slots.iter().enumerate() {
+                if index == platform_end {
+                    ui.add_space(8.0);
+                    let sep = ui
+                        .allocate_exact_size(
+                            egui::vec2(ui.available_width(), 1.0),
+                            egui::Sense::hover(),
+                        )
+                        .0;
+                    ui.painter().hline(
+                        sep.x_range(),
+                        sep.center().y,
+                        egui::Stroke::new(1.0_f32, SEPARATOR),
+                    );
+                    ui.add_space(6.0);
+                }
 
-                        let focused = focus_index == Some(index);
-                        let clicked = match slot {
-                            SidebarSlot::All => sidebar_row(
-                                ui,
-                                ChromeIcon::All,
-                                lang.category_label(None),
-                                total,
-                                selected.is_none() && !favorites_filter,
-                                focused,
+                let focused = focus_index == Some(index);
+                let clicked = match slot {
+                    SidebarSlot::All => sidebar_row(
+                        ui,
+                        ChromeIcon::All,
+                        lang.category_label(None),
+                        total,
+                        selected.is_none()
+                            && !favorites_filter
+                            && !matches!(
+                                sort_order,
+                                SortOrder::Rating | SortOrder::Downloads | SortOrder::Recent
                             ),
-                            SidebarSlot::Category(category) => {
-                                let count = category_counts
-                                    .iter()
-                                    .find(|(c, _)| *c == category)
-                                    .map(|(_, n)| *n)
-                                    .unwrap_or(0);
-                                sidebar_row(
-                                    ui,
-                                    ChromeIcon::for_category(category),
-                                    lang.sidebar_platform_label(category),
-                                    count,
-                                    selected == Some(category) && !favorites_filter,
-                                    focused,
-                                )
-                            }
-                            SidebarSlot::Featured => sidebar_action_row(
-                                ui,
-                                ChromeIcon::Featured,
-                                lang.sidebar_featured(),
-                                sort_order == SortOrder::Rating && !favorites_filter,
-                                focused,
-                            ),
-                            SidebarSlot::Downloads => sidebar_action_row(
-                                ui,
-                                ChromeIcon::Downloads,
-                                lang.sidebar_downloads(),
-                                sort_order == SortOrder::Downloads && !favorites_filter,
-                                focused,
-                            ),
-                            SidebarSlot::Recent => sidebar_action_row(
-                                ui,
-                                ChromeIcon::Recent,
-                                lang.sidebar_recent(),
-                                sort_order == SortOrder::Recent && !favorites_filter,
-                                focused,
-                            ),
-                            SidebarSlot::Favorites => sidebar_action_row(
-                                ui,
-                                ChromeIcon::Favorites,
-                                lang.sidebar_favorites(),
-                                favorites_filter,
-                                focused,
-                            ),
-                        };
-
-                        if clicked {
-                            apply_sidebar_slot(slot, commands);
-                        }
-
-                        if matches!(slot, SidebarSlot::All) {
-                            ui.add_space(2.0);
-                        }
+                        focused,
+                    ),
+                    SidebarSlot::Category(category) => {
+                        let count = category_counts
+                            .iter()
+                            .find(|(c, _)| *c == category)
+                            .map(|(_, n)| *n)
+                            .unwrap_or(0);
+                        sidebar_row(
+                            ui,
+                            ChromeIcon::for_category(category),
+                            lang.sidebar_platform_label(category),
+                            count,
+                            selected == Some(category) && !favorites_filter,
+                            focused,
+                        )
                     }
-                });
+                    SidebarSlot::Featured => sidebar_action_row(
+                        ui,
+                        ChromeIcon::Featured,
+                        lang.sidebar_featured(),
+                        sort_order == SortOrder::Rating && !favorites_filter,
+                        focused,
+                    ),
+                    SidebarSlot::Downloads => sidebar_action_row(
+                        ui,
+                        ChromeIcon::Downloads,
+                        lang.sidebar_downloads(),
+                        sort_order == SortOrder::Downloads && !favorites_filter,
+                        focused,
+                    ),
+                    SidebarSlot::Recent => sidebar_action_row(
+                        ui,
+                        ChromeIcon::Recent,
+                        lang.sidebar_recent(),
+                        sort_order == SortOrder::Recent && !favorites_filter,
+                        focused,
+                    ),
+                    SidebarSlot::Favorites => sidebar_action_row(
+                        ui,
+                        ChromeIcon::Favorites,
+                        lang.sidebar_favorites(),
+                        favorites_filter,
+                        focused,
+                    ),
+                };
+
+                if clicked {
+                    apply_sidebar_slot(slot, commands);
+                }
+
+                if matches!(slot, SidebarSlot::All) {
+                    ui.add_space(2.0);
+                }
+            }
         });
 }
 
@@ -204,9 +203,9 @@ fn sidebar_action_row(
     } else {
         egui::Color32::TRANSPARENT
     };
-    let active_t = ui
-        .ctx()
-        .animate_bool_with_time(ui.id().with(("side_action", label)), active, 0.12);
+    let active_t =
+        ui.ctx()
+            .animate_bool_with_time(ui.id().with(("side_action", label)), active, 0.12);
     if active_t > 0.01 {
         ui.painter().rect_filled(
             rect,

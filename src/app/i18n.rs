@@ -193,6 +193,9 @@ impl Language {
     pub fn needs_game_data(self) -> &'static str {
         self.strings(|s| s.needs_game_data)
     }
+    pub fn game_data_badge(self) -> &'static str {
+        self.strings(|s| s.game_data_badge)
+    }
     pub fn overview(self) -> &'static str {
         self.strings(|s| s.overview)
     }
@@ -306,6 +309,105 @@ impl Language {
         let mut args = FluentArgs::new();
         args.set("author", FluentValue::from(author));
         self.with_bundle(|bundle| format_message(bundle, "by-author", Some(&args)))
+    }
+    pub fn about_app(self) -> &'static str {
+        self.strings(|s| s.about_app)
+    }
+    pub fn also_needs(self) -> &'static str {
+        self.strings(|s| s.also_needs)
+    }
+    pub fn ready_to_play(self) -> &'static str {
+        self.strings(|s| s.ready_to_play)
+    }
+    pub fn needs_your_files(self) -> &'static str {
+        self.strings(|s| s.needs_your_files)
+    }
+    pub fn data_not_auto(self) -> &'static str {
+        self.strings(|s| s.data_not_auto)
+    }
+    pub fn installed_reinstall(self) -> &'static str {
+        self.strings(|s| s.installed_reinstall)
+    }
+    pub fn update_to(self, version: &str) -> String {
+        let mut args = FluentArgs::new();
+        args.set("version", FluentValue::from(version));
+        self.with_bundle(|bundle| format_message(bundle, "update-to", Some(&args)))
+    }
+    pub fn open_btn(self) -> &'static str {
+        self.strings(|s| s.open_btn)
+    }
+    pub fn uninstall_btn(self) -> &'static str {
+        self.strings(|s| s.uninstall_btn)
+    }
+    pub fn uninstall_body(self) -> &'static str {
+        self.strings(|s| s.uninstall_body)
+    }
+    pub fn report_btn(self) -> &'static str {
+        self.strings(|s| s.report_btn)
+    }
+    pub fn get_btn(self) -> &'static str {
+        self.strings(|s| s.get_btn)
+    }
+    pub fn uninstall_title(self, name: &str) -> String {
+        let mut args = FluentArgs::new();
+        args.set("name", FluentValue::from(name));
+        self.with_bundle(|bundle| format_message(bundle, "uninstall-title", Some(&args)))
+    }
+    pub fn data_heavy_body(self, path: &str) -> String {
+        let mut args = FluentArgs::new();
+        args.set("path", FluentValue::from(path));
+        self.with_bundle(|bundle| format_message(bundle, "data-heavy-body", Some(&args)))
+    }
+    pub fn data_heavy_title(self, size: &str) -> String {
+        let mut args = FluentArgs::new();
+        args.set("size", FluentValue::from(size));
+        self.with_bundle(|bundle| format_message(bundle, "data-heavy-title", Some(&args)))
+    }
+    pub fn data_heavy_app_only(self) -> String {
+        self.with_bundle(|bundle| format_message(bundle, "data-heavy-app-only", None))
+    }
+    pub fn data_heavy_download_here(self) -> String {
+        self.with_bundle(|bundle| format_message(bundle, "data-heavy-download-here", None))
+    }
+    pub fn no_space(self, size: &str) -> String {
+        let mut args = FluentArgs::new();
+        args.set("size", FluentValue::from(size));
+        self.with_bundle(|bundle| format_message(bundle, "no-space", Some(&args)))
+    }
+    pub fn update_all(self, count: usize) -> String {
+        let mut args = FluentArgs::new();
+        args.set("count", FluentValue::from(count as i64));
+        self.with_bundle(|bundle| format_message(bundle, "update-all", Some(&args)))
+    }
+    pub fn notify_uninstalled(self, name: &str) -> String {
+        let mut args = FluentArgs::new();
+        args.set("name", FluentValue::from(name));
+        self.with_bundle(|bundle| format_message(bundle, "notify-uninstalled", Some(&args)))
+    }
+    pub fn notify_uninstall_failed(self, name: &str) -> String {
+        let mut args = FluentArgs::new();
+        args.set("name", FluentValue::from(name));
+        self.with_bundle(|bundle| format_message(bundle, "notify-uninstall-failed", Some(&args)))
+    }
+    pub fn notify_open_failed(self, name: &str) -> String {
+        let mut args = FluentArgs::new();
+        args.set("name", FluentValue::from(name));
+        self.with_bundle(|bundle| format_message(bundle, "notify-open-failed", Some(&args)))
+    }
+    pub fn notify_updates_finished(self, done: usize, failed: usize) -> String {
+        let mut args = FluentArgs::new();
+        args.set("done", FluentValue::from(done as i64));
+        args.set("failed", FluentValue::from(failed as i64));
+        args.set("count", FluentValue::from(if failed == 0 { done } else { failed } as i64));
+        let key = match (done, failed) {
+            (_, 0) => "notify-updates-done",
+            (0, _) => "notify-updates-failed",
+            _ => "notify-updates-mixed",
+        };
+        self.with_bundle(|bundle| format_message(bundle, key, Some(&args)))
+    }
+    pub fn notify_restart_manual(self) -> &'static str {
+        self.strings(|s| s.notify_restart_manual)
     }
     pub fn btn_open(self) -> &'static str {
         self.strings(|s| s.btn_open)
@@ -496,11 +598,24 @@ struct LocalizedStrings {
     installed_version: &'static str,
     install_in_progress: &'static str,
     plugin_manual_note: &'static str,
+    notify_restart_manual: &'static str,
+    open_btn: &'static str,
+    uninstall_btn: &'static str,
+    uninstall_body: &'static str,
+    report_btn: &'static str,
+    get_btn: &'static str,
+    about_app: &'static str,
+    also_needs: &'static str,
+    ready_to_play: &'static str,
+    needs_your_files: &'static str,
+    data_not_auto: &'static str,
+    installed_reinstall: &'static str,
     release_page: &'static str,
     download: &'static str,
     requirements: &'static str,
     changelog: &'static str,
     needs_game_data: &'static str,
+    game_data_badge: &'static str,
     overview: &'static str,
     needs_nonpdrm: &'static str,
     description: &'static str,
@@ -613,11 +728,24 @@ impl LocalizedStrings {
             installed_version: r("installed-version-label"),
             install_in_progress: r("install-in-progress"),
             plugin_manual_note: r("plugin-manual-note"),
+            notify_restart_manual: r("notify-restart-manual"),
+            open_btn: r("open-btn"),
+            uninstall_btn: r("uninstall-btn"),
+            uninstall_body: r("uninstall-body"),
+            report_btn: r("report-btn"),
+            get_btn: r("get-btn"),
+            about_app: r("about-app"),
+            also_needs: r("also-needs"),
+            ready_to_play: r("ready-to-play"),
+            needs_your_files: r("needs-your-files"),
+            data_not_auto: r("data-not-auto"),
+            installed_reinstall: r("installed-reinstall"),
             release_page: r("release-page"),
             download: r("download-btn"),
             requirements: r("requirements-label"),
             changelog: r("changelog-label"),
             needs_game_data: r("needs-game-data"),
+            game_data_badge: r("game-data-badge"),
             overview: r("overview-label"),
             needs_nonpdrm: r("needs-nonpdrm"),
             description: r("description-label"),
@@ -729,5 +857,42 @@ mod tests {
     fn category_label_none_is_all() {
         assert_eq!(Language::English.category_label(None), "ALL");
         assert_eq!(Language::Spanish.category_label(None), "ALL");
+    }
+    #[test]
+    fn detail_and_notice_strings_resolve_in_every_language() {
+        for lang in Language::ALL {
+            for text in [
+                lang.about_app(),
+                lang.also_needs(),
+                lang.ready_to_play(),
+                lang.needs_your_files(),
+                lang.data_not_auto(),
+                lang.needs_game_data(),
+                lang.game_data_badge(),
+                lang.installed_reinstall(),
+                lang.open_btn(),
+                lang.uninstall_btn(),
+                lang.uninstall_body(),
+                lang.report_btn(),
+                lang.get_btn(),
+                lang.notify_restart_manual(),
+            ] {
+                assert!(!text.is_empty());
+            }
+            for text in [
+                lang.update_to("1.2"),
+                lang.uninstall_title("Game"),
+                lang.no_space("5 MB"),
+                lang.update_all(3),
+                lang.notify_uninstalled("Game"),
+                lang.notify_uninstall_failed("Game"),
+                lang.notify_open_failed("Game"),
+                lang.notify_updates_finished(2, 0),
+                lang.notify_updates_finished(0, 2),
+                lang.notify_updates_finished(2, 1),
+            ] {
+                assert!(!text.is_empty() && !text.contains('$'), "{text}");
+            }
+        }
     }
 }

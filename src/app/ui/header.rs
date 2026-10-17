@@ -2,7 +2,7 @@ use crate::app::i18n::Language;
 use crate::app::ui::chrome_icons::ChromeIcon;
 use crate::app::ui::theme::*;
 use crate::app::ui::widgets::{
-    search_chip_sized, search_field, self_update_pill, source_dropdown, top_nav_button,
+    search_chip_sized, search_field, self_update_pill, top_nav_button,
 };
 use crate::input::{AppCommand, ContentTypeGroup, StoreTab};
 
@@ -13,11 +13,9 @@ pub(crate) fn catalog_header(
     content_type_group: ContentTypeGroup,
     search_query: &str,
     search_active: bool,
-    source_counts: &[(crate::data::SourceCatalog, usize)],
-    total_unique_count: usize,
-    source_filter: Option<crate::data::SourceCatalog>,
     self_update: Option<&crate::app::SelfUpdateInfo>,
     self_update_progress: Option<&crate::install::Progress>,
+    update_all: &crate::app::ui::UpdateAllUi,
     commands: &mut Vec<AppCommand>,
 ) {
     let show_search_field = search_active || !search_query.trim().is_empty();
@@ -29,8 +27,12 @@ pub(crate) fn catalog_header(
 
             for group in ContentTypeGroup::ALL {
                 let active = tab == StoreTab::Categories && content_type_group == group;
-                if top_nav_button(ui, ChromeIcon::for_group(group), lang.group_label(group), active)
-                {
+                if top_nav_button(
+                    ui,
+                    ChromeIcon::for_group(group),
+                    lang.group_label(group),
+                    active,
+                ) {
                     commands.push(AppCommand::SetContentTypeGroup(group));
                 }
             }
@@ -54,6 +56,16 @@ pub(crate) fn catalog_header(
                 commands.push(AppCommand::SetStoreTab(StoreTab::Updates));
             }
 
+            if let crate::app::ui::UpdateAllUi::Running(label) = update_all {
+                ui.add_space(6.0);
+                ui.label(
+                    egui::RichText::new(format!("{} {label}", lang.update()))
+                        .size(FONT_SMALL)
+                        .strong()
+                        .color(STAR_GOLD),
+                );
+            }
+
             if let Some(progress) = self_update_progress {
                 ui.add_space(6.0);
                 ui.label(
@@ -70,26 +82,10 @@ pub(crate) fn catalog_header(
             }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if tab != StoreTab::Categories
-                    && let Some(picked) = source_dropdown(
-                        ui,
-                        lang,
-                        total_unique_count,
-                        source_counts,
-                        source_filter,
-                    )
-                {
-                    commands.push(AppCommand::SetSourceFilter(picked));
-                }
-
                 let fill = ui.available_width().clamp(110.0, 200.0);
                 if show_search_field {
-                    let field = search_field(
-                        ui,
-                        search_query,
-                        lang.search_placeholder(),
-                        search_active,
-                    );
+                    let field =
+                        search_field(ui, search_query, lang.search_placeholder(), search_active);
                     if field.cleared {
                         commands.push(AppCommand::SetSearchQuery(String::new()));
                     }

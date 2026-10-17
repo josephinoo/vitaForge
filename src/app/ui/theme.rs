@@ -1,29 +1,30 @@
 use crate::app::icons::IconCache;
 use crate::data::Category;
 
-pub const BG_DEEP: egui::Color32 = egui::Color32::from_rgb(0x07, 0x11, 0x1c);
-pub const BG_HEADER: egui::Color32 = egui::Color32::from_rgb(0x08, 0x14, 0x21);
-pub const BG_CARD: egui::Color32 = egui::Color32::from_rgb(0x10, 0x2a, 0x48);
-pub const BG_CARD_HOVER: egui::Color32 = egui::Color32::from_rgb(0x18, 0x3b, 0x62);
-pub const ACCENT_STEAM: egui::Color32 = egui::Color32::from_rgb(0x15, 0x97, 0xff);
-pub const ACCENT_CYAN: egui::Color32 = egui::Color32::from_rgb(0x1e, 0xb7, 0xff);
+pub const BG_DEEP: egui::Color32 = egui::Color32::from_rgb(0x05, 0x0a, 0x15);
+pub const BG_HEADER: egui::Color32 = egui::Color32::from_rgb(0x0a, 0x12, 0x24);
+pub const BG_CARD: egui::Color32 = egui::Color32::from_rgb(0x14, 0x20, 0x38);
+pub const BG_CARD_HOVER: egui::Color32 = egui::Color32::from_rgb(0x20, 0x31, 0x52);
+pub const ACCENT_STEAM: egui::Color32 = egui::Color32::from_rgb(0x38, 0x90, 0xff);
+pub const ACCENT_CYAN: egui::Color32 = egui::Color32::from_rgb(0x73, 0xc6, 0xff);
 pub const GREEN_PLAY: egui::Color32 = egui::Color32::from_rgb(0x30, 0xd1, 0x58);
 pub const GREEN_PLAY_HOVER: egui::Color32 = egui::Color32::from_rgb(0x4c, 0xdd, 0x70);
 pub const BLUE_PLAY: egui::Color32 = egui::Color32::from_rgb(0x00, 0x70, 0xff);
 pub const BLUE_PLAY_HOVER: egui::Color32 = egui::Color32::from_rgb(0x33, 0xa6, 0xff);
-pub const SEPARATOR: egui::Color32 = egui::Color32::from_rgb(0x2a, 0x4d, 0x70);
+pub const SEPARATOR: egui::Color32 = egui::Color32::from_rgb(0x35, 0x4a, 0x70);
 pub const TEXT_WHITE: egui::Color32 = egui::Color32::from_rgb(0xf4, 0xf7, 0xfb);
-pub const TEXT_DIM: egui::Color32 = egui::Color32::from_rgb(0xbb, 0xc7, 0xe2);
-pub const TEXT_FAINT: egui::Color32 = egui::Color32::from_rgb(0x6b, 0x85, 0xa6);
+pub const TEXT_DIM: egui::Color32 = egui::Color32::from_rgb(0xc6, 0xd3, 0xe8);
+pub const TEXT_FAINT: egui::Color32 = egui::Color32::from_rgb(0x82, 0x98, 0xbc);
 pub const STAR_GOLD: egui::Color32 = egui::Color32::from_rgb(0xff, 0xd6, 0x0a);
 pub const STAR_GOLD_HOVER: egui::Color32 = egui::Color32::from_rgb(0xff, 0xe0, 0x66);
 pub const SELECT_GLOW: egui::Color32 = egui::Color32::from_rgba_premultiplied(0x1e, 0xb7, 0xff, 55);
-pub const GLASS_ALPHA: f32 = 0.78;
-pub const GLASS_EDGE: egui::Color32 = egui::Color32::from_rgba_premultiplied(0x2c, 0x2c, 0x2e, 0x55);
-pub const FONT_MICRO: f32 = 11.0;
-pub const FONT_SMALL: f32 = 12.0;
-pub const FONT_BODY: f32 = 14.0;
-pub const FONT_LARGE: f32 = 15.0;
+pub const GLASS_ALPHA: f32 = 0.88;
+pub const GLASS_EDGE: egui::Color32 =
+    egui::Color32::from_rgba_premultiplied(0x2c, 0x2c, 0x2e, 0x55);
+pub const FONT_MICRO: f32 = 12.0;
+pub const FONT_SMALL: f32 = 13.0;
+pub const FONT_BODY: f32 = 15.0;
+pub const FONT_LARGE: f32 = 16.0;
 pub const FONT_TITLE: f32 = 18.0;
 pub const FONT_HEADLINE: f32 = 24.0;
 
@@ -35,31 +36,30 @@ pub fn glass(color: egui::Color32) -> egui::Color32 {
     color.gamma_multiply(GLASS_ALPHA)
 }
 
-pub const RADIUS_XS: f32 = 4.0;
-pub const RADIUS_SM: f32 = 6.0;
-pub const RADIUS_MD: f32 = 8.0;
-pub const RADIUS_LG: f32 = 10.0;
-pub const CARD_RADIUS: f32 = 8.0;
-pub const HINT_BAR_HEIGHT: f32 = 34.0;
+pub const RADIUS_XS: f32 = 5.0;
+pub const RADIUS_SM: f32 = 8.0;
+pub const RADIUS_MD: f32 = 10.0;
+pub const RADIUS_LG: f32 = 14.0;
+pub const CARD_RADIUS: f32 = 12.0;
+pub const HINT_BAR_HEIGHT: f32 = 38.0;
 pub const SEARCH_FIELD_WIDTH: f32 = 160.0;
 pub const SEARCH_FIELD_HEIGHT: f32 = 28.0;
 pub const SEARCH_CLEAR_SIZE: f32 = 18.0;
 pub const GRID_COLUMNS: usize = 5;
 pub const ART_LOOKAHEAD: usize = 6;
-pub const GRID_COL_SPACING: f32 = 8.0;
+pub const GRID_COL_SPACING: f32 = 12.0;
 pub const GRID_ROW_SPACING: f32 = 8.0;
-pub const GRID_BOTTOM_PAD: f32 = 6.0;
+pub const GRID_BOTTOM_PAD: f32 = 12.0;
 pub const TILE_LABEL_HEIGHT: f32 = 22.0;
-pub const TILE_LABEL_GAP: f32 = 3.0;
-pub const COVER_ASPECT: f32 = 0.92;
-pub const SCREEN_MARGIN: f32 = 8.0;
-pub const SIDEBAR_WIDTH: f32 = 128.0;
-pub const SIDEBAR_GAP: f32 = 6.0;
-pub const SIDEBAR_ROW_HEIGHT: f32 = 28.0;
-pub const HEADER_HEIGHT: f32 = 46.0;
-pub const TAB_PILL_HEIGHT: f32 = 25.0;
-pub const FOCUS_STROKE: f32 = 2.3;
-pub const FEATURED_BANNER_CARD_HEIGHT: f32 = 154.0;
+pub const TILE_LABEL_GAP: f32 = 4.0;
+pub const COVER_ASPECT: f32 = 1.0;
+pub const SCREEN_MARGIN: f32 = 14.0;
+pub const SIDEBAR_WIDTH: f32 = 146.0;
+pub const SIDEBAR_GAP: f32 = 14.0;
+pub const SIDEBAR_ROW_HEIGHT: f32 = 34.0;
+pub const HEADER_HEIGHT: f32 = 52.0;
+pub const TAB_PILL_HEIGHT: f32 = 34.0;
+pub const FOCUS_STROKE: f32 = 2.5;
 pub const SCROLLBAR_RESERVE: f32 = 6.0;
 pub const PRESS_SHRINK: f32 = 1.5;
 pub const SELECT_SCALE: f32 = 1.02;
@@ -120,8 +120,8 @@ pub fn paint_background(painter: &egui::Painter, rect: egui::Rect) {
         egui::pos2(rect.right(), rect.top() + rect.height() * 0.46),
     );
     let mut wash = egui::Mesh::default();
-    wash.colored_vertex(band.left_top(), egui::Color32::from_rgb(0x0d, 0x20, 0x30));
-    wash.colored_vertex(band.right_top(), egui::Color32::from_rgb(0x08, 0x16, 0x24));
+    wash.colored_vertex(band.left_top(), egui::Color32::from_rgb(0x13, 0x27, 0x4e));
+    wash.colored_vertex(band.right_top(), egui::Color32::from_rgb(0x0a, 0x16, 0x31));
     wash.colored_vertex(band.right_bottom(), BG_DEEP);
     wash.colored_vertex(band.left_bottom(), BG_DEEP);
     wash.add_triangle(0, 1, 2);
@@ -158,7 +158,8 @@ pub fn backdrop_url(entry: &crate::data::AppEntry) -> Option<&str> {
 }
 
 pub fn paint_hero(ui: &egui::Ui, icons: &IconCache, entry: &crate::data::AppEntry) -> bool {
-    let screen = ui.ctx().screen_rect();
+    // Detail content must never paint over the navigation or footer panels.
+    let screen = ui.clip_rect();
     paint_background(ui.painter(), screen);
     let Some(url) = backdrop_url(entry) else {
         return false;

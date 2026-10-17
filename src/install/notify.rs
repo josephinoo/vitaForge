@@ -30,12 +30,8 @@ pub fn install_finished(title: &str) {
 pub fn install_failed(title: &str, reason: &str) {
     send(&format!("{title} failed to install: {reason}"));
 }
-pub fn updates_available(count: usize) {
-    if count == 1 {
-        send("1 update available");
-    } else {
-        send(&format!("{count} updates available"));
-    }
+pub fn updates_finished(lang: crate::app::i18n::Language, done: usize, failed: usize) {
+    send(&lang.notify_updates_finished(done, failed));
 }
 pub fn self_update_available(tag: &str) {
     let tag = tag.trim_start_matches(['v', 'V']);

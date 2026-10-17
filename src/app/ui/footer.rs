@@ -133,7 +133,13 @@ fn status_note_widget(ui: &mut egui::Ui, lang: Language, note: StatusNote) -> Op
     let mut clicked = None;
     match note {
         StatusNote::RateLimited(message) => {
-            let _ = status_chip_inline(ui, "status_chip_rate_limited", &message, StatusIcon::Alert, STAR_GOLD);
+            let _ = status_chip_inline(
+                ui,
+                "status_chip_rate_limited",
+                &message,
+                StatusIcon::Alert,
+                STAR_GOLD,
+            );
         }
         StatusNote::Overview {
             installed,

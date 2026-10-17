@@ -76,3 +76,36 @@ status-installed = { $count } installate
 status-updates = { $count } agg.
 library-empty = Nessuna app installata
 updates-empty = Tutto è aggiornato
+about-app = Informazioni su questa app
+also-needs = Richiede anche
+ready-to-play = Pronto per giocare
+needs-your-files = Mancano i tuoi file
+data-not-auto = File di dati: non installati automaticamente
+game-data-badge = DATI DI GIOCO
+needs-game-data = RICHIEDE DATI DI GIOCO EXTRA
+installed-reinstall = Installato · reinstalla
+update-to = Aggiorna a { $version }
+open-btn = APRI
+uninstall-btn = DISINSTALLA
+uninstall-body = Rimuove l'app e la sua bolla LiveArea. Salvataggi e cartelle dati restano.
+report-btn = SEGNALA
+get-btn = OTTIENI
+uninstall-title = Disinstallare { $name }?
+no-space = Spazio insufficiente - servono { $size }
+update-all = Aggiorna tutto ({ $count })
+notify-uninstalled = { $name } disinstallata
+notify-uninstall-failed = Impossibile disinstallare { $name }
+notify-open-failed = Impossibile aprire { $name }
+notify-updates-done = { $count } app aggiornate
+notify-updates-failed = { $count } aggiornamenti non riusciti
+notify-updates-mixed = { $done } aggiornate, { $failed } non riuscite
+notify-restart-manual = vitaForge aggiornato. Chiudilo e riaprilo per usare la nuova versione.
+data-heavy-title = Download pesante ({ $size })
+data-heavy-body = Con il Wi-Fi della Vita può richiedere un'ora o più. Più veloce dal PC:
+    1. Scansiona il QR o apri il link qui sotto sul PC.
+    2. Scarica i dati del gioco (.zip) da quella pagina.
+    3. Collega la Vita al PC (VitaShell: USB o FTP).
+    4. Estrai lo zip in { $path } senza cambiare le cartelle.
+    5. Torna qui e premi INSTALLA SOLO L'APP.
+data-heavy-app-only = INSTALLA SOLO L'APP
+data-heavy-download-here = SCARICA SULLA VITA

@@ -1,9 +1,10 @@
+pub mod detail_actions;
 pub mod i18n;
 pub mod icons;
 pub mod sysinfo;
 pub mod text;
 pub mod ui;
-use crate::data::{self, AppEntry, Category, SortDirection, SortOrder, SourceCatalog};
+use crate::data::{self, AppEntry, Category, SortDirection, SortOrder};
 use crate::input::{AppCommand, ContentTypeGroup, InputCommand, StoreTab};
 use anyhow::Result;
 use i18n::Language;
@@ -43,7 +44,6 @@ pub struct CatalogState {
     pub content_type_group: ContentTypeGroup,
     pub favorites_filter: bool,
     pub genre_filter: Option<String>,
-    pub source_filter: Option<SourceCatalog>,
     pub sort_order: SortOrder,
     pub sort_direction: SortDirection,
     pub selected: usize,
@@ -52,7 +52,6 @@ pub struct CatalogState {
 
     pub scroll_reset: bool,
     pub is_commercial_view: bool,
-    pub source_counts: Vec<(SourceCatalog, usize)>,
     pub category_counts: Vec<(Category, usize)>,
     pub genre_counts: Vec<(String, usize)>,
     pub source_scoped_count: usize,
@@ -77,7 +76,6 @@ impl CatalogState {
             content_type_group: ContentTypeGroup::Home,
             favorites_filter: false,
             genre_filter: None,
-            source_filter: None,
             sort_order: settings.sort_order,
             sort_direction: settings.sort_direction,
             selected: 0,
@@ -85,7 +83,6 @@ impl CatalogState {
             scroll_to_selected: false,
             scroll_reset: false,
             is_commercial_view: false,
-            source_counts: Vec::new(),
             category_counts: Vec::new(),
             genre_counts: Vec::new(),
             source_scoped_count: 0,
@@ -116,7 +113,6 @@ impl CatalogState {
             content_type_group: ContentTypeGroup::Home,
             favorites_filter: false,
             genre_filter: None,
-            source_filter: None,
             sort_order: SortOrder::default(),
             sort_direction: SortDirection::default(),
             selected: 0,
@@ -124,7 +120,6 @@ impl CatalogState {
             scroll_to_selected: false,
             scroll_reset: false,
             is_commercial_view: false,
-            source_counts: Vec::new(),
             category_counts: Vec::new(),
             genre_counts: Vec::new(),
             source_scoped_count: 0,
@@ -186,10 +181,8 @@ impl CatalogState {
                 }
             })
             .collect();
-        if self.source_filter.is_none() {
-            self.filtered_indices =
-                collapse_homebrew_duplicates(&self.apps, std::mem::take(&mut self.filtered_indices));
-        }
+        self.filtered_indices =
+            collapse_homebrew_duplicates(&self.apps, std::mem::take(&mut self.filtered_indices));
         self.is_commercial_view = false;
         if self.filtered_indices.is_empty() {
             self.selected = 0;
@@ -197,14 +190,6 @@ impl CatalogState {
         } else {
             self.selected = 0;
             self.selection_active = true;
-        }
-    }
-    fn source_api_id(&self) -> Option<&'static str> {
-        match self.source_filter {
-            Some(SourceCatalog::VitaDb) => Some("vitadb"),
-            Some(SourceCatalog::VitaDbToo) => Some("vitadbtoo"),
-            Some(SourceCatalog::Nps) => Some("nps"),
-            None => None,
         }
     }
     fn sort_order_indices(&self) -> Vec<usize> {
@@ -299,7 +284,6 @@ impl CatalogState {
         let content_type_group = self.content_type_group;
         let favorites_filter = self.favorites_filter;
         let genre_filter = self.genre_filter.as_deref();
-        let source_filter = self.source_filter;
         self.filtered_indices = self
             .sorted_indices
             .iter()
@@ -312,12 +296,10 @@ impl CatalogState {
                 let matches_genre = genre_filter.is_none_or(|genre| {
                     app.genres.iter().any(|app_genre| app_genre.eq_ignore_ascii_case(genre))
                 });
-                let matches_source = source_filter.is_none_or(|s| s.matches(&app.source_catalog));
                 matches_group
                     && matches_cat
                     && matches_fav
                     && matches_genre
-                    && matches_source
                     && (query.is_empty()
                         || app.name_lower.contains(&query)
                         || app.author_lower.contains(&query)
@@ -325,10 +307,8 @@ impl CatalogState {
                         || app.genres.iter().any(|genre| genre.to_lowercase().contains(&query)))
             })
             .collect();
-        if source_filter.is_none() {
-            self.filtered_indices =
-                collapse_homebrew_duplicates(&self.apps, std::mem::take(&mut self.filtered_indices));
-        }
+        self.filtered_indices =
+            collapse_homebrew_duplicates(&self.apps, std::mem::take(&mut self.filtered_indices));
         if self.filtered_indices.is_empty() {
             self.selected = 0;
             self.selection_active = false;
@@ -337,23 +317,12 @@ impl CatalogState {
             self.selection_active = true;
             self.scroll_reset = true;
         }
-        self.is_commercial_view = self.source_filter == Some(SourceCatalog::Nps);
+        self.is_commercial_view = self.content_type_group == ContentTypeGroup::Games;
     }
     fn recompute_dropdown_counts(&mut self) {
-        let source_filter = self.source_filter;
         let unique_all = collapse_homebrew_duplicates(&self.apps, (0..self.apps.len()).collect());
-        let visible: Vec<usize> = match source_filter {
-            None => unique_all.clone(),
-            Some(source) => (0..self.apps.len())
-                .filter(|&index| source.matches(&self.apps[index].source_catalog))
-                .collect(),
-        };
+        let visible = unique_all.clone();
         let apps = &self.apps;
-        self.source_counts = SourceCatalog::ALL
-            .into_iter()
-            .map(|source| (source, apps.iter().filter(|app| source.matches(&app.source_catalog)).count()))
-            .filter(|&(_, count)| count > 0)
-            .collect();
         self.source_scoped_count = visible.len();
         self.total_unique_count = unique_all.len();
         self.category_counts = Category::ALL
@@ -365,12 +334,13 @@ impl CatalogState {
             .filter(|&(_, count)| count > 0)
             .collect();
         let mut genres = std::collections::BTreeMap::<String, usize>::new();
-        if source_filter == Some(SourceCatalog::Nps) {
-            for &index in &visible {
-                for genre in &apps[index].genres {
-                    if !genre.eq_ignore_ascii_case("other") {
-                        *genres.entry(genre.clone()).or_default() += 1;
-                    }
+        for &index in &visible {
+            if !apps[index].platform.is_commercial() {
+                continue;
+            }
+            for genre in &apps[index].genres {
+                if !genre.eq_ignore_ascii_case("other") {
+                    *genres.entry(genre.clone()).or_default() += 1;
                 }
             }
         }
@@ -380,33 +350,19 @@ impl CatalogState {
 
     fn recompute_group_counts(&mut self) {
         let apps = &self.apps;
-        let source_filter = self.source_filter;
         let group = self.content_type_group;
         self.group_category_counts = group
             .sidebar_categories()
             .iter()
             .map(|&category| {
-                let count = apps
-                    .iter()
-                    .filter(|app| {
-                        app.category == category
-                            && source_filter.is_none_or(|s| s.matches(&app.source_catalog))
-                    })
-                    .count();
+                let count = apps.iter().filter(|app| app.category == category).count();
                 (category, count)
             })
             .collect();
         let indices: Vec<usize> = (0..apps.len())
-            .filter(|&i| {
-                group.contains(apps[i].category)
-                    && source_filter.is_none_or(|s| s.matches(&apps[i].source_catalog))
-            })
+            .filter(|&i| group.contains(apps[i].category))
             .collect();
-        self.group_total = if source_filter.is_none() {
-            collapse_homebrew_duplicates(apps, indices).len()
-        } else {
-            indices.len()
-        };
+        self.group_total = collapse_homebrew_duplicates(apps, indices).len();
     }
 
     fn move_selection(&mut self, delta: isize) -> bool {
@@ -576,22 +532,8 @@ impl CatalogState {
 }
 
 
-fn homebrew_source_rank(source: SourceCatalog) -> u8 {
-    match source {
-        SourceCatalog::VitaDb => 0,
-        SourceCatalog::VitaDbToo => 1,
-        SourceCatalog::Nps => 255,
-    }
-}
-
 fn is_collapsible_homebrew(app: &AppEntry) -> bool {
-    if app.titleid_lower.is_empty() {
-        return false;
-    }
-    matches!(
-        SourceCatalog::from_api(&app.source_catalog),
-        Some(SourceCatalog::VitaDb | SourceCatalog::VitaDbToo)
-    )
+    !app.titleid_lower.is_empty() && !app.platform.is_commercial()
 }
 
 fn prefers_homebrew_candidate(apps: &[AppEntry], candidate: usize, incumbent: usize) -> bool {
@@ -602,15 +544,6 @@ fn prefers_homebrew_candidate(apps: &[AppEntry], candidate: usize, incumbent: us
     }
     if crate::install::installed::version_is_older(&a.version, &b.version) {
         return false;
-    }
-    let rank_a = SourceCatalog::from_api(&a.source_catalog)
-        .map(homebrew_source_rank)
-        .unwrap_or(100);
-    let rank_b = SourceCatalog::from_api(&b.source_catalog)
-        .map(homebrew_source_rank)
-        .unwrap_or(100);
-    if rank_a != rank_b {
-        return rank_a < rank_b;
     }
     let icon_a = a.icon_url.is_some();
     let icon_b = b.icon_url.is_some();
@@ -674,6 +607,7 @@ pub enum AppState {
         comment_entry_requested: bool,
         lightbox: Option<usize>,
         data_prompt: bool,
+        uninstall_prompt: bool,
     },
     Settings {
         previous: Box<CatalogState>,
@@ -713,9 +647,16 @@ pub struct App {
     pub cache_notice: Option<String>,
     icons_need_clear: bool,
     install_notifications: bool,
-    updates_notified: bool,
+    update_queue: std::collections::VecDeque<AppEntry>,
+    pub update_active: bool,
+    pub update_total: usize,
+    update_done: usize,
+    update_failed: usize,
+    uninstall_rx: Option<oneshot::Receiver<(String, String, Result<(), String>)>>,
+    pub report_notice: Option<String>,
+    updatable_cache: std::sync::Mutex<Option<((usize, usize, usize), usize)>>,
 }
-const LOAD_WATCHDOG: std::time::Duration = std::time::Duration::from_secs(25);
+const LOAD_WATCHDOG: std::time::Duration = std::time::Duration::from_secs(60);
 pub struct InstallJob {
     pub app_id: String,
     pub app_id_title: String,
@@ -733,6 +674,7 @@ impl App {
                 Ok(apps) if !apps.is_empty() => CatalogSource::Live(apps),
                 Ok(_) => CatalogSource::Failed,
                 Err(err) => {
+                    crate::install::log_file(&format!("live catalog fetch failed: {err:#}"));
                     eprintln!("live catalog fetch failed: {err:#}");
                     CatalogSource::Failed
                 }
@@ -754,6 +696,8 @@ impl App {
         });
 
         let settings = data::settings::load();
+        // So catalog outdated scans compare semver against this build, not missing SFO APP_VER.
+        crate::install::installed::stamp_running_self();
         Ok(Self {
             state: AppState::Loading,
             icons: IconCache::new(),
@@ -773,7 +717,14 @@ impl App {
             cache_notice: None,
             icons_need_clear: false,
             install_notifications: settings.install_notifications,
-            updates_notified: false,
+            update_queue: std::collections::VecDeque::new(),
+            update_active: false,
+            update_total: 0,
+            update_done: 0,
+            update_failed: 0,
+            uninstall_rx: None,
+            report_notice: None,
+            updatable_cache: std::sync::Mutex::new(None),
         })
     }
     fn spawn_catalog_fetch(&mut self) {
@@ -783,6 +734,7 @@ impl App {
                 Ok(apps) if !apps.is_empty() => CatalogSource::Live(apps),
                 Ok(_) => CatalogSource::Failed,
                 Err(err) => {
+                    crate::install::log_file(&format!("live catalog fetch failed: {err:#}"));
                     eprintln!("live catalog fetch failed: {err:#}");
                     CatalogSource::Failed
                 }
@@ -799,6 +751,44 @@ impl App {
             let _ = tx.send(stats);
         });
         self.cache_stats_rx = Some(rx);
+    }
+    /// A running install pins the user to the page that started it, except
+    /// during "update all", where the queue runs on its own and they can browse.
+    pub fn navigation_locked(&self) -> bool {
+        self.install_busy() && !self.update_active
+    }
+    /// What "update all" would install: homebrew and plugins with a newer
+    /// version, no extra data to pick, never the store itself.
+    pub fn is_updatable(&self, entry: &AppEntry) -> bool {
+        self.installed.state(entry) == crate::install::installed::InstallState::Outdated
+            && matches!(
+                entry.platform,
+                crate::data::Platform::Vita | crate::data::Platform::Plugin
+            )
+            && entry.data_url.is_none()
+            && !entry.download_url.is_empty()
+            && detail_actions::removable_or_plugin(entry)
+    }
+    pub fn updatable_count(&self, apps: &[AppEntry]) -> usize {
+        let (installed, outdated) = self.installed.counts();
+        if outdated == 0 {
+            return 0;
+        }
+        let key = (installed, outdated, apps.len());
+        let mut cache = self.updatable_cache.lock().unwrap();
+        if let Some((cached_key, count)) = *cache
+            && cached_key == key
+        {
+            return count;
+        }
+        let mut seen = std::collections::HashSet::new();
+        let count = apps
+            .iter()
+            .filter(|entry| self.is_updatable(entry))
+            .filter(|entry| seen.insert(crate::install::installed::index_key(entry)))
+            .count();
+        *cache = Some((key, count));
+        count
     }
     pub fn install_busy(&self) -> bool {
         self.install.as_ref().is_some_and(|job| !job.progress.is_finished())
@@ -824,19 +814,19 @@ impl App {
                         _ => {}
                     }
                 }
-                if self.install_notifications && !self.updates_notified {
-                    let (_, outdated) = self.installed.counts();
-                    if outdated > 0 {
-                        crate::install::notify::updates_available(outdated);
-                        self.updates_notified = true;
-                    }
-                }
             }
         }
         if let Some(job) = &mut self.install {
             let previous = std::mem::replace(&mut job.progress, job.rx.borrow_and_update().clone());
+            if previous != job.progress && job.progress == crate::install::Progress::Restarting {
+                crate::install::lifecycle::restart_self_soon(self.lang);
+            }
+            if previous != job.progress && job.progress == crate::install::Progress::RebootRequired {
+                crate::install::requirements::invalidate_all();
+            }
             if previous != job.progress && job.progress == crate::install::Progress::Done {
                 self.installed.mark_installed(&job.app_id_title);
+                crate::install::requirements::invalidate_all();
                 if self.install_notifications {
                     crate::install::notify::install_finished(&job.title);
                 }
@@ -853,6 +843,25 @@ impl App {
                     crate::install::notify::install_failed(&job.title, reason);
                 }
             }
+        }
+        self.advance_update_queue();
+        if let Some(rx) = &mut self.uninstall_rx
+            && let Ok((key, name, result)) = rx.try_recv()
+        {
+            self.uninstall_rx = None;
+            match result {
+                Ok(()) => {
+                    self.installed.mark_removed(&key);
+                    crate::install::requirements::invalidate_all();
+                    self.needs_installed_rescan = true;
+                    crate::install::notify::send(&self.lang.notify_uninstalled(&name));
+                }
+                Err(reason) => {
+                    eprintln!("uninstall of {name} failed: {reason}");
+                    crate::install::notify::send(&self.lang.notify_uninstall_failed(&name));
+                }
+            }
+            ctx.request_repaint();
         }
         if let Some(rx) = &mut self.self_update_rx
             && let Ok(info) = rx.try_recv()
@@ -939,22 +948,18 @@ impl App {
                 if matches!(self.state, AppState::Loading)
                     && self.load_started_at.elapsed() >= LOAD_WATCHDOG
                 {
-                    self.load_rx = None;
                     let apps = data::api::load_cached_catalog_sync().unwrap_or_default();
-                    eprintln!(
-                        "catalog fetch never resolved after {}s; falling back to {} cached entries",
-                        LOAD_WATCHDOG.as_secs(),
-                        apps.len(),
-                    );
-                    crate::install::log_file(&format!(
-                        "catalog fetch stalled past the {}s watchdog; showing {} cached entries",
-                        LOAD_WATCHDOG.as_secs(),
-                        apps.len(),
-                    ));
-                    let catalog = CatalogState::new(apps);
-                    self.installed.force_refresh(ctx, &catalog.apps);
-                    self.state = AppState::Catalog(catalog);
-                    ctx.request_repaint();
+                    if !apps.is_empty() {
+                        crate::install::log_file(&format!(
+                            "catalog fetch passed {}s; showing {} cached entries while download continues",
+                            LOAD_WATCHDOG.as_secs(),
+                            apps.len(),
+                        ));
+                        let catalog = CatalogState::new(apps);
+                        self.installed.force_refresh(ctx, &catalog.apps);
+                        self.state = AppState::Catalog(catalog);
+                        ctx.request_repaint();
+                    }
                 }
             }
             Err(oneshot::error::TryRecvError::Closed) => self.load_rx = None,
@@ -972,6 +977,15 @@ impl App {
                 }
                 if matches!(self.state, AppState::Detail { data_prompt: true, .. }) {
                     return self.handle_command(AppCommand::CancelDataPrompt);
+                }
+                if matches!(self.state, AppState::Detail { uninstall_prompt: true, .. }) {
+                    return self.handle_command(AppCommand::CancelUninstall);
+                }
+                if matches!(self.state, AppState::Detail { .. })
+                    && !self.update_active
+                    && self.install.as_ref().is_some_and(|job| job.progress.is_cancellable())
+                {
+                    return self.handle_command(AppCommand::CancelInstall);
                 }
                 if let AppState::Catalog(catalog) = &mut self.state {
                     if catalog.focus_pane == FocusPane::Sidebar {
@@ -1049,6 +1063,12 @@ impl App {
                 }
             }
             AppCommand::CycleCategoryFilter => {
+                if matches!(self.state, AppState::Detail { .. }) {
+                    return self.handle_command(AppCommand::SecondaryAction);
+                }
+                if matches!(&self.state, AppState::Catalog(catalog) if catalog.tab == StoreTab::Updates) {
+                    return self.handle_command(AppCommand::UpdateAll);
+                }
                 if let AppState::Catalog(catalog) = &mut self.state {
                     if catalog.tab != StoreTab::Categories {
                         catalog.tab = StoreTab::Categories;
@@ -1066,25 +1086,170 @@ impl App {
                     self.audio.play(crate::audio::Sfx::TabTransition);
                 }
             }
-            AppCommand::SetSourceFilter(source) => {
-                if let AppState::Catalog(catalog) = &mut self.state {
-                    catalog.source_filter = source;
-                    catalog.category_filter = None;
-                    catalog.genre_filter = None;
-                    catalog.recompute_dropdown_counts();
-                    match catalog.tab {
-                        StoreTab::Library => catalog.apply_install_filter(&self.installed, false),
-                        StoreTab::Updates => catalog.apply_install_filter(&self.installed, true),
-                        _ => catalog.refresh_filter(),
-                    }
-                    self.audio.play(crate::audio::Sfx::TabTransition);
-                }
-            }
             AppCommand::SetSortOrder(sort) => {
                 if let AppState::Catalog(catalog) = &mut self.state {
                     catalog.set_sort(sort);
                     catalog.sync_sidebar_cursor();
                     self.audio.play(crate::audio::Sfx::Activation);
+                }
+            }
+            AppCommand::FlipSortDirection if matches!(self.state, AppState::Detail { .. }) => {
+                return self.handle_command(AppCommand::TertiaryAction);
+            }
+            AppCommand::SecondaryAction => {
+                if let AppState::Detail { app, lightbox: None, .. } = &self.state
+                    && self.install.is_none()
+                {
+                    match detail_actions::secondary(app, self.installed.state(app)) {
+                        Some(detail_actions::DetailAction::Open) => {
+                            return self.handle_command(AppCommand::LaunchCurrent);
+                        }
+                        Some(detail_actions::DetailAction::Reinstall) => {
+                            return self.handle_command(AppCommand::InstallCurrent);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            AppCommand::TertiaryAction => {
+                if let AppState::Detail { app, lightbox: None, .. } = &self.state {
+                    if let Some(job) = &self.install {
+                        if matches!(job.progress, crate::install::Progress::Failed(_))
+                            && job.progress.is_finished()
+                        {
+                            return self.handle_command(AppCommand::ReportError);
+                        }
+                    } else if detail_actions::tertiary(app, self.installed.state(app)).is_some() {
+                        return self.handle_command(AppCommand::UninstallCurrent);
+                    }
+                }
+            }
+            AppCommand::LaunchCurrent => {
+                if let AppState::Detail { app, .. } = &self.state
+                    && !self.install_busy()
+                    && self.installed.state(app) != crate::install::installed::InstallState::Absent
+                    && detail_actions::launchable(app)
+                {
+                    match crate::install::lifecycle::launch(&app.titleid) {
+                        Ok(()) => std::process::exit(0),
+                        Err(err) => {
+                            eprintln!("launch failed: {err:#}");
+                            crate::install::notify::send(&self.lang.notify_open_failed(&app.name));
+                        }
+                    }
+                }
+            }
+            AppCommand::UninstallCurrent => {
+                let busy = self.install_busy() || self.uninstall_rx.is_some();
+                let installed = &self.installed;
+                if let AppState::Detail { app, uninstall_prompt, lightbox: None, .. } = &mut self.state
+                    && !busy
+                    && detail_actions::tertiary(app, installed.state(app)).is_some()
+                {
+                    *uninstall_prompt = true;
+                    self.audio.play(crate::audio::Sfx::ShowModal);
+                }
+            }
+            AppCommand::CancelUninstall => {
+                if let AppState::Detail { uninstall_prompt, .. } = &mut self.state
+                    && *uninstall_prompt
+                {
+                    *uninstall_prompt = false;
+                    self.audio.play(crate::audio::Sfx::HideModal);
+                }
+            }
+            AppCommand::ConfirmUninstall => {
+                if let AppState::Detail { app, uninstall_prompt, .. } = &mut self.state
+                    && *uninstall_prompt
+                {
+                    *uninstall_prompt = false;
+                    let key = crate::install::installed::index_key(app);
+                    let titleid = app.titleid.clone();
+                    let name = app.name.clone();
+                    let (tx, rx) = oneshot::channel();
+                    tokio::spawn(async move {
+                        let result = crate::install::lifecycle::uninstall(&titleid)
+                            .await
+                            .map_err(|err| format!("{err:#}"));
+                        let _ = tx.send((key, name, result));
+                    });
+                    self.uninstall_rx = Some(rx);
+                    self.audio.play(crate::audio::Sfx::Activation);
+                }
+            }
+            AppCommand::ReportError => {
+                if let (AppState::Detail { app, .. }, Some(job)) = (&self.state, &self.install)
+                    && let crate::install::Progress::Failed(reason) = &job.progress
+                {
+                    self.report_notice = Some(match crate::install::write_report(app, reason) {
+                        Ok(path) => format!("Report saved to {path}"),
+                        Err(err) => format!("Couldn't save the report: {err:#}"),
+                    });
+                }
+            }
+            AppCommand::InstallDependency { id, dir, file } => {
+                if self.install_busy() {
+                    return Ok(());
+                }
+                let found = match &self.state {
+                    AppState::Detail { previous, .. } => {
+                        previous.apps.iter().find(|candidate| candidate.id == id).cloned()
+                    }
+                    _ => None,
+                };
+                if let Some(mut entry) = found {
+                    // The requirement says where the file must end up; a plugin
+                    // that has no taiHEN entry of its own gets one there.
+                    let dir = dir.trim_end_matches('/');
+                    if entry.plugin_config_line.is_none()
+                        && (dir.starts_with("ur0:tai") || dir.starts_with("ux0:tai"))
+                    {
+                        let section = if file.to_lowercase().ends_with(".skprx") {
+                            "*KERNEL"
+                        } else {
+                            "*main"
+                        };
+                        entry.plugin_install_path = Some(format!("{dir}/"));
+                        entry.plugin_config_line = Some(format!("{dir}/{file}"));
+                        entry.plugin_config_section = Some(section.to_owned());
+                    }
+                    self.start_install(entry);
+                }
+            }
+            AppCommand::UpdateAll => {
+                if self.update_active || self.install_busy() {
+                    return Ok(());
+                }
+                let AppState::Catalog(catalog) = &self.state else {
+                    return Ok(());
+                };
+                let mut seen = std::collections::HashSet::new();
+                let queue: std::collections::VecDeque<AppEntry> = catalog
+                    .apps
+                    .iter()
+                    .filter(|candidate| self.is_updatable(candidate))
+                    .filter(|candidate| {
+                        seen.insert(crate::install::installed::index_key(candidate))
+                    })
+                    .cloned()
+                    .collect();
+                if queue.is_empty() {
+                    return Ok(());
+                }
+                self.update_total = queue.len();
+                self.update_done = 0;
+                self.update_failed = 0;
+                self.update_queue = queue;
+                self.update_active = true;
+                self.advance_update_queue();
+            }
+            AppCommand::ScreenshotStep(step) => {
+                if let AppState::Detail { lightbox: Some(index), app, .. } = &mut self.state {
+                    let count = app.screenshot_urls.len() as i32;
+                    if count > 1 {
+                        *index = (*index as i32 + step).rem_euclid(count) as usize;
+                        self.audio.play(crate::audio::Sfx::Navigate);
+                    }
                 }
             }
             AppCommand::FlipSortDirection => {
@@ -1093,9 +1258,42 @@ impl App {
                     self.audio.play(crate::audio::Sfx::Activation);
                 }
             }
+            AppCommand::Input(
+                direction @ (InputCommand::MoveLeft
+                | InputCommand::MoveRight
+                | InputCommand::CategoryPrev
+                | InputCommand::CategoryNext),
+            ) if matches!(self.state, AppState::Detail { lightbox: Some(_), .. }) => {
+                let step = match direction {
+                    InputCommand::MoveLeft | InputCommand::CategoryPrev => -1,
+                    _ => 1,
+                };
+                return self.handle_command(AppCommand::ScreenshotStep(step));
+            }
             AppCommand::Input(InputCommand::Confirm) => {
-                if matches!(self.state, AppState::Detail { data_prompt: true, .. }) {
-                    return self.handle_command(AppCommand::InstallCurrent);
+                if let AppState::Detail { data_prompt: true, app, .. } = &self.state {
+                    // Heavy data: the recommended (default) path is the manual download.
+                    return self.handle_command(if crate::data::is_heavy_data(app) {
+                        AppCommand::InstallAppOnly
+                    } else {
+                        AppCommand::InstallCurrent
+                    });
+                }
+                if matches!(self.state, AppState::Detail { uninstall_prompt: true, .. }) {
+                    return self.handle_command(AppCommand::ConfirmUninstall);
+                }
+                if let AppState::Detail { lightbox: None, app, .. } = &self.state {
+                    let primary = detail_actions::primary(app, self.installed.state(app));
+                    return match &self.install {
+                        None if primary == detail_actions::DetailAction::Open => {
+                            self.handle_command(AppCommand::LaunchCurrent)
+                        }
+                        None => self.handle_command(AppCommand::InstallCurrent),
+                        Some(job) if job.progress.is_finished() => {
+                            self.handle_command(AppCommand::DismissInstall)
+                        }
+                        Some(_) => Ok(()),
+                    };
                 }
                 if let AppState::Catalog(catalog) = &mut self.state {
                     if catalog.focus_pane == FocusPane::Sidebar {
@@ -1259,7 +1457,7 @@ impl App {
                     catalog.apply_store_tab(tab, &self.installed);
                     self.audio.play(crate::audio::Sfx::TabTransition);
                 } else if matches!(self.state, AppState::Detail { .. }) {
-                    if self.install_busy() {
+                    if self.navigation_locked() {
                         return Ok(());
                     }
                     let AppState::Detail { app, previous, .. } =
@@ -1283,7 +1481,7 @@ impl App {
                 }
             }
             AppCommand::MoreByAuthor(author) => {
-                if self.install_busy() {
+                if self.navigation_locked() {
                     return Ok(());
                 }
                 if let AppState::Detail { app, previous, .. } = &mut self.state {
@@ -1331,27 +1529,23 @@ impl App {
                 }
                 if let AppState::Detail { app, .. } = &self.state
                     && !busy
+                    && crate::install::space_shortfall(app).is_none()
                 {
                     let entry = app.clone();
-                    let app_id = entry.id.clone();
-                    let app_id_title = crate::install::installed::index_key(&entry);
-                    let title = entry.name.clone();
-                    let (rx, cancel) = crate::install::start(entry);
-                    let progress = rx.borrow().clone();
-                    self.install = Some(InstallJob {
-                        app_id,
-                        app_id_title,
-                        title: title.clone(),
-                        progress,
-                        rx,
-                        cancel,
-                    });
-                    self.audio.play(crate::audio::Sfx::Launch);
-                    if self.install_notifications {
-                        crate::install::notify::install_started(&title);
-                    }
-                    if let AppState::Detail { data_prompt, .. } = &mut self.state {
-                        *data_prompt = false;
+                    self.start_install(entry);
+                }
+            }
+            AppCommand::InstallAppOnly => {
+                let busy = self.install.as_ref().is_some_and(|job| !job.progress.is_finished());
+                if let AppState::Detail { app, data_prompt, .. } = &mut self.state
+                    && !busy
+                {
+                    *data_prompt = false;
+                    let mut entry = app.clone();
+                    entry.data_url = None;
+                    entry.data_size_bytes = 0;
+                    if crate::install::space_shortfall(&entry).is_none() {
+                        self.start_install(entry);
                     }
                 }
             }
@@ -1439,6 +1633,10 @@ impl App {
                 }
             }
             AppCommand::CancelInstall => {
+                if self.update_active {
+                    self.update_queue.clear();
+                    self.update_active = false;
+                }
                 if let Some(job) = &self.install
                     && job.progress.is_cancellable()
                 {
@@ -1574,6 +1772,68 @@ impl App {
         }
         Ok(())
     }
+    fn start_install(&mut self, entry: AppEntry) {
+        let app_id = entry.id.clone();
+        let app_id_title = crate::install::installed::index_key(&entry);
+        let title = entry.name.clone();
+        let (rx, cancel) = crate::install::start(entry);
+        let progress = rx.borrow().clone();
+        self.install = Some(InstallJob {
+            app_id,
+            app_id_title,
+            title: title.clone(),
+            progress,
+            rx,
+            cancel,
+        });
+        self.report_notice = None;
+        self.audio.play(crate::audio::Sfx::Launch);
+        if self.install_notifications {
+            crate::install::notify::install_started(&title);
+        }
+        if let AppState::Detail { data_prompt, .. } = &mut self.state {
+            *data_prompt = false;
+        }
+    }
+    fn advance_update_queue(&mut self) {
+        if !self.update_active {
+            return;
+        }
+        if let Some(job) = &self.install {
+            if !job.progress.is_finished() {
+                return;
+            }
+            match &job.progress {
+                crate::install::Progress::Failed(_) => self.update_failed += 1,
+                _ => self.update_done += 1,
+            }
+            self.install = None;
+        }
+        if let Some(next) = self.update_queue.pop_front() {
+            self.start_install(next);
+        } else {
+            self.update_active = false;
+            self.needs_installed_rescan = true;
+            crate::install::notify::updates_finished(
+                self.lang,
+                self.update_done,
+                self.update_failed,
+            );
+        }
+    }
+    pub fn update_all_label(&self) -> Option<String> {
+        if !self.update_active {
+            return None;
+        }
+        let position = (self.update_done + self.update_failed + 1).min(self.update_total);
+        let percent = self
+            .install
+            .as_ref()
+            .and_then(|job| job.progress.fraction())
+            .map(|fraction| format!(" {}%", (fraction * 100.0) as u32))
+            .unwrap_or_default();
+        Some(format!("{position}/{}{percent}", self.update_total))
+    }
     fn open_app(&mut self, filtered_index: usize) {
         let entry = match &self.state {
             AppState::Catalog(catalog) => catalog
@@ -1610,6 +1870,7 @@ impl App {
             comments_loaded: false,
             comment_entry_requested: false,
             data_prompt: false,
+            uninstall_prompt: false,
             lightbox: None,
         };
         let AppState::Catalog(mut catalog) = std::mem::replace(&mut self.state, placeholder) else {
@@ -1649,6 +1910,7 @@ impl App {
             comments_loaded: false,
             comment_entry_requested: false,
             data_prompt: false,
+            uninstall_prompt: false,
             lightbox: None,
         };
         self.audio.play(crate::audio::Sfx::IntoDetail);
@@ -1665,7 +1927,7 @@ impl App {
         }
     }
     fn back_to_catalog(&mut self) {
-        if self.install_busy() {
+        if self.navigation_locked() {
             return;
         }
         if let AppState::Detail { lightbox: Some(_), .. } = &self.state {
@@ -1859,11 +2121,14 @@ mod sort_tests {
     }
 
     fn twin_catalog() -> CatalogState {
+        let mut nps = entry_titled("nps-same-tid", "RETROARCH", "vitaforge", 0);
+        nps.platform = crate::data::Platform::NpsVita;
+        nps.rebuild_derived();
         let apps = vec![
-            entry_titled("official-ra", "RETROARCH", "vitadb", 100),
-            entry_titled("dbtoo-ra", "RETROARCH", "vitadbtoo", 9_999),
-            entry_titled("dbtoo-only", "ONLYTOO", "vitadbtoo", 50),
-            entry_titled("nps-same-tid", "RETROARCH", "nps", 0),
+            entry_titled("official-ra", "RETROARCH", "vitaforge", 100),
+            entry_titled("dbtoo-ra", "RETROARCH", "vitaforge", 9_999),
+            entry_titled("dbtoo-only", "ONLYTOO", "vitaforge", 50),
+            nps,
         ];
         let mut catalog = CatalogState::new(apps);
         catalog.sort_order = SortOrder::Downloads;
@@ -1876,8 +2141,9 @@ mod sort_tests {
     fn all_catalogs_collapses_homebrew_twins() {
         let catalog = twin_catalog();
         let ids = ordered_ids(&catalog);
-        assert!(ids.contains(&"official-ra".to_owned()));
-        assert!(!ids.contains(&"dbtoo-ra".to_owned())); // the same title from the other catalog
+        // Same titleid: higher downloads wins; commercial NPS twin stays separate.
+        assert!(ids.contains(&"dbtoo-ra".to_owned()));
+        assert!(!ids.contains(&"official-ra".to_owned()));
         assert!(ids.contains(&"dbtoo-only".to_owned()));
         assert!(ids.contains(&"nps-same-tid".to_owned()));
     }
@@ -1890,19 +2156,13 @@ mod sort_tests {
     }
 
     #[test]
-    fn source_filter_vitadbtoo_keeps_dbtoo_twin() {
-        let mut catalog = twin_catalog();
-        catalog.source_filter = Some(SourceCatalog::VitaDbToo);
-        catalog.refresh_filter();
-        let ids = ordered_ids(&catalog);
-        assert_eq!(ids, vec!["dbtoo-ra", "dbtoo-only"]);
-    }
-
-    #[test]
     fn collapse_does_not_merge_nps_with_homebrew() {
+        let mut nps = entry_titled("nps", "PCSF00092", "vitaforge", 0);
+        nps.platform = crate::data::Platform::NpsVita;
+        nps.rebuild_derived();
         let apps = vec![
-            entry_titled("hb", "PCSF00092", "vitadb", 10),
-            entry_titled("nps", "PCSF00092", "nps", 0),
+            entry_titled("hb", "PCSF00092", "vitaforge", 10),
+            nps,
         ];
         let mut catalog = CatalogState::new(apps);
         catalog.sort_order = SortOrder::Name;

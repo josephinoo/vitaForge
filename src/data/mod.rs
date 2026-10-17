@@ -50,14 +50,21 @@ impl Category {
         match category.trim().to_lowercase().as_str() {
             "emulator" | "emulators" => Category::Emulator,
             "original" => Category::Original,
-            "ps vita game" => Category::PsVitaGame,
+            // PSN/NPS store "Games" / "PS Vita Game"; homebrew uses Ports/etc.
+            "game" | "games" | "ps vita game" => Category::PsVitaGame,
             "ps1 game" => Category::Ps1Game,
             "psp game" => Category::PspGame,
             "plugin" | "plugins" => Category::Plugin,
             "port" | "ports" => Category::Port,
             "tool" | "tools" => Category::Tool,
             "utility" | "utilities" => Category::Utility,
-            _ => Category::Other,
+            // type=psv_game is the backup when category is blank/odd.
+            _ => match kind.trim().to_lowercase().as_str() {
+                "psv_game" => Category::PsVitaGame,
+                "psp_game" => Category::PspGame,
+                "psx_game" => Category::Ps1Game,
+                _ => Category::Other,
+            },
         }
     }
 }
@@ -110,46 +117,6 @@ impl Platform {
         self.is_nps()
     }
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SourceCatalog {
-    VitaDb,
-    VitaDbToo,
-    Nps,
-}
-impl SourceCatalog {
-    pub const ALL: [SourceCatalog; 3] = [SourceCatalog::VitaDb, SourceCatalog::VitaDbToo, SourceCatalog::Nps];
-    pub fn label(self) -> &'static str {
-        match self {
-            SourceCatalog::VitaDb => "VitaDB Official",
-            SourceCatalog::VitaDbToo => "VitaDBtoo",
-            SourceCatalog::Nps => "PKGj",
-        }
-    }
-    pub fn short_label(self) -> &'static str {
-        match self {
-            SourceCatalog::VitaDb => "VitaDB",
-            SourceCatalog::VitaDbToo => "DBtoo",
-            SourceCatalog::Nps => "PKGj",
-        }
-    }
-    pub fn from_api(source_catalog: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|source| source.matches(source_catalog))
-    }
-    pub fn matches(self, source_catalog: &str) -> bool {
-        match self {
-            SourceCatalog::VitaDb => {
-                source_catalog.eq_ignore_ascii_case("vitadb")
-                    || source_catalog.eq_ignore_ascii_case("vitadb_official")
-                    || source_catalog.eq_ignore_ascii_case("vitadb-official")
-            }
-            SourceCatalog::VitaDbToo => {
-                source_catalog.eq_ignore_ascii_case("vitadbtoo")
-                    || source_catalog.eq_ignore_ascii_case("vitadb_too")
-            }
-            SourceCatalog::Nps => source_catalog.eq_ignore_ascii_case("nps"),
-        }
-    }
-}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SortOrder {
@@ -192,6 +159,11 @@ impl SortDirection {
             SortDirection::Desc => SortDirection::Asc,
         }
     }
+}
+/// Game data this big takes ~15+ min over the Vita's Wi-Fi, so we suggest a PC download.
+pub const HEAVY_DATA_BYTES: u64 = 1024 * 1024 * 1024;
+pub fn is_heavy_data(entry: &AppEntry) -> bool {
+    entry.data_url.is_some() && entry.data_size_bytes >= HEAVY_DATA_BYTES
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppEntry {
@@ -343,14 +315,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn source_catalog_matching() {
-        assert!(SourceCatalog::VitaDb.matches("vitadb"));
-        assert!(SourceCatalog::VitaDb.matches("vitadb_official"));
-        assert!(SourceCatalog::VitaDbToo.matches("vitadbtoo"));
-        assert!(SourceCatalog::VitaDbToo.matches("vitadb_too"));
-        assert!(SourceCatalog::Nps.matches("nps"));
-        assert!(!SourceCatalog::VitaDb.matches("vitadbtoo"));
-        assert!(!SourceCatalog::VitaDb.matches("nps"));
-        assert!(!SourceCatalog::VitaDb.matches("unknown"));
+    fn psn_type_maps_to_game_category_without_source_tag() {
+        assert_eq!(Category::from_api("", "psv_game"), Category::PsVitaGame);
+        assert_eq!(Category::from_api("Games", ""), Category::PsVitaGame);
+        assert_eq!(Category::from_api("PS Vita Game", "psv_game"), Category::PsVitaGame);
+        assert_eq!(Category::from_api("Ports", ""), Category::Port);
+        assert_eq!(Category::from_api("junk", "psv_game"), Category::PsVitaGame);
+        assert_eq!(Platform::from_api_type("psv_game").is_commercial(), true);
     }
 }
+

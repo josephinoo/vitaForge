@@ -63,6 +63,7 @@ download-btn = DESCARGAR
 requirements-label = Requisitos
 changelog-label = Novedades
 needs-game-data = REQUIERE DATOS ADICIONALES
+game-data-badge = DATOS DEL JUEGO
 overview-label = Resumen
 needs-nonpdrm = Requiere NoNpDrm / fake license
 description-label = Descripción
@@ -141,3 +142,34 @@ updates-empty = Todo está actualizado
 data-prompt-title = Necesita datos adicionales
 data-prompt-body = Esta app necesita descargar datos extra para poder funcionar.
 data-prompt-accept = DESCARGAR
+about-app = Acerca de esta app
+also-needs = También necesita
+ready-to-play = Listo para jugar
+needs-your-files = Faltan tus archivos
+data-not-auto = Archivos de datos: no se instalan automáticamente
+installed-reinstall = Instalado · reinstalar
+update-to = Actualizar a { $version }
+open-btn = ABRIR
+uninstall-btn = DESINSTALAR
+uninstall-body = Quita la app y su burbuja de LiveArea. Las partidas y carpetas de datos se conservan.
+report-btn = REPORTAR
+get-btn = OBTENER
+uninstall-title = ¿Desinstalar { $name }?
+no-space = Sin espacio - necesita { $size }
+update-all = Actualizar todo ({ $count })
+notify-uninstalled = { $name } desinstalada
+notify-uninstall-failed = No se pudo desinstalar { $name }
+notify-open-failed = No se pudo abrir { $name }
+notify-updates-done = { $count } app(s) actualizadas
+notify-updates-failed = { $count } actualización(es) fallida(s)
+notify-updates-mixed = { $done } actualizadas, { $failed } fallidas
+notify-restart-manual = vitaForge actualizado. Ciérralo y ábrelo de nuevo para usar la nueva versión.
+data-heavy-title = Descarga pesada ({ $size })
+data-heavy-body = Por el Wi-Fi de la Vita puede tardar una hora o más. Más rápido desde un PC:
+    1. Escanea el QR o abre el link de abajo en tu PC.
+    2. Descarga los datos del juego (.zip) desde esa página.
+    3. Conecta la Vita al PC (VitaShell: USB o FTP).
+    4. Descomprime el zip en { $path } sin cambiar sus carpetas.
+    5. Vuelve aquí y pulsa INSTALAR SOLO LA APP.
+data-heavy-app-only = INSTALAR SOLO LA APP
+data-heavy-download-here = DESCARGAR EN LA VITA
