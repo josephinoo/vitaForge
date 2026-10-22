@@ -69,7 +69,7 @@ pub(crate) fn catalog_header(
             if let Some(progress) = self_update_progress {
                 ui.add_space(6.0);
                 ui.label(
-                    egui::RichText::new(progress.label())
+                    egui::RichText::new(progress.label_for(lang))
                         .size(FONT_SMALL)
                         .strong()
                         .color(STAR_GOLD),

@@ -654,6 +654,7 @@ pub struct App {
     update_failed: usize,
     uninstall_rx: Option<oneshot::Receiver<(String, String, Result<(), String>)>>,
     pub report_notice: Option<String>,
+    restart_at: Option<std::time::Instant>,
     updatable_cache: std::sync::Mutex<Option<((usize, usize, usize), usize)>>,
 }
 const LOAD_WATCHDOG: std::time::Duration = std::time::Duration::from_secs(60);
@@ -724,6 +725,7 @@ impl App {
             update_failed: 0,
             uninstall_rx: None,
             report_notice: None,
+            restart_at: None,
             updatable_cache: std::sync::Mutex::new(None),
         })
     }
@@ -794,6 +796,13 @@ impl App {
         self.install.as_ref().is_some_and(|job| !job.progress.is_finished())
     }
     pub fn tick(&mut self, ctx: &egui::Context) -> Result<()> {
+        if self.restart_at.is_some_and(|at| std::time::Instant::now() >= at) {
+            self.restart_at = None;
+            if let Err(err) = crate::install::lifecycle::restart_self() {
+                crate::install::log_file(&format!("restart after self-update failed: {err:#}"));
+                crate::install::notify::send(self.lang.notify_restart_manual());
+            }
+        }
         if self.icons_need_clear {
             self.icons.clear_resident(ctx);
             self.icons_need_clear = false;
@@ -819,7 +828,7 @@ impl App {
         if let Some(job) = &mut self.install {
             let previous = std::mem::replace(&mut job.progress, job.rx.borrow_and_update().clone());
             if previous != job.progress && job.progress == crate::install::Progress::Restarting {
-                crate::install::lifecycle::restart_self_soon(self.lang);
+                self.restart_at = Some(std::time::Instant::now() + std::time::Duration::from_millis(1500));
             }
             if previous != job.progress && job.progress == crate::install::Progress::RebootRequired {
                 crate::install::requirements::invalidate_all();

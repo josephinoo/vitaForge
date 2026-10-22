@@ -65,7 +65,7 @@ pub(crate) fn loading_screen(
                             );
                             ui.add_space(8.0);
                             ui.label(
-                                egui::RichText::new(progress.label())
+                                egui::RichText::new(progress.label_for(lang))
                                     .color(TEXT_DIM)
                                     .size(FONT_BODY),
                             );
