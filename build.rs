@@ -1,4 +1,8 @@
 fn main() {
+    println!("cargo:rerun-if-changed=tools/vita-sce-gap.ld");
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("vita") {
+        println!("cargo:rustc-link-arg=-Wl,-T,tools/vita-sce-gap.ld");
+    }
     println!("cargo:rerun-if-env-changed=SERVER_URL");
     println!("cargo:rerun-if-env-changed=GITHUB_API_URL");
     println!("cargo:rerun-if-changed=.env");

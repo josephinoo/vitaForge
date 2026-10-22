@@ -81,66 +81,59 @@ fn format_clock(secs: u64) -> String {
     }
 }
 fn transfer_detail(received: u64, total: Option<u64>, elapsed_secs: u32) -> String {
-    match total {
-        Some(total) if total > 0 => {
-            let percent = (received * 100 / total).min(100);
-            if elapsed_secs >= 2 && received > 0 && received < total {
-                let remaining = (total - received) as f64 * elapsed_secs as f64 / received as f64;
-                format!("{percent}% · {} left", format_clock(remaining as u64))
-            } else {
-                format!("{percent}%")
-            }
+    const MIB: f64 = 1024.0 * 1024.0;
+    let mut detail = match total.filter(|total| *total > 0) {
+        Some(total) => format!("{}% · {:.1}/{:.1} MiB", (received as f64 / total as f64 * 100.0).min(100.0) as u32, received as f64 / MIB, total as f64 / MIB),
+        None => format!("{:.1} MiB", received as f64 / MIB),
+    };
+    if elapsed_secs >= 2 && received > 0 {
+        detail.push_str(&format!(" · {:.2} MiB/s", received as f64 / MIB / elapsed_secs as f64));
+        if let Some(total) = total.filter(|total| *total > received) {
+            let remaining = (total - received) as f64 * elapsed_secs as f64 / received as f64;
+            detail.push_str(&format!(" · ~{} left", format_clock(remaining as u64)));
         }
-        _ => format!(
-            "{:.1} MB · {}",
-            received as f64 / (1024.0 * 1024.0),
-            format_clock(elapsed_secs as u64)
-        ),
     }
+    detail
 }
 impl Progress {
-    pub fn label(&self) -> String {
+    pub fn label_for(&self, lang: crate::app::i18n::Language) -> String {
+        let es = lang == crate::app::i18n::Language::Spanish;
+        let text = |en, spanish| if es { spanish } else { en };
         match self {
-            Progress::Resolving => "Checking latest…".to_owned(),
-            Progress::Downloading {
-                received,
-                total,
-                elapsed_secs,
-            } => {
-                format!(
-                    "[2/3] Downloading {}",
-                    transfer_detail(*received, *total, *elapsed_secs)
-                )
+            Self::Resolving => text("Preparing download…", "Preparando descarga…").to_owned(),
+            Self::Downloading { received, total, elapsed_secs }
+            | Self::DownloadingData { received, total, elapsed_secs } => {
+                let phase = if matches!(self, Self::DownloadingData { .. }) {
+                    text("Downloading game data", "Descargando datos del juego")
+                } else {
+                    text("Downloading app", "Descargando aplicación")
+                };
+                let detail = transfer_detail(*received, *total, *elapsed_secs);
+                format!("{phase} · {}", if es { detail.replace(" left", " restantes") } else { detail })
             }
-            Progress::DownloadingData {
-                received,
-                total,
-                elapsed_secs,
-            } => {
-                format!(
-                    "[1/3] Game data {}",
-                    transfer_detail(*received, *total, *elapsed_secs)
-                )
+            Self::Finishing { step, percent } => {
+                let phase = match *step {
+                    "Joining parts" => text("Joining download parts", "Uniendo partes de la descarga"),
+                    "Verifying" => text("Verifying file", "Verificando archivo"),
+                    other => other,
+                };
+                format!("{phase} · {}%", (*percent).min(100))
             }
-            Progress::Finishing { step, percent } => format!("[1/3] {step} {percent}%"),
-            Progress::Decrypting => "[3/3] Decrypting…".to_owned(),
-            Progress::Extracting { done, total, file, files } if *total > 0 => {
-                format!(
-                    "[3/3] Extracting {done}/{total} MB ({}%) - file {file}/{files}",
-                    (*done as u64 * 100 / *total as u64).min(100)
-                )
-            }
-            Progress::Extracting { .. } => "[3/3] Extracting…".to_owned(),
-            Progress::Installing { elapsed_secs } if *elapsed_secs > 0 => {
-                format!("[3/3] Installing… ({elapsed_secs}s)")
-            }
-            Progress::Installing { .. } => "[3/3] Installing…".to_owned(),
-            Progress::Queued => "Queued — check Notifications".to_owned(),
-            Progress::Done => "Installed".to_owned(),
-            Progress::RebootRequired => "Installed — restart Vita to activate".to_owned(),
-            Progress::Restarting => "Updated — restarting…".to_owned(),
-            Progress::Failed(err) if err == CANCELLED_MESSAGE => "Cancelled".to_owned(),
-            Progress::Failed(err) => format!("Failed: {err}"),
+            Self::Decrypting => text("Decrypting package…", "Descifrando paquete…").to_owned(),
+            Self::Extracting { done, total, file, files } if *total > 0 => format!(
+                "{} · {}% · {done}/{total} MiB · {} {file}/{files}",
+                text("Extracting", "Extrayendo"),
+                (*done as u64 * 100 / *total as u64).min(100),
+                text("files", "archivos"),
+            ),
+            Self::Extracting { .. } => text("Preparing extraction…", "Preparando extracción…").to_owned(),
+            Self::Installing { elapsed_secs } => format!("{} · {} {}", text("Installing", "Instalando"), format_clock(*elapsed_secs as u64), text("elapsed", "transcurridos")),
+            Self::Queued => text("Queued — check Notifications", "En cola — consulta las notificaciones").to_owned(),
+            Self::Done => text("Installed", "Instalado").to_owned(),
+            Self::RebootRequired => text("Installed — restart Vita to activate", "Instalado — reinicia la Vita para activar").to_owned(),
+            Self::Restarting => text("Updated — restarting…", "Actualizado — reiniciando…").to_owned(),
+            Self::Failed(err) if err == CANCELLED_MESSAGE => text("Cancelled", "Cancelado").to_owned(),
+            Self::Failed(err) => format!("{}: {err}", text("Failed", "Error")),
         }
     }
     pub fn fraction(&self) -> Option<f32> {
@@ -150,6 +143,7 @@ impl Progress {
                 Some(total) if *total > 0 => Some((*received as f32 / *total as f32).clamp(0.0, 1.0)),
                 _ => None,
             },
+            Progress::Finishing { percent, .. } => Some((*percent as f32 / 100.0).clamp(0.0, 1.0)),
             Progress::Extracting { done, total, .. } if *total > 0 => {
                 Some((*done as f32 / *total as f32).clamp(0.0, 1.0))
             }
@@ -1032,6 +1026,7 @@ async fn run_vita(
             .transpose()?
             .unwrap_or_else(|| PathBuf::from(DATA_ROOT));
         stage_data_and_vpk(data_url, &data_dest, &temp_data_path(entry), &url, tx, cancel).await?;
+        log_file("game data staged, extracting the vpk");
     } else {
         download(&url, Path::new(TEMP_VPK), tx, cancel).await?;
     }
@@ -1052,6 +1047,7 @@ async fn run_vita(
     .context("the extract worker crashed")??;
     let _ = std::fs::remove_file(TEMP_VPK);
     let _ = std::fs::remove_file(sidecar(TEMP_VPK));
+    log_file("vpk extracted");
     if url == entry.download_url {
         check_digest(entry, Path::new(EXTRACT_DIR)).await?;
     }
@@ -1078,9 +1074,11 @@ async fn run_vita(
     }
     let _ = tx.send(Progress::Installing { elapsed_secs: 0 });
     let tx_worker = tx.clone();
+    log_file("promoting the package");
     tokio::task::spawn_blocking(move || promoter::promote_package(EXTRACT_DIR, &tx_worker))
         .await
         .context("the install worker crashed")??;
+    log_file("package promoted");
     if Path::new(EXTRACT_DIR).exists() {
         let _ = std::fs::remove_dir_all(EXTRACT_DIR);
         bail!("the system didn't accept the package");
@@ -1195,6 +1193,7 @@ async fn stage_data_and_vpk(
     // Overlap VPK network download with Game Data ZIP extraction on disk
     let vpk_res = download(vpk_url, Path::new(TEMP_VPK), tx, cancel).await;
     log_file(&format!("vpk download {}, waiting for game data", if vpk_res.is_ok() { "ok" } else { "failed" }));
+    log_file("awaiting the game data worker");
     let extract_res = extract_task.await.context("the data extract worker crashed")?;
     log_file(&format!("game data extract + md5: {:.0}s", extract_started.elapsed().as_secs_f64()));
     extract_res?;
@@ -1388,6 +1387,8 @@ mod parts_extract_tests {
         let mut hashing = download::HashingReader::new(download::PartsReader::open(&dest).unwrap());
         let mut written = Vec::new();
         extract_from(&mut hashing, &out, &AtomicBool::new(false), &mut written, |_, _, _, _| {}).unwrap();
+        // only the central directory may be left for finish() to re-read
+        assert!(zip_bytes.len() as u64 - hashing.hashed < 8 * 1024, "hashed {}", hashing.hashed);
         assert_eq!(hashing.finish().unwrap(), format!("{:x}", Md5::digest(&zip_bytes)));
         assert_eq!(written.len(), 40);
         assert_eq!(std::fs::read(out.join("game/f39.bin")).unwrap(), vec![39u8; 997 * 40]);
@@ -1451,6 +1452,9 @@ mod progress_tests {
         assert_eq!(Progress::Extracting { done: 1, total: 4, file: 0, files: 0 }.fraction(), Some(0.25));
         assert_eq!(Progress::Installing { elapsed_secs: 3 }.fraction(), None);
         assert_eq!(Progress::Done.fraction(), Some(1.0));
+        assert_eq!(Progress::Finishing { step: "Verifying", percent: 40 }.fraction(), Some(0.4));
+        assert_eq!(Progress::Finishing { step: "Verifying", percent: 120 }.fraction(), Some(1.0));
+        assert_eq!(Progress::Finishing { step: "Verifying", percent: 40 }.label_for(crate::app::i18n::Language::Spanish), "Verificando archivo · 40%");
     }
 }
 #[cfg(test)]
@@ -1461,18 +1465,18 @@ mod tests {
     };
     #[test]
     fn shows_percent_and_eta_once_there_is_history() {
-        assert_eq!(transfer_detail(50, Some(100), 10), "50% · 0:10 left");
+        assert_eq!(transfer_detail(5 * 1024 * 1024, Some(10 * 1024 * 1024), 10), "50% · 5.0/10.0 MiB · 0.50 MiB/s · ~0:10 left");
     }
     #[test]
     fn holds_back_the_eta_until_the_sample_is_meaningful() {
-        assert_eq!(transfer_detail(10, Some(100), 0), "10%");
-        assert_eq!(transfer_detail(0, Some(100), 5), "0%");
-        assert_eq!(transfer_detail(100, Some(100), 5), "100%");
+        assert_eq!(transfer_detail(10, Some(100), 0), "10% · 0.0/0.0 MiB");
+        assert_eq!(transfer_detail(0, Some(100), 5), "0% · 0.0/0.0 MiB");
+        assert_eq!(transfer_detail(100, Some(100), 5), "100% · 0.0/0.0 MiB · 0.00 MiB/s");
     }
     #[test]
     fn falls_back_to_size_and_elapsed_without_a_content_length() {
-        assert_eq!(transfer_detail(2 * 1024 * 1024, None, 65), "2.0 MB · 1:05");
-        assert_eq!(transfer_detail(0, Some(0), 3), "0.0 MB · 0:03");
+        assert_eq!(transfer_detail(2 * 1024 * 1024, None, 65), "2.0 MiB · 0.03 MiB/s");
+        assert_eq!(transfer_detail(0, Some(0), 3), "0.0 MiB");
     }
     #[test]
     fn accepts_allowed_roots() {

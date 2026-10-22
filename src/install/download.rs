@@ -490,7 +490,7 @@ impl std::io::Seek for PartsReader {
 pub struct HashingReader<R> {
     inner: R,
     pos: u64,
-    hashed: u64,
+    pub(crate) hashed: u64,
     hasher: md5::Md5,
 }
 impl<R: std::io::Read + std::io::Seek> HashingReader<R> {
@@ -525,9 +525,20 @@ impl<R: std::io::Read> std::io::Read for HashingReader<R> {
         Ok(n)
     }
 }
-impl<R: std::io::Seek> std::io::Seek for HashingReader<R> {
+impl<R: std::io::Read + std::io::Seek> std::io::Seek for HashingReader<R> {
     fn seek(&mut self, to: SeekFrom) -> std::io::Result<u64> {
-        self.pos = self.inner.seek(to)?;
+        use md5::Digest;
+        let target = self.inner.seek(to)?;
+        // zip skips each entry's name/extra field with a seek; hash that small gap
+        // now, or `hashed` stalls at the first entry and finish() re-reads the whole file.
+        if target > self.hashed && target - self.hashed <= 64 * 1024 && self.pos >= self.hashed {
+            self.inner.seek(SeekFrom::Start(self.hashed))?;
+            let mut gap = vec![0u8; (target - self.hashed) as usize];
+            self.inner.read_exact(&mut gap)?;
+            self.hasher.update(&gap);
+            self.hashed = target;
+        }
+        self.pos = target;
         Ok(self.pos)
     }
 }

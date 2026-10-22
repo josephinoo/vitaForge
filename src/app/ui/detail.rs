@@ -552,7 +552,7 @@ fn install_progress_modal(
                 .corner_radius(RADIUS_LG)
                 .inner_margin(egui::vec2(28.0, 20.0))
                 .show(ui, |ui| {
-                    ui.set_width(300.0);
+                    ui.set_width(400.0);
                     ui.vertical_centered(|ui| {
                         ui.label(
                             egui::RichText::new(entry.name.as_str())
@@ -561,14 +561,20 @@ fn install_progress_modal(
                                 .color(TEXT_WHITE),
                         );
                         ui.add_space(16.0);
-                        install_stepper(ui, job);
+                        if !matches!(job, crate::install::Progress::Failed(_)) {
+                            install_stepper(ui, job, lang);
+                        }
                         ui.add_space(16.0);
                         if !finished {
-                            ui.add(egui::Spinner::new().size(20.0).color(ACCENT_STEAM));
+                            if let Some(fraction) = job.fraction() {
+                                ui.add(egui::ProgressBar::new(fraction).desired_width(360.0).fill(ACCENT_STEAM));
+                            } else {
+                                ui.add(egui::Spinner::new().size(20.0).color(ACCENT_STEAM));
+                            }
                             ui.add_space(8.0);
                         }
                         ui.label(
-                            egui::RichText::new(job.label())
+                            egui::RichText::new(job.label_for(lang))
                                 .size(FONT_SMALL)
                                 .color(TEXT_DIM),
                         );
@@ -591,34 +597,37 @@ fn install_progress_modal(
     }
 }
 
-const INSTALL_STEPS: [&str; 3] = ["Download", "Extract", "Install"];
-
-fn install_stepper(ui: &mut egui::Ui, progress: &crate::install::Progress) {
+fn install_stepper(ui: &mut egui::Ui, progress: &crate::install::Progress, lang: Language) {
+    let steps = if lang == Language::Spanish {
+        ["Descarga", "Verificación", "Extracción", "Instalación"]
+    } else {
+        ["Download", "Verify", "Extract", "Install"]
+    };
     use crate::install::Progress;
     let failed = matches!(progress, Progress::Failed(_));
     let current = match progress {
         Progress::Resolving
         | Progress::DownloadingData { .. }
-        | Progress::Downloading { .. }
-        | Progress::Finishing { .. } => 1,
-        Progress::Decrypting | Progress::Extracting { .. } => 2,
+        | Progress::Downloading { .. } => 1,
+        Progress::Finishing { .. } => 2,
+        Progress::Decrypting | Progress::Extracting { .. } => 3,
         Progress::Installing { .. }
         | Progress::Queued
         | Progress::Done
         | Progress::RebootRequired
         | Progress::Restarting
-        | Progress::Failed(_) => 3,
+        | Progress::Failed(_) => 4,
     };
     let circle_r = 14.0;
     let spacing = 90.0;
-    let total_width = spacing * (INSTALL_STEPS.len() as f32 - 1.0);
+    let total_width = spacing * (steps.len() as f32 - 1.0);
     let (rect, _) = ui.allocate_exact_size(
         egui::vec2(total_width, circle_r * 2.0 + 22.0),
         egui::Sense::hover(),
     );
     let center_y = rect.top() + circle_r;
     let start_x = rect.center().x - total_width / 2.0;
-    for (index, label) in INSTALL_STEPS.iter().enumerate() {
+    for (index, label) in steps.iter().enumerate() {
         let step = index + 1;
         let center = egui::pos2(start_x + index as f32 * spacing, center_y);
         if index > 0 {
@@ -1153,7 +1162,16 @@ fn install_action(
             ui.painter().text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
-                job.label(),
+                if !finished {
+                    let label = job.label_for(lang);
+                    let phase = label.split('·').next().unwrap_or(&label).trim();
+                    match job.fraction() {
+                        Some(fraction) => format!("{phase} · {:.0}%", fraction * 100.0),
+                        None => phase.to_owned(),
+                    }
+                } else {
+                    job.label_for(lang)
+                },
                 font(FONT_BODY),
                 text_color,
             );
@@ -1412,7 +1430,7 @@ fn requirements_block(
                         match dep_job {
                             Some((running_id, progress)) if running_id == dep.id => {
                                 ui.label(
-                                    egui::RichText::new(progress.label())
+                                    egui::RichText::new(progress.label_for(lang))
                                         .size(FONT_SMALL)
                                         .color(STAR_GOLD),
                                 );

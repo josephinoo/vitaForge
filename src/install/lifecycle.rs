@@ -55,17 +55,6 @@ pub fn restart_self() -> Result<()> {
     anyhow::bail!("restarting is only available on PS Vita")
 }
 
-/// Gives the UI a moment to show "restarting" before the process is replaced.
-pub fn restart_self_soon(lang: crate::app::i18n::Language) {
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(1500));
-        if let Err(err) = restart_self() {
-            super::log_file(&format!("restart after self-update failed: {err:#}"));
-            super::notify::send(lang.notify_restart_manual());
-        }
-    });
-}
-
 /// Removes an installed app and its LiveArea bubble through the system promoter.
 pub async fn uninstall(titleid: &str) -> Result<()> {
     let id = clean_title(titleid)?;
