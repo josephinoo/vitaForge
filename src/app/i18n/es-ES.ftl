@@ -83,6 +83,12 @@ no-comments-yet = Aún no hay comentarios. ¡Sé el primero!
 back-label = Atrás
 settings-title = AJUSTES
 language-label = Idioma
+settings-general = General
+settings-purge-confirm = Pulsa otra vez para confirmar
+cancel-confirm = Pulsa otra vez para cancelar
+btn-settings = Ajustes
+btn-choose = Elegir
+settings-free-space = Espacio libre (ux0)
 settings-storage = Almacenamiento
 settings-install-notifications = Notificaciones de instalación
 enabled = Activadas
@@ -173,3 +179,12 @@ data-heavy-body = Por el Wi-Fi de la Vita puede tardar una hora o más. Más rá
     5. Vuelve aquí y pulsa INSTALAR SOLO LA APP.
 data-heavy-app-only = INSTALAR SOLO LA APP
 data-heavy-download-here = DESCARGAR EN LA VITA
+
+settings-credits = Créditos
+credits-body =
+    Desarrollo: josephinoo y colaboradores de VitaForge.
+    Catálogo: DrDecki — VitaDBtoo-db; Rinnegatamante — VitaDB.
+    PSVitaAlive / VegettoSan y colaboradores — selección y metadatos del catálogo (CC BY 4.0, donde corresponda), y referencia para optimizar descargas y extracción.
+    Rinnegatamante — VitaDB-Downloader y vitaGL.
+    Northfear — integración de SDL2 / vitaGL.
+    vita-rust y VitaSDK — herramientas de desarrollo para PS Vita.

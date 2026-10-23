@@ -498,9 +498,14 @@ impl<R: std::io::Read + std::io::Seek> HashingReader<R> {
         use md5::Digest;
         Self { inner, pos: 0, hashed: 0, hasher: md5::Md5::new() }
     }
-    pub fn finish(mut self) -> std::io::Result<String> {
+    pub fn finish(
+        mut self,
+        mut on_progress: impl FnMut(u32) -> std::io::Result<()>,
+    ) -> std::io::Result<String> {
         use md5::Digest;
+        let total = self.inner.seek(SeekFrom::End(0))?;
         self.inner.seek(SeekFrom::Start(self.hashed))?;
+        on_progress((self.hashed.saturating_mul(100) / total.max(1)).min(100) as u32)?;
         let mut buf = vec![0u8; 1024 * 1024];
         loop {
             let n = self.inner.read(&mut buf)?;
@@ -508,7 +513,10 @@ impl<R: std::io::Read + std::io::Seek> HashingReader<R> {
                 break;
             }
             self.hasher.update(&buf[..n]);
+            self.hashed += n as u64;
+            on_progress((self.hashed.saturating_mul(100) / total.max(1)).min(100) as u32)?;
         }
+        on_progress(100)?;
         Ok(format!("{:x}", self.hasher.finalize()))
     }
 }

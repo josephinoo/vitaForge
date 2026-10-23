@@ -269,16 +269,17 @@ pub(crate) fn button_hints(
                                 TEXT_DIM,
                             );
                             match glyph {
-                                Glyph::Shoulders => {
+                                Glyph::Shoulders | Glyph::Start => {
+                                    let text = if *glyph == Glyph::Start { "START" } else { "L / R" };
                                     let (rect, _) = ui.allocate_exact_size(
-                                        egui::vec2(32.0, GLYPH),
+                                        egui::vec2(if *glyph == Glyph::Start { 40.0 } else { 32.0 }, GLYPH),
                                         egui::Sense::hover(),
                                     );
                                     ui.painter().rect_filled(rect, RADIUS_XS, BG_CARD);
                                     ui.painter().text(
                                         rect.center(),
                                         egui::Align2::CENTER_CENTER,
-                                        "L / R",
+                                        text,
                                         font(FONT_MICRO),
                                         TEXT_DIM,
                                     );

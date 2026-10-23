@@ -11,6 +11,7 @@ pub const GREEN_PLAY: egui::Color32 = egui::Color32::from_rgb(0x30, 0xd1, 0x58);
 pub const GREEN_PLAY_HOVER: egui::Color32 = egui::Color32::from_rgb(0x4c, 0xdd, 0x70);
 pub const BLUE_PLAY: egui::Color32 = egui::Color32::from_rgb(0x00, 0x70, 0xff);
 pub const BLUE_PLAY_HOVER: egui::Color32 = egui::Color32::from_rgb(0x33, 0xa6, 0xff);
+pub const DANGER: egui::Color32 = egui::Color32::from_rgb(0xff, 0x5f, 0x5f);
 pub const SEPARATOR: egui::Color32 = egui::Color32::from_rgb(0x35, 0x4a, 0x70);
 pub const TEXT_WHITE: egui::Color32 = egui::Color32::from_rgb(0xf4, 0xf7, 0xfb);
 pub const TEXT_DIM: egui::Color32 = egui::Color32::from_rgb(0xc6, 0xd3, 0xe8);

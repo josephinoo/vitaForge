@@ -111,6 +111,8 @@ pub enum AppCommand {
     InstallAppOnly,
     OpenSettings,
     CloseSettings,
+    OpenCredits,
+    SettingsTab(usize),
     SetLanguage(crate::app::i18n::Language),
     ToggleInstallNotifications,
     ClearIconCache,

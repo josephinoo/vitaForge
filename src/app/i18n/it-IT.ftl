@@ -32,6 +32,12 @@ update-available = AGGIORNAMENTO DISPONIBILE
 back-label = Indietro
 settings-title = IMPOSTAZIONI
 language-label = Lingua
+settings-general = Generale
+settings-purge-confirm = Premi di nuovo per confermare
+cancel-confirm = Premi di nuovo per annullare
+btn-settings = Impostazioni
+btn-choose = Scegli
+settings-free-space = Spazio libero (ux0)
 settings-storage = Archiviazione
 settings-install-notifications = Notifiche di installazione
 enabled = Attivate
@@ -109,3 +115,12 @@ data-heavy-body = Con il Wi-Fi della Vita può richiedere un'ora o più. Più ve
     5. Torna qui e premi INSTALLA SOLO L'APP.
 data-heavy-app-only = INSTALLA SOLO L'APP
 data-heavy-download-here = SCARICA SULLA VITA
+
+settings-credits = Crediti
+credits-body =
+    Sviluppo: josephinoo e collaboratori di VitaForge.
+    Catalogo: DrDecki — VitaDBtoo-db; Rinnegatamante — VitaDB.
+    PSVitaAlive / VegettoSan e collaboratori — selezione e metadati del catalogo (CC BY 4.0, ove applicabile), e riferimento per download ed estrazione.
+    Rinnegatamante — VitaDB-Downloader e vitaGL.
+    Northfear — integrazione SDL2 / vitaGL.
+    vita-rust e VitaSDK — strumenti di sviluppo per PS Vita.

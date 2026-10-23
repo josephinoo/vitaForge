@@ -41,6 +41,12 @@ pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
         .as_ref()
         .filter(|job| job.app_id == SELF_UPDATE_ID)
         .map(|job| &job.progress);
+    // Fades and slides the settings modal in; snaps back to 0 while it is closed.
+    let appear = ctx.animate_bool_with_time(
+        egui::Id::new("settings_appear"),
+        matches!(app.state, AppState::Settings { .. }),
+        if matches!(app.state, AppState::Settings { .. }) { 0.15 } else { 0.0 },
+    );
     let commands = match &app.state {
         AppState::Loading => loading_screen(
             ctx,
@@ -75,6 +81,7 @@ pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
                 entry,
                 progress,
                 app.navigation_locked(),
+                app.cancel_armed(),
                 *scroll_delta,
                 comments,
                 *comments_loaded,
@@ -90,7 +97,7 @@ pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
                     .map(|job| (job.app_id.as_str(), &job.progress)),
             )
         }
-        AppState::Settings { selected, previous } => {
+        AppState::Settings { selected, previous, credits } => {
             let mut commands = catalog_view(ctx, app, previous, self_update, self_update_progress);
             commands.extend(settings_modal(
                 ctx,
@@ -100,6 +107,9 @@ pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
                 &app.cache_stats,
                 app.cache_notice.as_deref(),
                 app.install_notifications,
+                app.purge_armed,
+                *credits,
+                appear,
             ));
             commands
         }
@@ -159,6 +169,7 @@ fn catalog_view(
         self_update,
         self_update_progress,
         &update_all,
+        matches!(app.state, crate::app::AppState::Settings { .. }),
     )
 }
 
@@ -190,26 +201,37 @@ fn catalog_screen(
     self_update: Option<&SelfUpdateInfo>,
     self_update_progress: Option<&crate::install::Progress>,
     update_all: &UpdateAllUi,
+    settings_open: bool,
 ) -> Vec<AppCommand> {
     let mut commands = Vec::new();
     let update_all_hint = match update_all {
         UpdateAllUi::Available(count) if tab == StoreTab::Updates => lang.update_all(*count),
         _ => String::new(),
     };
-    let hints = vec![
-        (Glyph::Cross, lang.btn_open()),
-        (Glyph::Circle, lang.btn_back()),
-        (
-            Glyph::Triangle,
-            if update_all_hint.is_empty() {
-                lang.btn_filter()
-            } else {
-                update_all_hint.as_str()
-            },
-        ),
-        (Glyph::Square, lang.btn_sort()),
-        (Glyph::Shoulders, lang.btn_tabs()),
-    ];
+    // The settings modal sits on top of the catalog, so its buttons replace the catalog's.
+    let hints = if settings_open {
+        vec![
+            (Glyph::Cross, lang.btn_choose()),
+            (Glyph::Circle, lang.btn_back()),
+            (Glyph::Shoulders, lang.btn_tabs()),
+        ]
+    } else {
+        vec![
+            (Glyph::Cross, lang.btn_open()),
+            (Glyph::Circle, lang.btn_back()),
+            (
+                Glyph::Triangle,
+                if update_all_hint.is_empty() {
+                    lang.btn_filter()
+                } else {
+                    update_all_hint.as_str()
+                },
+            ),
+            (Glyph::Square, lang.btn_sort()),
+            (Glyph::Shoulders, lang.btn_tabs()),
+            (Glyph::Start, lang.btn_settings()),
+        ]
+    };
     commands.extend(button_hints(
         ctx,
         lang,

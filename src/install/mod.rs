@@ -55,6 +55,7 @@ pub enum Progress {
         percent: u32,
     },
 
+    VerificationComplete,
     Decrypting,
     Extracting {
         done: u32,
@@ -119,6 +120,7 @@ impl Progress {
                 };
                 format!("{phase} · {}%", (*percent).min(100))
             }
+            Self::VerificationComplete => text("Verification complete · waiting for installer…", "Verificación completada · esperando al instalador…").to_owned(),
             Self::Decrypting => text("Decrypting package…", "Descifrando paquete…").to_owned(),
             Self::Extracting { done, total, file, files } if *total > 0 => format!(
                 "{} · {}% · {done}/{total} MiB · {} {file}/{files}",
@@ -446,6 +448,7 @@ pub fn start(entry: AppEntry) -> (watch::Receiver<Progress>, Arc<AtomicBool>) {
         entry.name, entry.platform, entry.download_url
     ));
     let (tx, rx) = watch::channel(Progress::Resolving);
+    let tx_failure = tx.clone();
     let cancel = Arc::new(AtomicBool::new(false));
     let cancel_worker = cancel.clone();
     // Own thread at default (UI-level) priority like VitaDB-Downloader: on the
@@ -494,11 +497,19 @@ pub fn start(entry: AppEntry) -> (watch::Receiver<Progress>, Arc<AtomicBool>) {
         .name("install".into())
         .stack_size(1024 * 1024)
         .spawn(move || {
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("failed to build the install runtime")
-                .block_on(install)
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("failed to build the install runtime")
+                    .block_on(install)
+            }));
+            if result.is_err() && !tx_failure.borrow().is_finished() {
+                log_file("Install thread panicked; see ux0:data/vitaforge/panic.log");
+                let _ = tx_failure.send(Progress::Failed(
+                    "installer stopped unexpectedly; see ux0:data/vitaforge/panic.log".to_owned(),
+                ));
+            }
         })
         .expect("failed to spawn the install thread");
     (rx, cancel)
@@ -1169,12 +1180,18 @@ async fn stage_data_and_vpk(
         );
         let verdict = match (&extracted, md5) {
             (Ok(()), Some(expected)) => {
-                let actual = hashing.finish().context("couldn't finish the md5 check")?;
-                log_file(&format!("md5 {}", if actual == expected { "ok" } else { "MISMATCH" }));
-                if actual == expected {
+                let actual = hashing.finish(|percent| {
+                    if cancel_worker.load(Ordering::Relaxed) {
+                        return Err(std::io::Error::other(CANCELLED_MESSAGE));
+                    }
+                    let _ = tx_worker.send(Progress::Finishing { step: "Verifying", percent });
                     Ok(())
-                } else {
-                    Err(anyhow::anyhow!("the game data was corrupted (md5 mismatch), please try again"))
+                });
+                log_file(&format!("md5 {}", if actual.as_ref().is_ok_and(|value| value == &expected) { "ok" } else { "failed" }));
+                match actual {
+                    Ok(actual) if actual == expected => Ok(()),
+                    Ok(_) => Err(anyhow::anyhow!("the game data was corrupted (md5 mismatch), please try again")),
+                    Err(err) => Err(err.into()),
                 }
             }
             _ => extracted,
@@ -1187,6 +1204,11 @@ async fn stage_data_and_vpk(
                 discard_data_download(&dest_owned);
             }
         }
+        if verdict.is_ok() {
+            let _ = tx_worker.send(Progress::VerificationComplete);
+        }
+        log_file(&format!("game data worker: releasing {} tracked file paths", written.len()));
+        drop(written);
         log_file(&format!("game data worker done: {}", if verdict.is_ok() { "ok" } else { "failed" }));
         verdict
     });
@@ -1299,9 +1321,9 @@ fn extract_from(
     mut on_progress: impl FnMut(u32, u32, u32, u32),
 ) -> Result<()> {
     use std::io::{Read, Write};
-    // zip seeks to every entry and BufReader drops its buffer on seek, so a big buffer
-    // re-reads that much per small file; reads >= capacity bypass it anyway.
-    let buffered = std::io::BufReader::with_capacity(64 * 1024, source);
+    // ZIP preparation visits every local header and returns to the index, discarding
+    // the buffer twice per entry; keep read-ahead small (large reads bypass it).
+    let buffered = std::io::BufReader::with_capacity(4 * 1024, source);
     let mut zip = zip::ZipArchive::new(buffered).context("the download isn't a valid vpk (zip)")?;
     // Progress is in MB written, so a single 1 GB entry still moves the bar.
     const MB: u64 = 1024 * 1024;
@@ -1361,6 +1383,42 @@ mod parts_extract_tests {
     use md5::{Digest, Md5};
     use std::io::Write;
 
+    struct CountedReader<R> {
+        inner: R,
+        bytes: u64,
+    }
+
+    impl<R: std::io::Read> std::io::Read for CountedReader<R> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let n = self.inner.read(buf)?;
+            self.bytes += n as u64;
+            Ok(n)
+        }
+    }
+
+    impl<R: std::io::Seek> std::io::Seek for CountedReader<R> {
+        fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
+            self.inner.seek(pos)
+        }
+    }
+
+    #[test]
+    fn remaining_hash_reports_progress_and_can_be_cancelled() {
+        let bytes = vec![7u8; 2 * 1024 * 1024];
+        let mut progress = Vec::new();
+        let digest = download::HashingReader::new(std::io::Cursor::new(&bytes))
+            .finish(|percent| { progress.push(percent); Ok(()) })
+            .unwrap();
+        assert_eq!(digest, format!("{:x}", Md5::digest(&bytes)));
+        assert_eq!(progress.first(), Some(&0));
+        assert!(progress.contains(&50));
+        assert_eq!(progress.last(), Some(&100));
+        let err = download::HashingReader::new(std::io::Cursor::new(&bytes))
+            .finish(|_| Err(std::io::Error::other(CANCELLED_MESSAGE)))
+            .unwrap_err();
+        assert_eq!(err.to_string(), CANCELLED_MESSAGE);
+    }
+
     #[test]
     fn extracts_and_hashes_a_zip_split_into_parts() {
         let root = std::env::temp_dir().join(format!("vf_parts_{}", std::process::id()));
@@ -1384,12 +1442,14 @@ mod parts_extract_tests {
             std::fs::write(download::part_path(&dest, i), &zip_bytes[i * chunk..end]).unwrap();
         }
         let out = root.join("out");
-        let mut hashing = download::HashingReader::new(download::PartsReader::open(&dest).unwrap());
+        let mut source = CountedReader { inner: download::PartsReader::open(&dest).unwrap(), bytes: 0 };
+        let mut hashing = download::HashingReader::new(&mut source);
         let mut written = Vec::new();
         extract_from(&mut hashing, &out, &AtomicBool::new(false), &mut written, |_, _, _, _| {}).unwrap();
         // only the central directory may be left for finish() to re-read
         assert!(zip_bytes.len() as u64 - hashing.hashed < 8 * 1024, "hashed {}", hashing.hashed);
-        assert_eq!(hashing.finish().unwrap(), format!("{:x}", Md5::digest(&zip_bytes)));
+        assert_eq!(hashing.finish(|_| Ok(())).unwrap(), format!("{:x}", Md5::digest(&zip_bytes)));
+        assert!(source.bytes < zip_bytes.len() as u64 * 3, "excessive ZIP reads: {} for {} bytes", source.bytes, zip_bytes.len());
         assert_eq!(written.len(), 40);
         assert_eq!(std::fs::read(out.join("game/f39.bin")).unwrap(), vec![39u8; 997 * 40]);
         let _ = std::fs::remove_dir_all(&root);
@@ -1452,6 +1512,9 @@ mod progress_tests {
         assert_eq!(Progress::Extracting { done: 1, total: 4, file: 0, files: 0 }.fraction(), Some(0.25));
         assert_eq!(Progress::Installing { elapsed_secs: 3 }.fraction(), None);
         assert_eq!(Progress::Done.fraction(), Some(1.0));
+        assert_eq!(Progress::VerificationComplete.fraction(), None);
+        assert!(!Progress::VerificationComplete.is_finished());
+        assert_eq!(Progress::VerificationComplete.label_for(crate::app::i18n::Language::Spanish), "Verificación completada · esperando al instalador…");
         assert_eq!(Progress::Finishing { step: "Verifying", percent: 40 }.fraction(), Some(0.4));
         assert_eq!(Progress::Finishing { step: "Verifying", percent: 120 }.fraction(), Some(1.0));
         assert_eq!(Progress::Finishing { step: "Verifying", percent: 40 }.label_for(crate::app::i18n::Language::Spanish), "Verificando archivo · 40%");

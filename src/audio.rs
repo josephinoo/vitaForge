@@ -150,9 +150,17 @@ impl AudioEngine {
                 .unwrap_or((48_000, 1));
             let port = open_port(format.0, format.1);
 
-            while let Ok(effect) = rx.recv() {
-                if let Some(sound) = sounds.get(&effect) {
-                    play_sound_on_hardware(port, sound);
+            // Holding the d-pad queues a sound every repeat tick, faster than each one plays.
+            // Playing them back to back made the clicks lag far behind the cursor, so a newer
+            // sound cuts the current one and anything still queued collapses to the latest.
+            let mut next = rx.recv().ok();
+            while let Some(effect) = next {
+                next = match sounds.get(&effect) {
+                    Some(sound) => play_sound_on_hardware(port, sound, &rx),
+                    None => None,
+                };
+                if next.is_none() {
+                    next = rx.recv().ok();
                 }
             }
             close_port(port);
@@ -209,14 +217,17 @@ fn close_port(port: i32) {
 fn close_port(_port: i32) {}
 
 #[cfg(target_os = "vita")]
-fn play_sound_on_hardware(port: i32, sound: &WavSound) {
+fn play_sound_on_hardware(port: i32, sound: &WavSound, rx: &mpsc::Receiver<Sfx>) -> Option<Sfx> {
     if port < 0 {
-        return;
+        return rx.try_iter().last();
     }
     unsafe {
         let channels = sound.channels.max(1) as usize;
         let sample_stride = channels * GRAIN_SIZE;
         for chunk in sound.samples.chunks(sample_stride) {
+            if let Some(newer) = rx.try_iter().last() {
+                return Some(newer);
+            }
             if chunk.len() == sample_stride {
                 vitasdk_sys::sceAudioOutOutput(port, chunk.as_ptr() as *const _);
             } else {
@@ -226,7 +237,10 @@ fn play_sound_on_hardware(port: i32, sound: &WavSound) {
             }
         }
     }
+    None
 }
 
 #[cfg(not(target_os = "vita"))]
-fn play_sound_on_hardware(_port: i32, _sound: &WavSound) {}
+fn play_sound_on_hardware(_port: i32, _sound: &WavSound, rx: &mpsc::Receiver<Sfx>) -> Option<Sfx> {
+    rx.try_iter().last()
+}
