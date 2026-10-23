@@ -1,5 +1,7 @@
 use std::sync::OnceLock;
 use std::time::Duration;
+#[cfg(test)]
+mod runtime_tests;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
 pub const USER_AGENT: &str = concat!("VitaForge/", env!("CARGO_PKG_VERSION"));

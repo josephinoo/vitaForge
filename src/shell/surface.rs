@@ -3,12 +3,7 @@ use sdl2::video::Window;
 
 #[derive(Default, Clone, Copy)]
 pub struct FramePaintStats {
-    pub texture_apply_secs: f64,
-    pub geometry_secs: f64,
-    pub present_secs: f64,
     pub draw_calls: u32,
-    pub textures_uploaded: u32,
-    pub vertices_drawn: u32,
     pub missing_textures: u32,
 }
 pub const WIDTH: u32 = 960;
@@ -112,11 +107,7 @@ impl VitaSurface {
         use crate::shell::vgl::{GL_FALSE, GL_TRUE, vglSwapBuffers};
 
         let PaintStats {
-            texture_apply_secs,
-            geometry_secs,
             draw_calls,
-            textures_uploaded,
-            vertices_drawn,
             missing_textures,
         } = self.egui_painter.paint(
             [WIDTH, HEIGHT],
@@ -124,7 +115,6 @@ impl VitaSurface {
             primitives,
             textures_delta,
         )?;
-        let present_started_at = std::time::Instant::now();
         let flag = if self.has_common_dialog {
             GL_TRUE
         } else {
@@ -133,14 +123,8 @@ impl VitaSurface {
         unsafe {
             vglSwapBuffers(flag);
         }
-        let present_secs = present_started_at.elapsed().as_secs_f64();
         Ok(FramePaintStats {
-            texture_apply_secs,
-            geometry_secs,
-            present_secs,
             draw_calls,
-            textures_uploaded,
-            vertices_drawn,
             missing_textures,
         })
     }
@@ -213,11 +197,7 @@ impl VitaSurface {
         use crate::shell::egui_painter::PaintStats;
 
         let PaintStats {
-            texture_apply_secs,
-            geometry_secs,
             draw_calls,
-            textures_uploaded,
-            vertices_drawn,
             missing_textures,
         } = self.egui_painter.paint(
             &mut self.canvas,
@@ -226,16 +206,9 @@ impl VitaSurface {
             primitives,
             textures_delta,
         )?;
-        let present_started_at = std::time::Instant::now();
         self.canvas.present();
-        let present_secs = present_started_at.elapsed().as_secs_f64();
         Ok(FramePaintStats {
-            texture_apply_secs,
-            geometry_secs,
-            present_secs,
             draw_calls,
-            textures_uploaded,
-            vertices_drawn,
             missing_textures,
         })
     }

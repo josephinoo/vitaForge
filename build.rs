@@ -1,4 +1,6 @@
 fn main() {
+    println!("cargo:rerun-if-changed=src");
+    println!("cargo:rerun-if-changed=vendor/mio/src");
     println!("cargo:rerun-if-changed=tools/vita-sce-gap.ld");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("vita") {
         println!("cargo:rustc-link-arg=-Wl,-T,tools/vita-sce-gap.ld");

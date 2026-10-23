@@ -612,6 +612,7 @@ pub enum AppState {
     Settings {
         previous: Box<CatalogState>,
         selected: usize,
+        credits: bool,
     },
 }
 enum CatalogSource {
@@ -646,6 +647,9 @@ pub struct App {
     pub cache_stats: data::cache_manager::CacheStats,
     pub cache_notice: Option<String>,
     icons_need_clear: bool,
+    pub purge_armed: bool,
+    /// Set by the first ○ during a download; a second ○ within 3 s cancels it.
+    pub cancel_armed_at: Option<std::time::Instant>,
     install_notifications: bool,
     update_queue: std::collections::VecDeque<AppEntry>,
     pub update_active: bool,
@@ -716,6 +720,8 @@ impl App {
             audio: crate::audio::AudioEngine::new(),
             cache_stats: data::cache_manager::CacheStats::default(),
             cache_notice: None,
+            purge_armed: false,
+            cancel_armed_at: None,
             icons_need_clear: false,
             install_notifications: settings.install_notifications,
             update_queue: std::collections::VecDeque::new(),
@@ -753,6 +759,9 @@ impl App {
             let _ = tx.send(stats);
         });
         self.cache_stats_rx = Some(rx);
+    }
+    pub fn cancel_armed(&self) -> bool {
+        self.cancel_armed_at.is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(3))
     }
     /// A running install pins the user to the page that started it, except
     /// during "update all", where the queue runs on its own and they can browse.
@@ -994,6 +1003,12 @@ impl App {
                     && !self.update_active
                     && self.install.as_ref().is_some_and(|job| job.progress.is_cancellable())
                 {
+                    // ○ means "back" everywhere else, so one press must not throw away a download.
+                    if !self.cancel_armed() {
+                        self.cancel_armed_at = Some(std::time::Instant::now());
+                        return Ok(());
+                    }
+                    self.cancel_armed_at = None;
                     return self.handle_command(AppCommand::CancelInstall);
                 }
                 if let AppState::Catalog(catalog) = &mut self.state {
@@ -1324,15 +1339,34 @@ impl App {
                 };
                 if let Some(index) = target {
                     self.open_app(index);
-                } else if let AppState::Settings { selected, .. } = &self.state {
+                } else if let AppState::Settings { selected, credits, .. } = &self.state {
+                    if *credits { return Ok(()); }
                     return match *selected {
                         index if index < Language::ALL.len() => self.handle_command(AppCommand::SetLanguage(Language::ALL[index])),
                         5 => self.handle_command(AppCommand::ClearIconCache),
                         6 => self.handle_command(AppCommand::ClearCatalogCache),
                         7 => self.handle_command(AppCommand::PurgeAllCache),
                         8 => self.handle_command(AppCommand::ToggleInstallNotifications),
+                        9 => self.handle_command(AppCommand::OpenCredits),
                         _ => Ok(()),
                     };
+                }
+            }
+            AppCommand::Input(step @ (InputCommand::CategoryPrev | InputCommand::CategoryNext))
+                if matches!(self.state, AppState::Settings { credits: false, .. }) =>
+            {
+                let AppState::Settings { selected, .. } = &self.state else { unreachable!() };
+                let tabs = ui::settings::SETTINGS_TABS.len();
+                let tab = ui::settings::settings_tab(*selected);
+                let tab = if step == InputCommand::CategoryPrev { (tab + tabs - 1) % tabs } else { (tab + 1) % tabs };
+                return self.handle_command(AppCommand::SettingsTab(tab));
+            }
+            AppCommand::SettingsTab(tab) => {
+                self.purge_armed = false;
+                if let AppState::Settings { selected, .. } = &mut self.state {
+                    if ui::settings::settings_tab(*selected) != tab {
+                        *selected = ui::settings::SETTINGS_TABS[tab][0];
+                    }
                 }
             }
             AppCommand::Input(InputCommand::CategoryPrev) => {
@@ -1449,10 +1483,35 @@ impl App {
                             _ => {}
                         }
                     }
-                    AppState::Settings { selected, .. } => {
+                    AppState::Settings { selected, credits, .. } => {
+                        if *credits { return Ok(()); }
+                        self.purge_armed = false;
+                        self.cache_notice = None;
+                        let languages = Language::ALL.len();
                         match direction {
-                            InputCommand::MoveUp => *selected = selected.saturating_sub(1),
-                            InputCommand::MoveDown => *selected = (*selected + 1).min(8),
+                            // The language chips sit on one line: left/right walks them.
+                            InputCommand::MoveLeft if *selected < languages => *selected = selected.saturating_sub(1),
+                            InputCommand::MoveRight if *selected < languages => *selected = (*selected + 1).min(languages - 1),
+                            InputCommand::MoveUp | InputCommand::MoveDown => {
+                                // The chip line counts as one row (id 0); landing on it focuses the active language.
+                                let rows: Vec<usize> = ui::settings::SETTINGS_TABS[ui::settings::settings_tab(*selected)]
+                                    .iter()
+                                    .copied()
+                                    .filter(|&row| row == 0 || row >= languages)
+                                    .collect();
+                                let current = if *selected < languages { 0 } else { *selected };
+                                let pos = rows.iter().position(|&row| row == current).unwrap_or(0);
+                                let pos = if direction == InputCommand::MoveUp {
+                                    pos.saturating_sub(1)
+                                } else {
+                                    (pos + 1).min(rows.len() - 1)
+                                };
+                                *selected = match rows[pos] {
+                                    0 if *selected < languages => *selected,
+                                    0 => Language::ALL.iter().position(|&l| l == self.lang).unwrap_or(0),
+                                    row => row,
+                                };
+                            }
                             _ => {}
                         }
                     }
@@ -1664,10 +1723,22 @@ impl App {
                 let selected = Language::ALL.iter().position(|&language| language == self.lang).unwrap_or(0);
                 self.refresh_cache_stats();
                 self.cache_notice = None;
-                self.state = AppState::Settings { previous, selected };
+                self.state = AppState::Settings { previous, selected, credits: false };
                 self.audio.play(crate::audio::Sfx::MenuFlyIn);
             }
+            AppCommand::OpenCredits => {
+                if let AppState::Settings { credits, .. } = &mut self.state {
+                    *credits = true;
+                }
+            }
             AppCommand::CloseSettings => {
+                self.purge_armed = false;
+                if let AppState::Settings { credits, .. } = &mut self.state {
+                    if *credits {
+                        *credits = false;
+                        return Ok(());
+                    }
+                }
                 if let AppState::Settings { previous, .. } = &mut self.state {
                     let previous = std::mem::replace(previous.as_mut(), CatalogState::empty());
                     self.state = AppState::Catalog(previous);
@@ -1701,6 +1772,11 @@ impl App {
                 self.cache_notice = Some(self.lang.settings_cleared_catalog().to_owned());
             }
             AppCommand::PurgeAllCache => {
+                // Destructive: the first press only arms it, the second one purges.
+                self.purge_armed = !self.purge_armed;
+                if self.purge_armed {
+                    return Ok(());
+                }
                 let freed = data::cache_manager::purge_all_cache();
                 self.icons.clear_disk_index();
                 self.icons_need_clear = true;

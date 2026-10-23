@@ -10,6 +10,7 @@ pub(crate) enum Glyph {
     Triangle,
     Square,
     Shoulders,
+    Start,
 }
 
 static BUTTON_TEXTURES: std::sync::OnceLock<[egui::TextureHandle; 4]> = std::sync::OnceLock::new();
@@ -52,7 +53,7 @@ pub(crate) fn button_texture(ctx: &egui::Context, glyph: Glyph) -> Option<egui::
         Glyph::Circle => Some(textures[1].clone()),
         Glyph::Triangle => Some(textures[2].clone()),
         Glyph::Square => Some(textures[3].clone()),
-        Glyph::Shoulders => None,
+        Glyph::Shoulders | Glyph::Start => None,
     }
 }
 

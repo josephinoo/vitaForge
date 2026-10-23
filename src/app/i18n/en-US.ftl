@@ -83,6 +83,12 @@ no-comments-yet = No comments yet. Be the first!
 back-label = Back
 settings-title = SETTINGS
 language-label = Language
+settings-general = General
+settings-purge-confirm = Press again to confirm
+cancel-confirm = Press again to cancel
+btn-settings = Settings
+btn-choose = Select
+settings-free-space = Free space (ux0)
 settings-storage = Storage
 settings-install-notifications = Install notifications
 enabled = Enabled
@@ -173,3 +179,12 @@ data-heavy-body = Over the Vita's Wi-Fi this can take an hour or more. Faster fr
     5. Back here, press INSTALL APP ONLY.
 data-heavy-app-only = INSTALL APP ONLY
 data-heavy-download-here = DOWNLOAD ON VITA
+
+settings-credits = Credits
+credits-body =
+    Development: josephinoo and VitaForge contributors.
+    Catalog: DrDecki — VitaDBtoo-db; Rinnegatamante — VitaDB.
+    PSVitaAlive / VegettoSan and contributors — catalog curation and metadata (CC BY 4.0, where applicable), and reference for download and extraction optimizations.
+    Rinnegatamante — VitaDB-Downloader and vitaGL.
+    Northfear — SDL2 / vitaGL integration.
+    vita-rust and VitaSDK — PS Vita development tools.

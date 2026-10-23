@@ -67,11 +67,7 @@ struct PendingUpload {
 }
 #[derive(Default, Clone, Copy)]
 pub struct PaintStats {
-    pub texture_apply_secs: f64,
-    pub geometry_secs: f64,
     pub draw_calls: u32,
-    pub textures_uploaded: u32,
-    pub vertices_drawn: u32,
     pub missing_textures: u32,
 }
 impl SdlEguiPainter {
@@ -109,12 +105,8 @@ impl SdlEguiPainter {
         primitives: &[egui::ClippedPrimitive],
         textures_delta: &egui::TexturesDelta,
     ) -> Result<PaintStats> {
-        let texture_apply_started_at = std::time::Instant::now();
-        let textures_uploaded = self.apply_textures(canvas, textures_delta);
-        let texture_apply_secs = texture_apply_started_at.elapsed().as_secs_f64();
-        let geometry_started_at = std::time::Instant::now();
+        self.apply_textures(canvas, textures_delta);
         let mut draw_calls = 0u32;
-        let mut vertices_drawn = 0u32;
         let mut missing_textures = 0u32;
         let mut current_clip: Option<sdl2::rect::Rect> = None;
         let mut current_texture_id: Option<egui::TextureId> = None;
@@ -144,7 +136,6 @@ impl SdlEguiPainter {
                     canvas,
                     current_texture_id,
                     &mut draw_calls,
-                    &mut vertices_drawn,
                 );
                 canvas.set_clip_rect(clip_rect);
                 current_clip = Some(clip_rect);
@@ -163,9 +154,7 @@ impl SdlEguiPainter {
             canvas,
             current_texture_id,
             &mut draw_calls,
-            &mut vertices_drawn,
         );
-        let geometry_secs = geometry_started_at.elapsed().as_secs_f64();
         canvas.set_clip_rect(None);
         for texture_id in &textures_delta.free {
             self.pending.remove(texture_id);
@@ -175,11 +164,7 @@ impl SdlEguiPainter {
             self.recycle(freed.texture);
         }
         Ok(PaintStats {
-            texture_apply_secs,
-            geometry_secs,
             draw_calls,
-            textures_uploaded,
-            vertices_drawn,
             missing_textures,
         })
     }
@@ -214,7 +199,6 @@ impl SdlEguiPainter {
         canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
         texture_id: Option<egui::TextureId>,
         draw_calls: &mut u32,
-        vertices_drawn: &mut u32,
     ) {
         if self.indices.is_empty() || self.vertices.is_empty() {
             self.vertices.clear();
@@ -228,7 +212,6 @@ impl SdlEguiPainter {
             eprintln!("skipped a draw call: {err}");
         } else {
             *draw_calls += 1;
-            *vertices_drawn += self.vertices.len() as u32;
         }
         self.vertices.clear();
         self.indices.clear();

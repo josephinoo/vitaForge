@@ -33,222 +33,6 @@ const UI_SCALE: f32 = 1.3;
 const ACTIVE_FRAME_TIME: Duration = Duration::from_millis(16);
 const STICK_REPEAT_DELAY: Duration = Duration::from_millis(200);
 const STICK_REPEAT_INTERVAL: Duration = Duration::from_millis(70);
-const FRAME_STATS_INTERVAL: Duration = Duration::from_secs(5);
-const SLOW_FRAME_THRESHOLD: Duration = Duration::from_millis(20);
-const FRAME_LOG_DIR: &str = "ux0:data/vitaforge";
-const FRAME_LOG_FILE: &str = "ux0:data/vitaforge/frame_stats.log";
-fn log_line(line: &str) {
-    static LOGGER: std::sync::OnceLock<std::sync::mpsc::SyncSender<String>> =
-        std::sync::OnceLock::new();
-    let sender = LOGGER.get_or_init(|| {
-        let (sender, receiver) = std::sync::mpsc::sync_channel::<String>(8);
-        std::thread::spawn(move || {
-            use std::io::Write;
-            while let Ok(line) = receiver.recv() {
-                eprintln!("{line}");
-                if let Ok(mut file) = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(FRAME_LOG_FILE)
-                {
-                    let _ = writeln!(file, "{line}");
-                }
-            }
-        });
-        sender
-    });
-    let _ = sender.try_send(line.to_owned());
-}
-const LONG_GAP_THRESHOLD: Duration = Duration::from_millis(25);
-#[derive(Default)]
-struct FrameStats {
-    window_started_at: Option<Instant>,
-    frames: u32,
-    tick: Duration,
-    build_ui: Duration,
-    tessellate: Duration,
-    texture_apply: Duration,
-    geometry: Duration,
-    present: Duration,
-    draw_calls: u64,
-    textures_uploaded: u64,
-    vertices_drawn: u64,
-    missing_textures: u64,
-    stalled_frames: u32,
-    iterations: u32,
-    commands: u32,
-    keyboard_commands: u32,
-    controller_button_commands: u32,
-    last_painted_at: Option<Instant>,
-    max_gap: Duration,
-    long_gaps: u32,
-    last_repeat_at: Option<Instant>,
-    repeats: u32,
-    max_repeat_gap: Duration,
-    frame_times: Vec<Duration>,
-    pending_log: Vec<String>,
-}
-impl FrameStats {
-    fn note_iteration(&mut self) {
-        self.iterations += 1;
-        self.window_started_at.get_or_insert_with(Instant::now);
-    }
-    fn note_commands(&mut self, count: usize) {
-        self.commands += count as u32;
-    }
-    fn note_keyboard_command(&mut self) {
-        self.keyboard_commands += 1;
-    }
-    fn note_controller_button_command(&mut self) {
-        self.controller_button_commands += 1;
-    }
-    fn note_repeat(&mut self) {
-        let now = Instant::now();
-        if let Some(previous) = self.last_repeat_at {
-            self.max_repeat_gap = self.max_repeat_gap.max(now.duration_since(previous));
-        }
-        self.last_repeat_at = Some(now);
-        self.repeats += 1;
-    }
-    const STALL_THRESHOLD: u32 = 30;
-    fn note_stall(&mut self, draw_calls: u32, missing_textures: u32) -> bool {
-        if draw_calls == 0 && missing_textures == 0 {
-            self.stalled_frames += 1;
-        } else {
-            self.stalled_frames = 0;
-        }
-        if self.stalled_frames >= Self::STALL_THRESHOLD {
-            self.stalled_frames = 0;
-            true
-        } else {
-            false
-        }
-    }
-    fn record(
-        &mut self,
-        tick: Duration,
-        build_ui: Duration,
-        tessellate: Duration,
-        paint: FramePaintStats,
-    ) {
-        let now = Instant::now();
-        let texture_apply = Duration::from_secs_f64(paint.texture_apply_secs);
-        let geometry = Duration::from_secs_f64(paint.geometry_secs);
-        let present = Duration::from_secs_f64(paint.present_secs);
-        self.frames += 1;
-        self.tick += tick;
-        self.build_ui += build_ui;
-        self.tessellate += tessellate;
-        self.texture_apply += texture_apply;
-        self.geometry += geometry;
-        self.present += present;
-        self.draw_calls += paint.draw_calls as u64;
-        self.textures_uploaded += paint.textures_uploaded as u64;
-        self.vertices_drawn += paint.vertices_drawn as u64;
-        self.missing_textures += paint.missing_textures as u64;
-        let paint_total = texture_apply + geometry + present;
-        let total = tick + build_ui + tessellate + paint_total;
-        self.frame_times.push(total);
-        if let Some(previous) = self.last_painted_at {
-            let gap = now.duration_since(previous);
-            self.max_gap = self.max_gap.max(gap);
-            if gap > LONG_GAP_THRESHOLD {
-                self.long_gaps += 1;
-                self.pending_log.push(format!(
-                    "long gap: {:.1}ms since last painted frame (work={:.1}ms elsewhere={:.1}ms)",
-                    gap.as_secs_f64() * 1000.0,
-                    total.as_secs_f64() * 1000.0,
-                    gap.saturating_sub(total).as_secs_f64() * 1000.0,
-                ));
-            }
-        }
-        self.last_painted_at = Some(now);
-        if total > SLOW_FRAME_THRESHOLD {
-            self.pending_log.push(format!(
-                "slow frame: tick={:.1}ms build_ui={:.1}ms tessellate={:.1}ms paint={:.1}ms \
-                 (texture_apply={:.1}ms×{} geometry={:.1}ms×{}draws/{}verts present={:.1}ms) total={:.1}ms",
-                tick.as_secs_f64() * 1000.0,
-                build_ui.as_secs_f64() * 1000.0,
-                tessellate.as_secs_f64() * 1000.0,
-                paint_total.as_secs_f64() * 1000.0,
-                texture_apply.as_secs_f64() * 1000.0,
-                paint.textures_uploaded,
-                geometry.as_secs_f64() * 1000.0,
-                paint.draw_calls,
-                paint.vertices_drawn,
-                present.as_secs_f64() * 1000.0,
-                total.as_secs_f64() * 1000.0,
-            ));
-        }
-    }
-    fn maybe_flush(&mut self) {
-        let Some(window_started_at) = self.window_started_at else {
-            return;
-        };
-        let elapsed = window_started_at.elapsed();
-        if elapsed < FRAME_STATS_INTERVAL {
-            return;
-        }
-        let seconds = elapsed.as_secs_f64();
-        let frames = self.frames.max(1) as f64;
-        self.pending_log.push(format!(
-            "frame stats ({:.1}s): {} painted ({:.1} fps) · {} iterations · \
-             {} commands [{} keyboard, {} controller-button (one-shot), {} held-direction repeat \
-             (stick or D-pad)] (repeat worst gap {:.0}ms) · worst frame gap {:.0}ms, {} over {}ms",
-            seconds,
-            self.frames,
-            self.frames as f64 / seconds,
-            self.iterations,
-            self.commands,
-            self.keyboard_commands,
-            self.controller_button_commands,
-            self.repeats,
-            self.max_repeat_gap.as_secs_f64() * 1000.0,
-            self.max_gap.as_secs_f64() * 1000.0,
-            self.long_gaps,
-            LONG_GAP_THRESHOLD.as_millis(),
-        ));
-        if self.frames > 0 {
-            let (p95, p99) = frame_percentiles(&self.frame_times);
-            self.pending_log.push(format!(
-                "  avg per painted frame: tick={:.2}ms build_ui={:.2}ms tessellate={:.2}ms \
-                 texture_apply={:.2}ms ({:.1} uploads) geometry={:.2}ms ({:.1} draws, {:.0} verts, {} missing textures) present={:.2}ms",
-                self.tick.as_secs_f64() * 1000.0 / frames,
-                self.build_ui.as_secs_f64() * 1000.0 / frames,
-                self.tessellate.as_secs_f64() * 1000.0 / frames,
-                self.texture_apply.as_secs_f64() * 1000.0 / frames,
-                self.textures_uploaded as f64 / frames,
-                self.geometry.as_secs_f64() * 1000.0 / frames,
-                self.draw_calls as f64 / frames,
-                self.vertices_drawn as f64 / frames,
-                self.missing_textures,
-                self.present.as_secs_f64() * 1000.0 / frames,
-            ));
-            self.pending_log.push(format!(
-                "  measured frame p95={:.2}ms p99={:.2}ms (present wait included)",
-                p95.as_secs_f64() * 1000.0,
-                p99.as_secs_f64() * 1000.0,
-            ));
-        }
-        log_line(&self.pending_log.join("\n"));
-        let last_painted_at = self.last_painted_at;
-        let last_repeat_at = self.last_repeat_at;
-        *self = FrameStats {
-            last_painted_at,
-            last_repeat_at,
-            ..FrameStats::default()
-        };
-    }
-}
-fn frame_percentiles(samples: &[Duration]) -> (Duration, Duration) {
-    if samples.is_empty() {
-        return (Duration::ZERO, Duration::ZERO);
-    }
-    let mut sorted = samples.to_vec();
-    sorted.sort_unstable();
-    let percentile = |numerator: usize| sorted[(sorted.len() - 1) * numerator / 100];
-    (percentile(95), percentile(99))
-}
 struct ImeSession {
     target: TextTarget,
     query_before: String,
@@ -276,16 +60,8 @@ pub fn run(mut app: App) -> Result<()> {
     let mut last_state_kind = std::mem::discriminant(&app.state);
     let mut transition_started_at = Instant::now();
     const SCREEN_FADE_SECS: f32 = 0.15;
-    let mut frame_stats = FrameStats::default();
-    let _ = std::fs::create_dir_all(FRAME_LOG_DIR);
-    let _ = std::fs::write(FRAME_LOG_FILE, "");
-    log_line(&format!(
-        "=== vitaforge b{} — new session ===",
-        env!("BUILD_STAMP")
-    ));
+    let mut stalled_frames = 0u32;
     loop {
-        frame_stats.note_iteration();
-        frame_stats.maybe_flush();
         let mut egui_events = Vec::new();
         pointer.deferred(&mut egui_events);
         let mut direct_commands = Vec::new();
@@ -314,12 +90,10 @@ pub fn run(mut app: App) -> Result<()> {
             }
             if let Some(command) = map_keyboard_event(&event) {
                 direct_commands.push(command);
-                frame_stats.note_keyboard_command();
             }
             pointer.map_event(&event, screen_points, UI_SCALE, &mut egui_events);
             if let Some(command) = map_controller_button_event(&event) {
                 direct_commands.push(command);
-                frame_stats.note_controller_button_command();
             }
         }
         if ime.is_some() {
@@ -371,7 +145,6 @@ pub fn run(mut app: App) -> Result<()> {
                     {
                         direct_commands.push(direction.into());
                         last_repeat_at = Instant::now();
-                        frame_stats.note_repeat();
                     }
                 }
                 Some(direction) => {
@@ -379,20 +152,16 @@ pub fn run(mut app: App) -> Result<()> {
                     held_direction = Some(direction);
                     held_since = Instant::now();
                     last_repeat_at = Instant::now();
-                    frame_stats.note_repeat();
                 }
                 None => held_direction = None,
             }
         }
-        frame_stats.note_commands(direct_commands.len());
         for command in direct_commands {
             app.handle_command(command)?;
         }
         let pending_gpu = surface.pending_texture_uploads();
         app.icons.set_gpu_backlog(pending_gpu);
-        let tick_started_at = Instant::now();
         app.tick(&egui_ctx)?;
-        let tick_elapsed = tick_started_at.elapsed();
         let text_target = match &app.state {
             crate::app::AppState::Catalog(catalog) if catalog.search_requested => {
                 Some(TextTarget::Search)
@@ -422,20 +191,16 @@ pub fn run(mut app: App) -> Result<()> {
             events: egui_events,
             ..Default::default()
         };
-        let build_ui_started_at = Instant::now();
         let mut ui_commands = Vec::new();
         let full_output = egui_ctx.run(raw_input, |ctx| {
             ui_commands = build_ui(ctx, &app);
         });
-        let build_ui_elapsed = build_ui_started_at.elapsed();
         app.clear_one_shot_ui_state();
         for command in ui_commands {
             app.handle_command(command)?;
         }
-        let tessellate_started_at = Instant::now();
         let clipped_primitives =
             egui_ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
-        let tessellate_elapsed = tessellate_started_at.elapsed();
         surface.set_common_dialog(ime.is_some());
         surface.draw_scene();
         let paint_stats: FramePaintStats = surface.paint_egui(
@@ -445,8 +210,13 @@ pub fn run(mut app: App) -> Result<()> {
         )?;
         app.icons.set_gpu_backlog(surface.pending_texture_uploads());
         let mut dropped = surface.take_dropped_textures();
-        if frame_stats.note_stall(paint_stats.draw_calls, paint_stats.missing_textures) {
-            log_line("frame loop looked stalled for 30 frames straight, forcing texture recovery");
+        if paint_stats.draw_calls == 0 && paint_stats.missing_textures == 0 {
+            stalled_frames += 1;
+        } else {
+            stalled_frames = 0;
+        }
+        if stalled_frames >= 30 {
+            stalled_frames = 0;
             dropped.extend(surface.force_recover());
             egui_ctx.request_repaint();
         }
@@ -454,12 +224,6 @@ pub fn run(mut app: App) -> Result<()> {
             app.icons.forget_textures(&egui_ctx, &dropped);
             egui_ctx.request_repaint();
         }
-        frame_stats.record(
-            tick_elapsed,
-            build_ui_elapsed,
-            tessellate_elapsed,
-            paint_stats,
-        );
         crate::install::process_pending_bgdl();
         #[cfg(target_os = "vita")]
         unsafe {

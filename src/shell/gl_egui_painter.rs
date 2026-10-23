@@ -97,11 +97,7 @@ struct PendingUpload {
 
 #[derive(Default, Clone, Copy)]
 pub struct PaintStats {
-    pub texture_apply_secs: f64,
-    pub geometry_secs: f64,
     pub draw_calls: u32,
-    pub textures_uploaded: u32,
-    pub vertices_drawn: u32,
     pub missing_textures: u32,
 }
 
@@ -233,11 +229,8 @@ impl GlEguiPainter {
         primitives: &[egui::ClippedPrimitive],
         textures_delta: &egui::TexturesDelta,
     ) -> Result<PaintStats> {
-        let texture_apply_started_at = std::time::Instant::now();
-        let textures_uploaded = self.apply_textures(textures_delta);
-        let texture_apply_secs = texture_apply_started_at.elapsed().as_secs_f64();
+        self.apply_textures(textures_delta);
 
-        let geometry_started_at = std::time::Instant::now();
         unsafe {
             glViewport(0, 0, screen_size[0] as i32, screen_size[1] as i32);
             glUseProgram(self.program);
@@ -282,7 +275,6 @@ impl GlEguiPainter {
         }
 
         let mut draw_calls = 0u32;
-        let mut vertices_drawn = 0u32;
         let mut missing_textures = 0u32;
         let mut current_clip: Option<[i32; 4]> = None;
         let mut current_texture_id: Option<egui::TextureId> = None;
@@ -399,7 +391,6 @@ impl GlEguiPainter {
                     );
                 }
                 draw_calls += 1;
-                vertices_drawn += range.vertex_count;
             }
         }
         self.vertices.clear();
@@ -409,7 +400,6 @@ impl GlEguiPainter {
             glDisable(GL_SCISSOR_TEST);
         }
 
-        let geometry_secs = geometry_started_at.elapsed().as_secs_f64();
 
         for texture_id in &textures_delta.free {
             self.pending.remove(texture_id);
@@ -420,11 +410,7 @@ impl GlEguiPainter {
         }
 
         Ok(PaintStats {
-            texture_apply_secs,
-            geometry_secs,
             draw_calls,
-            textures_uploaded,
-            vertices_drawn,
             missing_textures,
         })
     }

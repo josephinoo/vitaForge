@@ -250,8 +250,32 @@ impl Language {
     pub fn settings_title(self) -> &'static str {
         self.strings(|s| s.settings_title)
     }
+    pub fn settings_credits(self) -> &'static str {
+        self.strings(|s| s.settings_credits)
+    }
+    pub fn credits_body(self) -> &'static str {
+        self.strings(|s| s.credits_body)
+    }
     pub fn language_label(self) -> &'static str {
         self.strings(|s| s.language_label)
+    }
+    pub fn settings_general(self) -> &'static str {
+        self.strings(|s| s.settings_general)
+    }
+    pub fn settings_purge_confirm(self) -> &'static str {
+        self.strings(|s| s.settings_purge_confirm)
+    }
+    pub fn cancel_confirm(self) -> &'static str {
+        self.strings(|s| s.cancel_confirm)
+    }
+    pub fn btn_settings(self) -> &'static str {
+        self.strings(|s| s.btn_settings)
+    }
+    pub fn btn_choose(self) -> &'static str {
+        self.strings(|s| s.btn_choose)
+    }
+    pub fn settings_free_space(self) -> &'static str {
+        self.strings(|s| s.settings_free_space)
     }
     pub fn settings_storage(self) -> &'static str {
         self.strings(|s| s.settings_storage)
@@ -670,7 +694,15 @@ struct LocalizedStrings {
     updates_empty: &'static str,
     loading_msg: &'static str,
     settings_title: &'static str,
+    settings_credits: &'static str,
+    credits_body: &'static str,
     language_label: &'static str,
+    settings_general: &'static str,
+    settings_purge_confirm: &'static str,
+    cancel_confirm: &'static str,
+    btn_settings: &'static str,
+    btn_choose: &'static str,
+    settings_free_space: &'static str,
     settings_storage: &'static str,
     settings_install_notifications: &'static str,
     enabled: &'static str,
@@ -800,7 +832,15 @@ impl LocalizedStrings {
             updates_empty: r("updates-empty"),
             loading_msg: r("loading-msg"),
             settings_title: r("settings-title"),
+            settings_credits: r("settings-credits"),
+            credits_body: r("credits-body"),
             language_label: r("language-label"),
+            settings_general: r("settings-general"),
+            settings_purge_confirm: r("settings-purge-confirm"),
+            cancel_confirm: r("cancel-confirm"),
+            btn_settings: r("btn-settings"),
+            btn_choose: r("btn-choose"),
+            settings_free_space: r("settings-free-space"),
             settings_storage: r("settings-storage"),
             settings_install_notifications: r("settings-install-notifications"),
             enabled: r("enabled"),
@@ -862,6 +902,8 @@ mod tests {
     fn detail_and_notice_strings_resolve_in_every_language() {
         for lang in Language::ALL {
             for text in [
+                lang.settings_credits(),
+                lang.credits_body(),
                 lang.about_app(),
                 lang.also_needs(),
                 lang.ready_to_play(),

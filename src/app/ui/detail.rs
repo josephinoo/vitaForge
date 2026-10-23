@@ -18,6 +18,7 @@ pub(crate) fn detail_screen(
     entry: &crate::data::AppEntry,
     install: Option<&crate::install::Progress>,
     busy: bool,
+    cancel_armed: bool,
     scroll_delta: f32,
     comments: &[crate::data::api::Comment],
     comments_loaded: bool,
@@ -56,7 +57,7 @@ pub(crate) fn detail_screen(
     let failed = install.is_some_and(|job| matches!(job, crate::install::Progress::Failed(_)));
     if busy {
         let hints: &[(Glyph, &str)] = if cancellable {
-            &[(Glyph::Circle, lang.cancel_btn())]
+            &[(Glyph::Circle, if cancel_armed { lang.cancel_confirm() } else { lang.cancel_btn() })]
         } else {
             &[]
         };
@@ -269,7 +270,7 @@ pub(crate) fn detail_screen(
     }
 
     if let Some(job) = install {
-        install_progress_modal(ctx, lang, entry, job, cancellable, &mut commands);
+        install_progress_modal(ctx, lang, entry, job, cancellable, cancel_armed, &mut commands);
     }
 
     egui::CentralPanel::default()
@@ -539,6 +540,7 @@ fn install_progress_modal(
     entry: &crate::data::AppEntry,
     job: &crate::install::Progress,
     cancellable: bool,
+    cancel_armed: bool,
     commands: &mut Vec<AppCommand>,
 ) {
     let finished = job.is_finished();
@@ -548,7 +550,10 @@ fn install_progress_modal(
         .show(ctx, |ui| {
             egui::Frame::window(&ctx.style())
                 .fill(BG_CARD)
-                .stroke(egui::Stroke::new(1.5_f32, ACCENT_STEAM))
+                .stroke(egui::Stroke::new(
+                    if cancel_armed { 2.5_f32 } else { 1.5_f32 },
+                    if cancel_armed { DANGER } else { ACCENT_STEAM },
+                ))
                 .corner_radius(RADIUS_LG)
                 .inner_margin(egui::vec2(28.0, 20.0))
                 .show(ui, |ui| {
@@ -580,6 +585,15 @@ fn install_progress_modal(
                         );
                         if cancellable {
                             ui.add_space(14.0);
+                            if cancel_armed {
+                                ui.label(
+                                    egui::RichText::new(lang.cancel_confirm())
+                                        .size(FONT_SMALL)
+                                        .strong()
+                                        .color(DANGER),
+                                );
+                                ui.add_space(6.0);
+                            }
                             if cancel_button(ui, lang.cancel_btn()) {
                                 commands.push(AppCommand::CancelInstall);
                             }
@@ -611,7 +625,8 @@ fn install_stepper(ui: &mut egui::Ui, progress: &crate::install::Progress, lang:
         | Progress::Downloading { .. } => 1,
         Progress::Finishing { .. } => 2,
         Progress::Decrypting | Progress::Extracting { .. } => 3,
-        Progress::Installing { .. }
+        Progress::VerificationComplete
+        | Progress::Installing { .. }
         | Progress::Queued
         | Progress::Done
         | Progress::RebootRequired

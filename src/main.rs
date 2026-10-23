@@ -28,7 +28,8 @@ fn install_panic_hook() {
         if let Ok(mut file) =
             std::fs::OpenOptions::new().create(true).append(true).open("ux0:data/vitaforge/panic.log")
         {
-            let _ = writeln!(file, "=== panic ===\n{info}");
+            let thread = std::thread::current();
+            let _ = writeln!(file, "=== panic (thread: {}) ===\n{info}", thread.name().unwrap_or("unnamed"));
         }
     }));
 }
@@ -81,6 +82,8 @@ fn run() -> anyhow::Result<()> {
         env!("CARGO_PKG_VERSION"),
         env!("BUILD_STAMP"),
     ));
+    #[cfg(target_os = "vita")]
+    install::log_file("runtime: native wakeups (no loopback sockets)");
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
