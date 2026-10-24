@@ -483,7 +483,7 @@ fn log_tagged(tag: &str, msg: &str) {
         .open("ux0:data/vitaforge/vitaforge.log")
     {
         use std::io::Write;
-        let _ = writeln!(f, "{tag} {msg}");
+        let _ = writeln!(f, "{} {tag} {msg}", crate::app::sysinfo::log_stamp());
     }
 }
 #[cfg(target_os = "vita")]

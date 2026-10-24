@@ -29,7 +29,7 @@ fn install_panic_hook() {
             std::fs::OpenOptions::new().create(true).append(true).open("ux0:data/vitaforge/panic.log")
         {
             let thread = std::thread::current();
-            let _ = writeln!(file, "=== panic (thread: {}) ===\n{info}", thread.name().unwrap_or("unnamed"));
+            let _ = writeln!(file, "=== panic {} (thread: {}) ===\n{info}", crate::app::sysinfo::log_stamp(), thread.name().unwrap_or("unnamed"));
         }
     }));
 }

@@ -414,7 +414,7 @@ fn scan(
     report: impl Fn(String),
 ) {
     let mut log = Vec::new();
-    note(&mut log, format!("build {}", env!("BUILD_STAMP")));
+    note(&mut log, format!("{} build {}", crate::app::sysinfo::log_stamp(), env!("BUILD_STAMP")));
     let (listing, listed) = list_app_dirs(&mut log);
     let by_listing = listed && !listing.is_empty();
     if !by_listing {

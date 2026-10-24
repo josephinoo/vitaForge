@@ -436,35 +436,38 @@ fn join_parts(dest: &Path, starts: &[u64], on_percent: impl FnMut(u32)) -> Resul
 /// sits at byte i * (total / parts); `dest` comes first, so a half-joined
 /// `dest` that already covers part of part 1 wins over the part file.
 pub struct PartsReader {
-    files: Vec<(std::fs::File, u64, u64)>,
+    files: Vec<(std::fs::File, u64, u64, u64)>,
     pos: u64,
     total: u64,
 }
 impl PartsReader {
     pub fn open(dest: &Path) -> std::io::Result<Self> {
         let lens: Vec<u64> = (0..PARALLEL_PARTS).map(|i| downloaded_len_of(dest, i)).collect();
-        let mut files = vec![(std::fs::File::open(dest)?, 0, lens[0])];
+        let mut files = vec![(std::fs::File::open(dest)?, 0, lens[0], 0)];
         if part_path(dest, PARALLEL_PARTS - 1).exists() {
             // Only read once every part is complete, so part 1 is exactly total / parts long.
             let chunk = lens[1];
             for i in 1..PARALLEL_PARTS {
-                files.push((std::fs::File::open(part_path(dest, i))?, i as u64 * chunk, lens[i]));
+                files.push((std::fs::File::open(part_path(dest, i))?, i as u64 * chunk, lens[i], 0));
             }
         }
-        let total = files.iter().map(|(_, start, len)| start + len).max().unwrap_or(0);
+        let total = files.iter().map(|(_, start, len, _)| start + len).max().unwrap_or(0);
         Ok(Self { files, pos: 0, total })
     }
 }
 impl std::io::Read for PartsReader {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let pos = self.pos;
-        let Some((file, start, len)) = self.files.iter_mut().find(|(_, s, l)| pos >= *s && pos < *s + *l) else {
+        let Some((file, start, len, cursor)) = self.files.iter_mut().find(|(_, s, l, _)| pos >= *s && pos < *s + *l) else {
             return Ok(0);
         };
         let off = pos - *start;
-        file.seek(SeekFrom::Start(off))?;
+        if *cursor != off {
+            file.seek(SeekFrom::Start(off))?;
+        }
         let want = buf.len().min((*len - off) as usize);
         let n = file.read(&mut buf[..want])?;
+        *cursor = off + n as u64;
         self.pos += n as u64;
         Ok(n)
     }
@@ -491,18 +494,41 @@ pub struct HashingReader<R> {
     inner: R,
     pos: u64,
     pub(crate) hashed: u64,
-    hasher: md5::Md5,
+    hasher: Md5Worker,
+}
+struct Md5Worker {
+    tx: std::sync::mpsc::SyncSender<Vec<u8>>,
+    handle: std::thread::JoinHandle<String>,
+}
+impl Md5Worker {
+    fn new() -> Self {
+        let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(8);
+        let handle = std::thread::spawn(move || {
+            use md5::Digest;
+            let mut hasher = md5::Md5::new();
+            for chunk in rx {
+                hasher.update(&chunk);
+            }
+            format!("{:x}", hasher.finalize())
+        });
+        Self { tx, handle }
+    }
+    fn update(&self, data: &[u8]) {
+        let _ = self.tx.send(data.to_vec());
+    }
+    fn finalize(self) -> std::io::Result<String> {
+        drop(self.tx);
+        self.handle.join().map_err(|_| std::io::Error::other("md5 worker panicked"))
+    }
 }
 impl<R: std::io::Read + std::io::Seek> HashingReader<R> {
     pub fn new(inner: R) -> Self {
-        use md5::Digest;
-        Self { inner, pos: 0, hashed: 0, hasher: md5::Md5::new() }
+        Self { inner, pos: 0, hashed: 0, hasher: Md5Worker::new() }
     }
     pub fn finish(
         mut self,
         mut on_progress: impl FnMut(u32) -> std::io::Result<()>,
     ) -> std::io::Result<String> {
-        use md5::Digest;
         let total = self.inner.seek(SeekFrom::End(0))?;
         self.inner.seek(SeekFrom::Start(self.hashed))?;
         on_progress((self.hashed.saturating_mul(100) / total.max(1)).min(100) as u32)?;
@@ -517,12 +543,11 @@ impl<R: std::io::Read + std::io::Seek> HashingReader<R> {
             on_progress((self.hashed.saturating_mul(100) / total.max(1)).min(100) as u32)?;
         }
         on_progress(100)?;
-        Ok(format!("{:x}", self.hasher.finalize()))
+        self.hasher.finalize()
     }
 }
 impl<R: std::io::Read> std::io::Read for HashingReader<R> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        use md5::Digest;
         let n = self.inner.read(buf)?;
         let end = self.pos + n as u64;
         if self.pos <= self.hashed && self.hashed < end {
@@ -535,7 +560,6 @@ impl<R: std::io::Read> std::io::Read for HashingReader<R> {
 }
 impl<R: std::io::Read + std::io::Seek> std::io::Seek for HashingReader<R> {
     fn seek(&mut self, to: SeekFrom) -> std::io::Result<u64> {
-        use md5::Digest;
         let target = self.inner.seek(to)?;
         // zip skips each entry's name/extra field with a seek; hash that small gap
         // now, or `hashed` stalls at the first entry and finish() re-reads the whole file.

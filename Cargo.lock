@@ -1657,12 +1657,13 @@ dependencies = [
 
 [[package]]
 name = "vitaforge"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "aes",
  "anyhow",
  "bytes",
  "cc",
+ "crc32fast",
  "ctr",
  "egui",
  "flate2",

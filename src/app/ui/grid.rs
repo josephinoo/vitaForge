@@ -221,6 +221,23 @@ pub(crate) fn tile_platform_badge(
     );
     ui.painter()
         .galley(badge.center() - galley.size() / 2.0, galley, TEXT_WHITE);
+    if entry.data_url.is_some() || entry.data_size_bytes > 0 {
+        let data_badge = egui::Rect::from_min_size(
+            egui::pos2(badge.right() + 3.0, badge.top()),
+            egui::vec2(size.y, size.y),
+        );
+        ui.painter().rect_filled(
+            data_badge,
+            RADIUS_XS,
+            egui::Color32::from_rgba_unmultiplied(0x38, 0x90, 0xff, 220),
+        );
+        crate::app::ui::chrome_icons::paint(
+            ui,
+            crate::app::ui::chrome_icons::ChromeIcon::GameData,
+            data_badge.shrink(2.0),
+            TEXT_WHITE,
+        );
+    }
 }
 
 pub(crate) fn cover_card(

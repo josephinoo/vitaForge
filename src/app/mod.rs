@@ -846,7 +846,7 @@ impl App {
                 self.installed.mark_installed(&job.app_id_title);
                 crate::install::requirements::invalidate_all();
                 if self.install_notifications {
-                    crate::install::notify::install_finished(&job.title);
+                    crate::install::notify::install_finished(self.lang, &job.title);
                 }
                 let app_id = job.app_id.clone();
                 tokio::spawn(async move {
@@ -858,7 +858,7 @@ impl App {
                 && previous != job.progress
             {
                 if self.install_notifications {
-                    crate::install::notify::install_failed(&job.title, reason);
+                    crate::install::notify::install_failed(self.lang, &job.title, reason);
                 }
             }
         }
@@ -886,7 +886,7 @@ impl App {
         {
             self.self_update_rx = None;
             if self.install_notifications {
-                crate::install::notify::self_update_available(&info.tag);
+                crate::install::notify::self_update_available(self.lang, &info.tag);
             }
             self.self_update = Some(info);
             ctx.request_repaint();
@@ -1696,7 +1696,7 @@ impl App {
                     });
                     self.audio.play(crate::audio::Sfx::Launch);
                     if self.install_notifications {
-                        crate::install::notify::install_started(&title);
+                        crate::install::notify::install_started(self.lang, &title);
                     }
                 }
             }
@@ -1874,7 +1874,7 @@ impl App {
         self.report_notice = None;
         self.audio.play(crate::audio::Sfx::Launch);
         if self.install_notifications {
-            crate::install::notify::install_started(&title);
+            crate::install::notify::install_started(self.lang, &title);
         }
         if let AppState::Detail { data_prompt, .. } = &mut self.state {
             *data_prompt = false;
