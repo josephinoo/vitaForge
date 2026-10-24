@@ -1,3 +1,4 @@
+.DEFAULT_GOAL := vpk
 .PHONY: vpk ftp eboot upload-vpk run-vita vpk2 vitagl-nosplash
 # Without this the build never sees SERVER_URL and silently falls back to the
 # default catalog url baked into the source.

@@ -32,15 +32,24 @@ impl Language {
                     vitasdk_sys::SCE_SYSTEM_PARAM_ID_LANG as u32,
                     &mut lang,
                 ) == 0 {
-                    if lang == 5 {
-                        return Language::Spanish;
+                    match lang as u32 {
+                        vitasdk_sys::SCE_SYSTEM_PARAM_LANG_SPANISH => return Language::Spanish,
+                        vitasdk_sys::SCE_SYSTEM_PARAM_LANG_FRENCH => return Language::French,
+                        vitasdk_sys::SCE_SYSTEM_PARAM_LANG_ITALIAN => return Language::Italian,
+                        vitasdk_sys::SCE_SYSTEM_PARAM_LANG_PORTUGUESE_PT
+                        | vitasdk_sys::SCE_SYSTEM_PARAM_LANG_PORTUGUESE_BR => return Language::Portuguese,
+                        _ => {}
                     }
                 }
             }
         }
         if let Ok(sys_lang) = std::env::var("LANG").or_else(|_| std::env::var("LC_ALL")) {
-            if sys_lang.to_lowercase().starts_with("es") {
-                return Language::Spanish;
+            match sys_lang.to_lowercase().get(..2) {
+                Some("es") => return Language::Spanish,
+                Some("fr") => return Language::French,
+                Some("it") => return Language::Italian,
+                Some("pt") => return Language::Portuguese,
+                _ => {}
             }
         }
         Language::English
@@ -76,6 +85,16 @@ impl Language {
             Language::Italian => IT_BUNDLE.with(f),
             Language::Portuguese => PT_BUNDLE.with(f),
         }
+    }
+    pub fn tr(self, id: &str) -> String {
+        self.with_bundle(|bundle| format_message(bundle, id, None))
+    }
+    pub fn tr_args(self, id: &str, values: &[(&str, &str)]) -> String {
+        let mut args = FluentArgs::new();
+        for (key, value) in values {
+            args.set(*key, value.to_string());
+        }
+        self.with_bundle(|bundle| format_message(bundle, id, Some(&args)))
     }
     pub fn apps_count(self, count: usize) -> String {
         let mut args = FluentArgs::new();
@@ -267,6 +286,9 @@ impl Language {
     }
     pub fn cancel_confirm(self) -> &'static str {
         self.strings(|s| s.cancel_confirm)
+    }
+    pub fn plugin_pending(self) -> &'static str {
+        self.strings(|s| s.plugin_pending)
     }
     pub fn btn_settings(self) -> &'static str {
         self.strings(|s| s.btn_settings)
@@ -700,6 +722,7 @@ struct LocalizedStrings {
     settings_general: &'static str,
     settings_purge_confirm: &'static str,
     cancel_confirm: &'static str,
+    plugin_pending: &'static str,
     btn_settings: &'static str,
     btn_choose: &'static str,
     settings_free_space: &'static str,
@@ -838,6 +861,7 @@ impl LocalizedStrings {
             settings_general: r("settings-general"),
             settings_purge_confirm: r("settings-purge-confirm"),
             cancel_confirm: r("cancel-confirm"),
+            plugin_pending: r("plugin-pending"),
             btn_settings: r("btn-settings"),
             btn_choose: r("btn-choose"),
             settings_free_space: r("settings-free-space"),
@@ -866,6 +890,26 @@ impl LocalizedStrings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn ids(ftl: &str) -> Vec<&str> {
+        ftl.lines()
+            .filter_map(|line| line.split_once(" ="))
+            .map(|(id, _)| id)
+            .filter(|id| !id.is_empty() && id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'))
+            .collect()
+    }
+    #[test]
+    fn every_language_translates_every_message() {
+        let english = ids(EN_US_FTL);
+        for (locale, ftl) in [("es-ES", ES_ES_FTL), ("fr-FR", FR_FR_FTL), ("it-IT", IT_IT_FTL), ("pt-PT", PT_PT_FTL)] {
+            let present = ids(ftl);
+            let missing: Vec<_> = english.iter().filter(|id| !present.contains(id)).collect();
+            assert!(missing.is_empty(), "{locale} is missing {missing:?}");
+        }
+        for lang in Language::ALL {
+            assert!(!lang.tr("progress-extracting").is_empty());
+            assert!(lang.tr_args("notify-install-failed", &[("title", "X"), ("reason", "y")]).contains('X'));
+        }
+    }
     #[test]
     fn fixed_strings_match_both_languages() {
         assert_eq!(Language::English.install(), "INSTALL");

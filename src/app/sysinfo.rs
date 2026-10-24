@@ -4,6 +4,21 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 const STORAGE_CACHE_TTL: Duration = Duration::from_secs(15);
 const BATTERY_CACHE_TTL: Duration = Duration::from_secs(5);
 
+pub fn log_stamp() -> String {
+    let secs = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    let z = (secs / 86_400) as i64 + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    let t = secs % 86_400;
+    format!("{year:04}-{month:02}-{day:02} {:02}:{:02}:{:02}", t / 3600, t / 60 % 60, t % 60)
+}
+
 pub fn clock_hhmm() -> String {
     let Ok(elapsed) = SystemTime::now().duration_since(UNIX_EPOCH) else {
         return String::from("--:--");
@@ -90,4 +105,14 @@ fn storage_uncached(dev: &str) -> Option<(u64, u64)> {
 #[cfg(not(target_os = "vita"))]
 fn storage_uncached(_dev: &str) -> Option<(u64, u64)> {
     None
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn log_stamp_is_a_full_date() {
+        let stamp = super::log_stamp();
+        assert_eq!(stamp.len(), 19, "{stamp}");
+        assert!(stamp.starts_with("20"), "{stamp}");
+    }
 }

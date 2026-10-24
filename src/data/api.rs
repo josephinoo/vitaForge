@@ -239,7 +239,11 @@ impl RawApp {
         let is_pkgj = platform.is_commercial()
             || self.region.as_ref().is_some_and(|r| !r.trim().is_empty())
             || self.zrif.as_ref().is_some_and(|z| !z.trim().is_empty());
-        let icon_url = self.icon_url.and_then(non_empty).map(|u| absolute(&u));
+        let icon_url = self
+            .icon_url
+            .and_then(non_empty)
+            .filter(|u| !u.contains("/images/icon/default"))
+            .map(|u| absolute(&u));
         let cover_url = self
             .cover_url
             .as_ref()
@@ -697,6 +701,16 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_servers_grey_default_icon_counts_as_no_icon() {
+        let raw: RawApp = serde_json::from_str(
+            r#"{"id":1,"title_id":"VITADB_APP_1679","name":"Wi-Fi Turbo","download_url":"http://x",
+                "icon_url":"/api/v1/images/icon/default?size=medium&format=jpeg"}"#,
+        )
+        .expect("parses");
+        let entry = raw.into_app_entry().expect("has a download url");
+        assert!(entry.icon_url.is_none());
+    }
     #[test]
     fn the_catalogs_executable_digests_reach_the_entry() {
         let raw: RawApp = serde_json::from_str(

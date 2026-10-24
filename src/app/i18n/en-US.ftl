@@ -86,6 +86,7 @@ language-label = Language
 settings-general = General
 settings-purge-confirm = Press again to confirm
 cancel-confirm = Press again to cancel
+plugin-pending = We're working on validating every plugin; this one can't be installed from vitaForge yet
 btn-settings = Settings
 btn-choose = Select
 settings-free-space = Free space (ux0)
@@ -188,3 +189,32 @@ credits-body =
     Rinnegatamante — VitaDB-Downloader and vitaGL.
     Northfear — SDL2 / vitaGL integration.
     vita-rust and VitaSDK — PS Vita development tools.
+
+progress-resolving = Preparing download…
+progress-downloading-data = Downloading game data
+progress-downloading-app = Downloading app
+progress-left = left
+progress-joining = Joining download parts
+progress-verifying = Verifying file
+progress-verified = Verification complete · waiting for installer…
+progress-decrypting = Decrypting package…
+progress-extracting = Extracting
+progress-files = files
+progress-preparing-extract = Preparing extraction…
+progress-installing = Installing
+progress-elapsed = elapsed
+progress-queued = Queued — check Notifications
+progress-done = Installed
+progress-reboot = Installed — restart Vita to activate
+progress-restarting = Updated — restarting…
+progress-cancelled = Cancelled
+progress-failed = Failed
+step-download = Download
+step-verify = Verify
+step-extract = Extract
+step-install = Install
+notify-installing = Installing { $title }…
+notify-installed = { $title } installed
+notify-install-failed = { $title } failed to install: { $reason }
+notify-self-update = vitaForge update available: v{ $tag }
+no-image = No Image

@@ -74,6 +74,7 @@ pub enum Progress {
     Failed(String),
 }
 pub const CANCELLED_MESSAGE: &str = "cancelled";
+pub const PLUGIN_PENDING_MESSAGE: &str = "plugin pending validation";
 fn format_clock(secs: u64) -> String {
     if secs >= 3600 {
         format!("{}h{:02}m", secs / 3600, (secs % 3600) / 60)
@@ -98,44 +99,50 @@ fn transfer_detail(received: u64, total: Option<u64>, elapsed_secs: u32) -> Stri
 }
 impl Progress {
     pub fn label_for(&self, lang: crate::app::i18n::Language) -> String {
-        let es = lang == crate::app::i18n::Language::Spanish;
-        let text = |en, spanish| if es { spanish } else { en };
+        let text = |id: &str| lang.tr(id);
         match self {
-            Self::Resolving => text("Preparing download…", "Preparando descarga…").to_owned(),
+            Self::Resolving => text("progress-resolving"),
             Self::Downloading { received, total, elapsed_secs }
             | Self::DownloadingData { received, total, elapsed_secs } => {
                 let phase = if matches!(self, Self::DownloadingData { .. }) {
-                    text("Downloading game data", "Descargando datos del juego")
+                    text("progress-downloading-data")
                 } else {
-                    text("Downloading app", "Descargando aplicación")
+                    text("progress-downloading-app")
                 };
                 let detail = transfer_detail(*received, *total, *elapsed_secs);
-                format!("{phase} · {}", if es { detail.replace(" left", " restantes") } else { detail })
+                format!("{phase} · {}", detail.replace(" left", &format!(" {}", text("progress-left"))))
             }
             Self::Finishing { step, percent } => {
                 let phase = match *step {
-                    "Joining parts" => text("Joining download parts", "Uniendo partes de la descarga"),
-                    "Verifying" => text("Verifying file", "Verificando archivo"),
-                    other => other,
+                    "Joining parts" => text("progress-joining"),
+                    "Verifying" => text("progress-verifying"),
+                    other => other.to_owned(),
                 };
                 format!("{phase} · {}%", (*percent).min(100))
             }
-            Self::VerificationComplete => text("Verification complete · waiting for installer…", "Verificación completada · esperando al instalador…").to_owned(),
-            Self::Decrypting => text("Decrypting package…", "Descifrando paquete…").to_owned(),
+            Self::VerificationComplete => text("progress-verified"),
+            Self::Decrypting => text("progress-decrypting"),
+            Self::Extracting { done, total, file, files: 0 } if *total > 0 => format!(
+                "{} · {}% · {done}/{total} MiB · {file} {}",
+                text("progress-extracting"),
+                (*done as u64 * 100 / *total as u64).min(100),
+                text("progress-files"),
+            ),
             Self::Extracting { done, total, file, files } if *total > 0 => format!(
                 "{} · {}% · {done}/{total} MiB · {} {file}/{files}",
-                text("Extracting", "Extrayendo"),
+                text("progress-extracting"),
                 (*done as u64 * 100 / *total as u64).min(100),
-                text("files", "archivos"),
+                text("progress-files"),
             ),
-            Self::Extracting { .. } => text("Preparing extraction…", "Preparando extracción…").to_owned(),
-            Self::Installing { elapsed_secs } => format!("{} · {} {}", text("Installing", "Instalando"), format_clock(*elapsed_secs as u64), text("elapsed", "transcurridos")),
-            Self::Queued => text("Queued — check Notifications", "En cola — consulta las notificaciones").to_owned(),
-            Self::Done => text("Installed", "Instalado").to_owned(),
-            Self::RebootRequired => text("Installed — restart Vita to activate", "Instalado — reinicia la Vita para activar").to_owned(),
-            Self::Restarting => text("Updated — restarting…", "Actualizado — reiniciando…").to_owned(),
-            Self::Failed(err) if err == CANCELLED_MESSAGE => text("Cancelled", "Cancelado").to_owned(),
-            Self::Failed(err) => format!("{}: {err}", text("Failed", "Error")),
+            Self::Extracting { .. } => text("progress-preparing-extract"),
+            Self::Installing { elapsed_secs } => format!("{} · {} {}", text("progress-installing"), format_clock(*elapsed_secs as u64), text("progress-elapsed")),
+            Self::Queued => text("progress-queued"),
+            Self::Done => text("progress-done"),
+            Self::RebootRequired => text("progress-reboot"),
+            Self::Restarting => text("progress-restarting"),
+            Self::Failed(err) if err == CANCELLED_MESSAGE => text("progress-cancelled"),
+            Self::Failed(err) if err == PLUGIN_PENDING_MESSAGE => lang.plugin_pending().to_owned(),
+            Self::Failed(err) => format!("{}: {err}", text("progress-failed")),
         }
     }
     pub fn fraction(&self) -> Option<f32> {
@@ -235,7 +242,7 @@ pub fn log_file(msg: &str) {
         .open("ux0:data/vitaforge/vitaforge.log")
     {
         use std::io::Write;
-        let _ = writeln!(f, "[LOG] {msg}");
+        let _ = writeln!(f, "{} [LOG] {msg}", crate::app::sysinfo::log_stamp());
     }
 }
 fn check_cancelled(cancel: &AtomicBool) -> Result<()> {
@@ -695,82 +702,119 @@ async fn run_plugin(
     if entry.download_url.is_empty() {
         bail!("no download link for this plugin");
     }
-    let name = entry
-        .download_url
-        .rsplit('/')
-        .next()
-        .and_then(|name| name.split('?').next())
-        .filter(|name| !name.is_empty())
-        .unwrap_or("plugin.skprx");
-    let configured = plugin_install_plan(entry)?;
-    let dest = configured
-        .as_ref()
-        .map(|plan| plan.binary_path.clone())
-        .unwrap_or_else(|| PathBuf::from(PLUGIN_DIR).join(name));
-    let parent = dest
-        .parent()
-        .context("plugin destination has no parent directory")?;
-    std::fs::create_dir_all(parent).context("couldn't create the plugins folder")?;
-    download(&entry.download_url, &dest, tx, cancel).await?;
+    let Some(plan) = plugin_install_plan(entry)? else {
+        bail!(PLUGIN_PENDING_MESSAGE);
+    };
+    std::fs::create_dir_all(PLUGIN_DIR).context("couldn't create the plugins folder")?;
+    let downloaded = PathBuf::from(PLUGIN_DIR).join("download.tmp");
+    let _ = std::fs::remove_file(&downloaded);
+    download(&entry.download_url, &downloaded, tx, cancel).await?;
     check_cancelled(cancel)?;
-
-    if let Some(plan) = configured {
-        if update_tai_config(&plan)? {
-            log_file(&format!(
-                "Activated plugin '{}' in {} under {}",
-                entry.name,
-                plan.config_path.display(),
-                plan.section
-            ));
-        }
-        return Ok(Progress::RebootRequired);
+    let result = place_plugin_files(&downloaded, &plan, cancel);
+    let _ = std::fs::remove_file(&downloaded);
+    let _ = std::fs::remove_dir_all(PathBuf::from(PLUGIN_DIR).join("unpacked"));
+    result?;
+    if update_tai_config(&plan)? {
+        log_file(&format!(
+            "Activated plugin '{}' in {}: {:?}",
+            entry.name,
+            plan.config_path.display(),
+            plan.lines
+        ));
     }
-    Ok(Progress::Done)
+    Ok(Progress::RebootRequired)
+}
+
+fn place_plugin_files(downloaded: &Path, plan: &PluginInstallPlan, cancel: &AtomicBool) -> Result<()> {
+    let mut magic = [0u8; 4];
+    let is_zip = std::fs::File::open(downloaded)
+        .and_then(|mut f| std::io::Read::read_exact(&mut f, &mut magic))
+        .is_ok()
+        && magic == *b"PK\x03\x04";
+    let sources: Vec<PathBuf> = if is_zip {
+        let unpacked = PathBuf::from(PLUGIN_DIR).join("unpacked");
+        let _ = std::fs::remove_dir_all(&unpacked);
+        extract(downloaded, &unpacked, cancel, |_, _, _, _| {})?;
+        let mut found = Vec::new();
+        collect_files(&unpacked, &unpacked, &mut found)?;
+        let found: Vec<PathBuf> = found.into_iter().map(|relative| unpacked.join(relative)).collect();
+        plan.binaries
+            .iter()
+            .map(|binary| {
+                let name = binary.file_name().unwrap_or_default().to_string_lossy().to_lowercase();
+                found
+                    .iter()
+                    .find(|f| f.file_name().is_some_and(|n| n.to_string_lossy().to_lowercase() == name))
+                    .cloned()
+                    .with_context(|| format!("the plugin archive has no {name}"))
+            })
+            .collect::<Result<_>>()?
+    } else if plan.binaries.len() == 1 {
+        vec![downloaded.to_path_buf()]
+    } else {
+        bail!("the download is a single file but this plugin needs {} modules", plan.binaries.len());
+    };
+    for (source, binary) in sources.iter().zip(&plan.binaries) {
+        if let Some(parent) = binary.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let _ = std::fs::remove_file(binary);
+        std::fs::copy(source, binary).with_context(|| format!("couldn't write {}", binary.display()))?;
+    }
+    Ok(())
 }
 
 struct PluginInstallPlan {
-    binary_path: PathBuf,
+    binaries: Vec<PathBuf>,
     config_path: PathBuf,
-    section: String,
-    line: String,
+    lines: Vec<(String, String)>,
 }
 
 fn plugin_install_plan(entry: &AppEntry) -> Result<Option<PluginInstallPlan>> {
-    let (Some(path), Some(section), Some(line)) = (
+    let (Some(path), Some(sections), Some(lines)) = (
         entry.plugin_install_path.as_deref(),
         entry.plugin_config_section.as_deref(),
         entry.plugin_config_line.as_deref(),
     ) else {
         return Ok(None);
     };
-    let section = section.trim();
-    let line = line.trim();
-    if section.eq_ignore_ascii_case("none") {
+    parse_plugin_plan(path, sections, lines)
+}
+
+fn parse_plugin_plan(path: &str, sections: &str, lines: &str) -> Result<Option<PluginInstallPlan>> {
+    if sections.trim().eq_ignore_ascii_case("none") {
         return Ok(None);
     }
-    if !section.starts_with('*')
-        || section.len() > 64
-        || section.contains(['\r', '\n'])
-        || section.split_whitespace().count() != 1
-    {
-        bail!("invalid taiHEN config section");
+    let sections: Vec<&str> = sections.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    let lines: Vec<&str> = lines.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    if sections.is_empty() || sections.len() != lines.len() {
+        bail!("the plugin's taiHEN sections and lines don't match");
     }
-    let binary_path = validated_tai_path(line)?;
     let install_dir = validated_tai_dir(path)?;
-    if !binary_path.starts_with(&install_dir) {
-        bail!("plugin config line is outside its declared install path");
-    }
-    let config_path = if line.starts_with("ur0:tai/") {
-        PathBuf::from("ur0:tai/config.txt")
-    } else {
-        PathBuf::from("ux0:tai/config.txt")
+    let mut plan = PluginInstallPlan {
+        binaries: Vec::new(),
+        config_path: active_tai_config(),
+        lines: Vec::new(),
     };
-    Ok(Some(PluginInstallPlan {
-        binary_path,
-        config_path,
-        section: section.to_owned(),
-        line: line.to_owned(),
-    }))
+    for (section, line) in sections.into_iter().zip(lines) {
+        if !section.starts_with('*') || section.len() > 64 || section.split_whitespace().count() != 1 {
+            bail!("invalid taiHEN config section");
+        }
+        let binary = validated_tai_path(line)?;
+        if !binary.starts_with(&install_dir) {
+            bail!("plugin config line is outside its declared install path");
+        }
+        if !plan.binaries.contains(&binary) {
+            plan.binaries.push(binary);
+        }
+        plan.lines.push((section.to_owned(), line.to_owned()));
+    }
+    Ok(Some(plan))
+}
+
+fn active_tai_config() -> PathBuf {
+    let ux0 = PathBuf::from("ux0:tai/config.txt");
+    if ux0.exists() { ux0 } else { PathBuf::from("ur0:tai/config.txt") }
 }
 
 fn validated_tai_dir(path: &str) -> Result<PathBuf> {
@@ -805,9 +849,15 @@ fn update_tai_config(plan: &PluginInstallPlan) -> Result<bool> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(error) => return Err(error).context("couldn't read taiHEN config.txt"),
     };
-    let Some(updated) = updated_tai_config(&existing, &plan.section, &plan.line)? else {
+    let mut updated = existing.clone();
+    for (section, line) in &plan.lines {
+        if let Some(next) = updated_tai_config(&updated, section, line)? {
+            updated = next;
+        }
+    }
+    if updated == existing {
         return Ok(false);
-    };
+    }
     if plan.config_path.exists() {
         let backup = PathBuf::from(format!(
             "{}{}",
@@ -826,8 +876,13 @@ fn update_tai_config(plan: &PluginInstallPlan) -> Result<bool> {
 }
 
 fn updated_tai_config(existing: &str, section: &str, line: &str) -> Result<Option<String>> {
-    if existing.lines().any(|current| current.trim() == line) {
-        return Ok(None);
+    let mut current_section = None;
+    for current in existing.lines().map(str::trim) {
+        if current.starts_with('*') {
+            current_section = Some(current);
+        } else if current == line && current_section == Some(section) {
+            return Ok(None);
+        }
     }
     let line_ending = if existing.contains("\r\n") {
         "\r\n"
@@ -1320,6 +1375,207 @@ fn extract_from(
     written: &mut Vec<PathBuf>,
     mut on_progress: impl FnMut(u32, u32, u32, u32),
 ) -> Result<()> {
+    match extract_streaming(source, dest, cancel, written, &mut on_progress) {
+        Err(err) if err.downcast_ref::<zip::result::ZipError>().is_some_and(|e| matches!(e, zip::result::ZipError::UnsupportedArchive(_))) => {
+            log_file(&format!("streaming extract unsupported ({err}), using the zip index"));
+            source.seek(std::io::SeekFrom::Start(0))?;
+        }
+        other => return other,
+    }
+    extract_indexed(source, dest, cancel, written, on_progress)
+}
+fn extract_streaming(
+    source: &mut (impl std::io::Read + std::io::Seek),
+    dest: &Path,
+    cancel: &AtomicBool,
+    written: &mut Vec<PathBuf>,
+    on_progress: &mut impl FnMut(u32, u32, u32, u32),
+) -> Result<()> {
+    use std::io::{Read, SeekFrom, Write};
+    struct Counted<'a, R>(R, &'a std::cell::Cell<u64>);
+    impl<R: Read> Read for Counted<'_, R> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let n = self.0.read(buf)?;
+            self.1.set(self.1.get() + n as u64);
+            Ok(n)
+        }
+    }
+    struct Entry {
+        name: String,
+        method: u16,
+        crc: u32,
+        compressed: u64,
+        size: u64,
+        offset: u64,
+    }
+    let unsupported = |why: &'static str| anyhow::Error::from(zip::result::ZipError::UnsupportedArchive(why));
+    let u16_at = |b: &[u8], i: usize| u16::from_le_bytes([b[i], b[i + 1]]);
+    let u32_at = |b: &[u8], i: usize| u32::from_le_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]);
+    const MB: u64 = 1024 * 1024;
+
+    let total_bytes = source.seek(SeekFrom::End(0))?;
+    let tail_len = total_bytes.min(64 * 1024 + 22);
+    source.seek(SeekFrom::Start(total_bytes - tail_len))?;
+    let mut tail = vec![0u8; tail_len as usize];
+    source.read_exact(&mut tail)?;
+    let eocd = (0..tail.len().saturating_sub(21))
+        .rev()
+        .find(|&i| u32_at(&tail, i) == 0x0605_4b50)
+        .ok_or_else(|| anyhow::anyhow!("the download isn't a valid zip"))?;
+    let (count, cd_size, cd_offset) = (u16_at(&tail, eocd + 10), u32_at(&tail, eocd + 12), u32_at(&tail, eocd + 16));
+    if count == 0xFFFF || cd_size == u32::MAX || cd_offset == u32::MAX {
+        return Err(unsupported("zip64"));
+    }
+    source.seek(SeekFrom::Start(cd_offset as u64))?;
+    let mut cd = vec![0u8; cd_size as usize];
+    source.read_exact(&mut cd)?;
+    let mut entries = Vec::with_capacity(count as usize);
+    let mut at = 0;
+    while at + 46 <= cd.len() && u32_at(&cd, at) == 0x0201_4b50 {
+        let (name_len, extra_len, comment_len) = (u16_at(&cd, at + 28) as usize, u16_at(&cd, at + 30) as usize, u16_at(&cd, at + 32) as usize);
+        let (compressed, size, offset) = (u32_at(&cd, at + 20), u32_at(&cd, at + 24), u32_at(&cd, at + 42));
+        if u16_at(&cd, at + 8) & 1 != 0 {
+            return Err(unsupported("encrypted entry"));
+        }
+        if compressed == u32::MAX || size == u32::MAX || offset == u32::MAX {
+            return Err(unsupported("zip64 entry"));
+        }
+        let name = cd.get(at + 46..at + 46 + name_len).ok_or_else(|| anyhow::anyhow!("the zip index is truncated"))?;
+        entries.push(Entry {
+            name: String::from_utf8_lossy(name).into_owned(),
+            method: u16_at(&cd, at + 10),
+            crc: u32_at(&cd, at + 16),
+            compressed: compressed as u64,
+            size: size as u64,
+            offset: offset as u64,
+        });
+        at += 46 + name_len + extra_len + comment_len;
+    }
+    if entries.len() != count as usize {
+        return Err(unsupported("central directory doesn't match its entry count"));
+    }
+    if let Some(entry) = entries.iter().find(|e| e.method != 0 && e.method != 8) {
+        log_file(&format!("zip entry {} uses compression method {}", entry.name, entry.method));
+        return Err(unsupported("compression method other than store/deflate"));
+    }
+    entries.sort_by_key(|e| e.offset);
+    let files = entries.iter().filter(|e| !e.name.ends_with('/')).count() as u32;
+    let total = total_bytes.div_ceil(MB) as u32;
+
+    source.seek(SeekFrom::Start(0))?;
+    let consumed = std::cell::Cell::new(0u64);
+    let mut reader = std::io::BufReader::with_capacity(256 * 1024, Counted(&mut *source, &consumed));
+    let mut pos = 0u64;
+    let mut last_reported = std::time::Instant::now();
+    let mut created_dirs = std::collections::HashSet::new();
+    let mut file = 0u32;
+    enum Chunk {
+        Open(PathBuf),
+        Data(Vec<u8>),
+    }
+    let (tx, rx) = std::sync::mpsc::sync_channel::<Chunk>(8);
+    std::thread::scope(|scope| {
+        let writer = scope.spawn(move || -> Result<()> {
+            let mut out = None;
+            for chunk in rx {
+                match chunk {
+                    Chunk::Open(path) => {
+                        out = Some(std::fs::File::create(&path)
+                            .with_context(|| format!("couldn't write {}", path.display()))?);
+                    }
+                    Chunk::Data(data) => {
+                        if let Some(out) = out.as_mut() {
+                            out.write_all(&data)?;
+                        }
+                    }
+                }
+            }
+            Ok(())
+        });
+        let read_result = (|| -> Result<()> {
+            for entry in &entries {
+                check_cancelled(cancel)?;
+                let gap = entry.offset.checked_sub(pos).ok_or_else(|| unsupported("overlapping zip entries"))?;
+                std::io::copy(&mut (&mut reader).take(gap), &mut std::io::sink())?;
+                let mut header = [0u8; 30];
+                reader.read_exact(&mut header)?;
+                if u32_at(&header, 0) != 0x0403_4b50 {
+                    bail!("the zip is corrupted (bad local header for {})", entry.name);
+                }
+                let skip = u16_at(&header, 26) as u64 + u16_at(&header, 28) as u64;
+                std::io::copy(&mut (&mut reader).take(skip), &mut std::io::sink())?;
+                pos = entry.offset + 30 + skip + entry.compressed;
+
+                let relative = Path::new(&entry.name);
+                if !relative.components().all(|c| matches!(c, std::path::Component::Normal(_))) {
+                    bail!("the zip has an unsafe path: {}", entry.name);
+                }
+                let out_path = dest.join(relative);
+                let raw = (&mut reader).take(entry.compressed);
+                if entry.name.ends_with('/') {
+                    std::io::copy(&mut { raw }, &mut std::io::sink())?;
+                    if created_dirs.insert(out_path.clone()) {
+                        std::fs::create_dir_all(&out_path)?;
+                    }
+                    continue;
+                }
+                if let Some(parent) = out_path.parent()
+                    && !created_dirs.contains(parent)
+                {
+                    std::fs::create_dir_all(parent)?;
+                    created_dirs.insert(parent.to_path_buf());
+                }
+                written.push(out_path.clone());
+                file += 1;
+                if tx.send(Chunk::Open(out_path)).is_err() {
+                    return Ok(());
+                }
+                let mut data: Box<dyn Read + '_> = if entry.method == 8 {
+                    Box::new(flate2::bufread::DeflateDecoder::new(std::io::BufReader::with_capacity(64 * 1024, raw)))
+                } else {
+                    Box::new(raw)
+                };
+                let mut crc = crc32fast::Hasher::new();
+                let mut size = 0u64;
+                loop {
+                    let mut buf = vec![0u8; 256 * 1024];
+                    let n = data.read(&mut buf)?;
+                    if n == 0 {
+                        break;
+                    }
+                    buf.truncate(n);
+                    crc.update(&buf);
+                    size += n as u64;
+                    if tx.send(Chunk::Data(buf)).is_err() {
+                        return Ok(());
+                    }
+                    if last_reported.elapsed() >= std::time::Duration::from_millis(250) {
+                        check_cancelled(cancel)?;
+                        last_reported = std::time::Instant::now();
+                        on_progress((consumed.get() / MB) as u32, total, file, files);
+                    }
+                }
+                std::io::copy(&mut data, &mut std::io::sink())?;
+                if size != entry.size || crc.finalize() != entry.crc {
+                    bail!("the game data was corrupted ({} failed its crc check), please try again", entry.name);
+                }
+            }
+            Ok(())
+        })();
+        drop(tx);
+        let write_result = writer.join().map_err(|_| anyhow::anyhow!("the extract writer crashed"))?;
+        read_result.and(write_result)
+    })?;
+    on_progress(total, total, files, files);
+    Ok(())
+}
+fn extract_indexed(
+    source: &mut (impl std::io::Read + std::io::Seek),
+    dest: &Path,
+    cancel: &AtomicBool,
+    written: &mut Vec<PathBuf>,
+    mut on_progress: impl FnMut(u32, u32, u32, u32),
+) -> Result<()> {
     use std::io::{Read, Write};
     // ZIP preparation visits every local header and returns to the index, discarding
     // the buffer twice per entry; keep read-ahead small (large reads bypass it).
@@ -1454,6 +1710,52 @@ mod parts_extract_tests {
         assert_eq!(std::fs::read(out.join("game/f39.bin")).unwrap(), vec![39u8; 997 * 40]);
         let _ = std::fs::remove_dir_all(&root);
     }
+
+    #[test]
+    fn streams_deflated_entries_with_data_descriptors() {
+        let out = std::env::temp_dir().join(format!("vf_dd_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&out);
+        let body = vec![b'x'; 300_000];
+        let mut deflated = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
+        deflated.write_all(&body).unwrap();
+        let deflated = deflated.finish().unwrap();
+        let crc = crc32fast::hash(&body);
+        let name = b"data/a.bin";
+        let mut zip = Vec::new();
+        let le16 = |v: &mut Vec<u8>, n: u16| v.extend_from_slice(&n.to_le_bytes());
+        let le32 = |v: &mut Vec<u8>, n: u32| v.extend_from_slice(&n.to_le_bytes());
+        le32(&mut zip, 0x0403_4b50);
+        for n in [20, 1 << 3, 8, 0, 0] { le16(&mut zip, n); }
+        for _ in 0..3 { le32(&mut zip, 0); }
+        le16(&mut zip, name.len() as u16);
+        le16(&mut zip, 0);
+        zip.extend_from_slice(name);
+        zip.extend_from_slice(&deflated);
+        for n in [0x0807_4b50, crc, deflated.len() as u32, body.len() as u32] { le32(&mut zip, n); }
+        let cd_offset = zip.len() as u32;
+        le32(&mut zip, 0x0201_4b50);
+        for n in [20, 20, 1 << 3, 8, 0, 0] { le16(&mut zip, n); }
+        for n in [crc, deflated.len() as u32, body.len() as u32] { le32(&mut zip, n); }
+        for n in [name.len() as u16, 0, 0, 0, 0] { le16(&mut zip, n); }
+        le32(&mut zip, 0);
+        le32(&mut zip, 0);
+        zip.extend_from_slice(name);
+        let cd_size = zip.len() as u32 - cd_offset;
+        le32(&mut zip, 0x0605_4b50);
+        for n in [0, 0, 1, 1] { le16(&mut zip, n); }
+        le32(&mut zip, cd_size);
+        le32(&mut zip, cd_offset);
+        le16(&mut zip, 0);
+        let mut hashing = download::HashingReader::new(std::io::Cursor::new(&zip));
+        let mut written = Vec::new();
+        extract_from(&mut hashing, &out, &AtomicBool::new(false), &mut written, |_, _, _, _| {}).unwrap();
+        assert_eq!(hashing.finish(|_| Ok(())).unwrap(), format!("{:x}", Md5::digest(&zip)));
+        assert_eq!(std::fs::read(out.join("data/a.bin")).unwrap(), body);
+        let mut bad = zip.clone();
+        bad[60] ^= 0xFF;
+        assert!(extract_from(&mut std::io::Cursor::new(&bad), &out, &AtomicBool::new(false), &mut Vec::new(), |_, _, _, _| {}).is_err());
+        let _ = std::fs::remove_dir_all(&out);
+    }
 }
 #[cfg(test)]
 mod self_update_tests {
@@ -1523,7 +1825,7 @@ mod progress_tests {
 #[cfg(test)]
 mod tests {
     use super::{
-        check_free_space, required_bytes, sanitize_data_dest, transfer_detail, updated_tai_config,
+        check_free_space, parse_plugin_plan, required_bytes, sanitize_data_dest, transfer_detail, updated_tai_config,
         validated_tai_path,
     };
     #[test]
@@ -1596,6 +1898,30 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+    #[test]
+    fn adds_one_module_under_a_second_section() {
+        let original = "*main\nur0:tai/wifiturbo.suprx\n*NPXS10015\nur0:tai/henkaku.suprx\n";
+        let updated = updated_tai_config(original, "*NPXS10015", "ur0:tai/wifiturbo.suprx")
+            .unwrap()
+            .expect("the second section still needs the line");
+        assert_eq!(
+            updated,
+            "*main\nur0:tai/wifiturbo.suprx\n*NPXS10015\nur0:tai/henkaku.suprx\nur0:tai/wifiturbo.suprx\n"
+        );
+    }
+    #[test]
+    fn multi_module_plan_keeps_each_file_once() {
+        let plan = parse_plugin_plan(
+            "ur0:tai/",
+            "*KERNEL\n*main\n*NPXS10015",
+            "ur0:tai/wifiturbo_kernel.skprx\nur0:tai/wifiturbo.suprx\nur0:tai/wifiturbo.suprx",
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(plan.binaries.len(), 2);
+        assert_eq!(plan.lines.len(), 3);
+        assert!(parse_plugin_plan("ur0:tai/", "*KERNEL\n*main", "ur0:tai/wifiturbo.suprx").is_err());
     }
     #[test]
     fn plugin_lines_are_limited_to_taihen_modules() {

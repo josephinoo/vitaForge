@@ -82,6 +82,16 @@ pub fn logo_texture(ctx: &egui::Context) -> egui::TextureHandle {
 }
 
 pub fn apply_theme(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+    fonts.font_data.insert(
+        super::chrome_icons::ICON_FAMILY.to_owned(),
+        std::sync::Arc::new(egui::FontData::from_static(include_bytes!("../../../assets/fonts/lucide-icons.ttf"))),
+    );
+    fonts.families.insert(
+        egui::FontFamily::Name(super::chrome_icons::ICON_FAMILY.into()),
+        vec![super::chrome_icons::ICON_FAMILY.to_owned()],
+    );
+    ctx.set_fonts(fonts);
     let mut style = (*ctx.style()).clone();
     style.spacing.scroll.bar_width = 4.0;
     style.spacing.scroll.bar_inner_margin = 0.0;

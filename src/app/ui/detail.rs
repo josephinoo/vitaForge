@@ -209,7 +209,7 @@ pub(crate) fn detail_screen(
                     );
                     ui.allocate_new_ui(egui::UiBuilder::new().max_rect(frame), |ui| {
                         let (rect, _) = ui.allocate_exact_size(frame.size(), egui::Sense::hover());
-                        draw_screenshot(ui, icons, rect, url, entry.category, true);
+                        draw_screenshot(ui, icons, rect, url, entry.category, true, lang);
                     });
                     let total = entry.screenshot_urls.len();
                     if total > 1 {
@@ -612,11 +612,7 @@ fn install_progress_modal(
 }
 
 fn install_stepper(ui: &mut egui::Ui, progress: &crate::install::Progress, lang: Language) {
-    let steps = if lang == Language::Spanish {
-        ["Descarga", "Verificación", "Extracción", "Instalación"]
-    } else {
-        ["Download", "Verify", "Extract", "Install"]
-    };
+    let steps = ["step-download", "step-verify", "step-extract", "step-install"].map(|id| lang.tr(id));
     use crate::install::Progress;
     let failed = matches!(progress, Progress::Failed(_));
     let current = match progress {
@@ -687,7 +683,7 @@ fn install_stepper(ui: &mut egui::Ui, progress: &crate::install::Progress, lang:
         ui.painter().text(
             egui::pos2(center.x, center.y + circle_r + 14.0),
             egui::Align2::CENTER_CENTER,
-            *label,
+            label,
             font(FONT_SMALL),
             if is_current { TEXT_WHITE } else { TEXT_DIM },
         );
@@ -818,6 +814,7 @@ fn screenshots_row(
     entry: &crate::data::AppEntry,
     commands: &mut Vec<AppCommand>,
     skip: usize,
+    lang: Language,
 ) {
     egui::ScrollArea::horizontal()
         .id_salt("screenshots")
@@ -827,7 +824,7 @@ fn screenshots_row(
                     let (rect, response) = ui.allocate_exact_size(THUMB_SIZE, egui::Sense::click());
                     let nearby = rect.right() > ui.clip_rect().left()
                         && rect.left() < ui.clip_rect().right();
-                    draw_screenshot(ui, icons, rect, url, entry.category, nearby);
+                    draw_screenshot(ui, icons, rect, url, entry.category, nearby, lang);
                     if response.clicked() {
                         commands.push(AppCommand::OpenScreenshot(index));
                     }
@@ -844,6 +841,7 @@ fn draw_screenshot(
     url: &str,
     category: Category,
     fetch: bool,
+    lang: Language,
 ) {
     ui.painter().rect_filled(rect, RADIUS_MD, BG_DEEP);
     ui.painter().rect_stroke(
@@ -890,7 +888,7 @@ fn draw_screenshot(
         ui.painter().text(
             rect.center(),
             egui::Align2::CENTER_CENTER,
-            "No Image",
+            lang.tr("no-image"),
             font(FONT_SMALL),
             TEXT_DIM,
         );
@@ -1351,13 +1349,13 @@ fn right_column(
             egui::vec2(width, (width * 9.0 / 16.0).round()),
             egui::Sense::click(),
         );
-        draw_screenshot(ui, icons, rect, first, entry.category, true);
+        draw_screenshot(ui, icons, rect, first, entry.category, true, lang);
         if response.clicked() {
             commands.push(AppCommand::OpenScreenshot(0));
         }
         if entry.screenshot_urls.len() > 1 {
             ui.add_space(8.0);
-            screenshots_row(ui, icons, entry, commands, 1);
+            screenshots_row(ui, icons, entry, commands, 1, lang);
         }
         ui.add_space(14.0);
     }

@@ -1,6 +1,6 @@
 [package]
 name = "vitaforge"
-version = "0.1.7"
+version = "0.1.8"
 edition = "2024"
 license = "GPL-3.0-only"
 description = "Homebrew catalog browser for games/apps/ports on the PS Vita"
@@ -25,6 +25,7 @@ tokio = { version = "1", features = ["macros", "net", "rt", "rt-multi-thread", "
 sha1 = "0.10"
 zip = { version = "2", default-features = false, features = ["deflate-flate2", "flate2"] }
 flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
+crc32fast = "1"
 fluent-bundle = "0.16.0"
 unic-langid = "0.9.6"
 # Console-only. Every use site is already behind `cfg(target_os = "vita")`;
@@ -47,9 +48,20 @@ title_name = "VitaForge"
 assets = "static"
 vita_make_fself_flags = []
 # Vita/Vita3K read APP_VER from param.sfo (XX.YY). Keep in sync with package.version
-# 0.1.7 → 01.07 (minor.patch). Catalog update checks use stamped semver, not this field.
-vita_mksfoex_flags = ["-d", "ATTRIBUTE2=12", "-s", "APP_VER=01.07"]
+# 0.1.8 → 01.08 (minor.patch). Catalog update checks use stamped semver, not this field.
+vita_mksfoex_flags = ["-d", "ATTRIBUTE2=12", "-s", "APP_VER=01.08"]
 [profile.release]
 opt-level = "s"
 lto = "fat"
 codegen-units = 1
+
+[profile.release.package.zlib-rs]
+opt-level = 3
+[profile.release.package.flate2]
+opt-level = 3
+[profile.release.package.zip]
+opt-level = 3
+[profile.release.package.md-5]
+opt-level = 3
+[profile.release.package.crc32fast]
+opt-level = 3

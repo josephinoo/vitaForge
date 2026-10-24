@@ -21,21 +21,21 @@ fn encode_notification(text: &str) -> [u16; TEXT_UNITS] {
 pub fn send(text: &str) {
     vita::send(text);
 }
-pub fn install_started(title: &str) {
-    send(&format!("Installing {title}…"));
+pub fn install_started(lang: crate::app::i18n::Language, title: &str) {
+    send(&lang.tr_args("notify-installing", &[("title", title)]));
 }
-pub fn install_finished(title: &str) {
-    send(&format!("{title} installed"));
+pub fn install_finished(lang: crate::app::i18n::Language, title: &str) {
+    send(&lang.tr_args("notify-installed", &[("title", title)]));
 }
-pub fn install_failed(title: &str, reason: &str) {
-    send(&format!("{title} failed to install: {reason}"));
+pub fn install_failed(lang: crate::app::i18n::Language, title: &str, reason: &str) {
+    send(&lang.tr_args("notify-install-failed", &[("title", title), ("reason", reason)]));
 }
 pub fn updates_finished(lang: crate::app::i18n::Language, done: usize, failed: usize) {
     send(&lang.notify_updates_finished(done, failed));
 }
-pub fn self_update_available(tag: &str) {
+pub fn self_update_available(lang: crate::app::i18n::Language, tag: &str) {
     let tag = tag.trim_start_matches(['v', 'V']);
-    send(&format!("vitaForge update available: v{tag}"));
+    send(&lang.tr_args("notify-self-update", &[("tag", tag)]));
 }
 #[cfg(target_os = "vita")]
 mod vita {
