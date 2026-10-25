@@ -5,7 +5,7 @@ pub mod sysinfo;
 pub mod text;
 pub mod ui;
 use crate::data::{self, AppEntry, Category, SortDirection, SortOrder};
-use crate::input::{AppCommand, ContentTypeGroup, InputCommand, StoreTab};
+use crate::input::{AppCommand, ContentTypeGroup, DataStep, InputCommand, StoreTab};
 use anyhow::Result;
 use i18n::Language;
 use icons::IconCache;
@@ -607,6 +607,9 @@ pub enum AppState {
         comment_entry_requested: bool,
         lightbox: Option<usize>,
         data_prompt: bool,
+        /// See `data::with_data_language`; reset when the prompt opens.
+        data_language: usize,
+        data_step: DataStep,
         uninstall_prompt: bool,
     },
     Settings {
@@ -1120,6 +1123,20 @@ impl App {
             AppCommand::FlipSortDirection if matches!(self.state, AppState::Detail { .. }) => {
                 return self.handle_command(AppCommand::TertiaryAction);
             }
+            AppCommand::SecondaryAction
+                if matches!(self.state, AppState::Detail { data_prompt: true, .. }) =>
+            {
+                match &self.state {
+                    AppState::Detail { data_step: DataStep::Choice, .. } => {
+                        return self.handle_command(AppCommand::InstallAppOnly);
+                    }
+                    AppState::Detail { data_step: DataStep::Method, .. } => {
+                        return self.handle_command(AppCommand::InstallCurrent);
+                    }
+                    _ => {}
+                }
+            }
+            AppCommand::TertiaryAction if matches!(self.state, AppState::Detail { data_prompt: true, .. }) => {}
             AppCommand::SecondaryAction => {
                 if let AppState::Detail { app, lightbox: None, .. } = &self.state
                     && self.install.is_none()
@@ -1282,6 +1299,18 @@ impl App {
                     self.audio.play(crate::audio::Sfx::Activation);
                 }
             }
+            AppCommand::Input(direction @ (InputCommand::MoveUp | InputCommand::MoveDown))
+                if matches!(
+                    &self.state,
+                    AppState::Detail { data_prompt: true, data_step: DataStep::Language, .. }
+                ) =>
+            {
+                if let AppState::Detail { app, data_language, .. } = &self.state {
+                    let options = app.game_data_languages.len() + 1;
+                    let step = if direction == InputCommand::MoveUp { options - 1 } else { 1 };
+                    return self.handle_command(AppCommand::SelectDataLanguage((*data_language + step) % options));
+                }
+            }
             AppCommand::Input(
                 direction @ (InputCommand::MoveLeft
                 | InputCommand::MoveRight
@@ -1295,12 +1324,12 @@ impl App {
                 return self.handle_command(AppCommand::ScreenshotStep(step));
             }
             AppCommand::Input(InputCommand::Confirm) => {
-                if let AppState::Detail { data_prompt: true, app, .. } = &self.state {
-                    // Heavy data: the recommended (default) path is the manual download.
-                    return self.handle_command(if crate::data::is_heavy_data(app) {
-                        AppCommand::InstallAppOnly
-                    } else {
-                        AppCommand::InstallCurrent
+                if let AppState::Detail { data_prompt: true, data_step, .. } = &self.state {
+                    return self.handle_command(match data_step {
+                        DataStep::Choice => AppCommand::WantGameData,
+                        DataStep::Language => AppCommand::ConfirmDataLanguage,
+                        // Heavy data: the recommended path is copying it from a PC.
+                        DataStep::Method => AppCommand::InstallAppOnly,
                     });
                 }
                 if matches!(self.state, AppState::Detail { uninstall_prompt: true, .. }) {
@@ -1586,21 +1615,51 @@ impl App {
             AppCommand::BackToCatalog => self.back_to_catalog(),
             AppCommand::InstallCurrent => {
                 let busy = self.install.as_ref().is_some_and(|job| !job.progress.is_finished());
-                if let AppState::Detail { app, data_prompt, .. } = &mut self.state
+                if let AppState::Detail { app, data_prompt, data_language, data_step, .. } =
+                    &mut self.state
                     && !busy
                     && app.data_url.is_some()
                     && !*data_prompt
                 {
                     *data_prompt = true;
+                    *data_step = DataStep::Choice;
+                    *data_language = preferred_data_language(app, self.lang);
                     self.audio.play(crate::audio::Sfx::ShowModal);
                     return Ok(());
                 }
-                if let AppState::Detail { app, .. } = &self.state
+                if let AppState::Detail { app, data_language, .. } = &self.state
                     && !busy
-                    && crate::install::space_shortfall(app).is_none()
                 {
-                    let entry = app.clone();
-                    self.start_install(entry);
+                    let entry = data::with_data_language(app, *data_language);
+                    if crate::install::space_shortfall(&entry).is_none() {
+                        self.start_install(entry);
+                    }
+                }
+            }
+            AppCommand::WantGameData => {
+                if let AppState::Detail { app, data_prompt: true, data_step, .. } = &mut self.state
+                    && *data_step == DataStep::Choice
+                {
+                    if !app.game_data_languages.is_empty() {
+                        *data_step = DataStep::Language;
+                        self.audio.play(crate::audio::Sfx::Activation);
+                        return Ok(());
+                    }
+                    return self.continue_with_data();
+                }
+            }
+            AppCommand::ConfirmDataLanguage => {
+                if matches!(self.state, AppState::Detail { data_prompt: true, data_step: DataStep::Language, .. }) {
+                    return self.continue_with_data();
+                }
+            }
+            AppCommand::SelectDataLanguage(choice) => {
+                if let AppState::Detail { app, data_prompt: true, data_language, .. } = &mut self.state
+                    && choice <= app.game_data_languages.len()
+                    && *data_language != choice
+                {
+                    *data_language = choice;
+                    self.audio.play(crate::audio::Sfx::Activation);
                 }
             }
             AppCommand::InstallAppOnly => {
@@ -1666,6 +1725,7 @@ impl App {
                         data_url: None,
                         data_extract_path: None,
                         data_size_bytes: 0,
+                        game_data_languages: Vec::new(),
                         plugin_install_path: None,
                         plugin_config_section: None,
                         plugin_config_line: None,
@@ -1857,6 +1917,18 @@ impl App {
         }
         Ok(())
     }
+    /// After choosing game data (and its language): heavy data asks how to get it,
+    /// light data starts downloading right away.
+    fn continue_with_data(&mut self) -> Result<()> {
+        if let AppState::Detail { app, data_language, data_step, .. } = &mut self.state
+            && crate::data::is_heavy_data(&data::with_data_language(app, *data_language))
+        {
+            *data_step = DataStep::Method;
+            self.audio.play(crate::audio::Sfx::Activation);
+            return Ok(());
+        }
+        self.handle_command(AppCommand::InstallCurrent)
+    }
     fn start_install(&mut self, entry: AppEntry) {
         let app_id = entry.id.clone();
         let app_id_title = crate::install::installed::index_key(&entry);
@@ -1955,6 +2027,8 @@ impl App {
             comments_loaded: false,
             comment_entry_requested: false,
             data_prompt: false,
+            data_language: 0,
+            data_step: DataStep::Choice,
             uninstall_prompt: false,
             lightbox: None,
         };
@@ -1995,6 +2069,8 @@ impl App {
             comments_loaded: false,
             comment_entry_requested: false,
             data_prompt: false,
+            data_language: 0,
+            data_step: DataStep::Choice,
             uninstall_prompt: false,
             lightbox: None,
         };
@@ -2100,6 +2176,7 @@ mod sort_tests {
             data_url: None,
             data_extract_path: None,
             data_size_bytes: 0,
+            game_data_languages: Vec::new(),
             plugin_install_path: None,
             plugin_config_section: None,
             plugin_config_line: None,
@@ -2299,5 +2376,43 @@ mod precache_tests {
             .map(|_| art(crate::data::Platform::NpsVita, None, Some("https://x/c.jpg")))
             .collect();
         assert_eq!(precache_art_urls(&apps).len(), MAX_PRECACHE_PER_LAUNCH);
+    }
+}
+
+/// Preselects the extra language matching the app's UI language, else the default (0).
+fn preferred_data_language(app: &AppEntry, ui: crate::app::i18n::Language) -> usize {
+    use crate::app::i18n::Language;
+    let code = match ui {
+        Language::English => "en",
+        Language::Spanish => "es",
+        Language::French => "fr",
+        Language::Italian => "it",
+        Language::Portuguese => "pt",
+    };
+    app.game_data_languages
+        .iter()
+        .position(|l| l.language.split('-').next() == Some(code))
+        .map_or(0, |i| i + 1)
+}
+
+#[cfg(test)]
+mod data_language_tests {
+    use super::preferred_data_language;
+    use crate::app::i18n::Language;
+    use crate::data::GameDataLanguage;
+
+    #[test]
+    fn preselects_ui_language_or_default() {
+        let mut app = super::sort_tests::entry("1", "vitadb", 0, 0, 0.0, "");
+        let lang = |code: &str| GameDataLanguage {
+            language: code.to_owned(),
+            url: format!("https://h/{code}.zip"),
+            extract_path: None,
+            size_bytes: 0,
+        };
+        assert_eq!(preferred_data_language(&app, Language::Spanish), 0);
+        app.game_data_languages = vec![lang("ja"), lang("es")];
+        assert_eq!(preferred_data_language(&app, Language::Spanish), 2);
+        assert_eq!(preferred_data_language(&app, Language::French), 0);
     }
 }

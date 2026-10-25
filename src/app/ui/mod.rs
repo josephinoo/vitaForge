@@ -65,6 +65,8 @@ pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
             comment_entry_requested,
             lightbox,
             data_prompt,
+            data_language,
+            data_step,
             uninstall_prompt,
             previous,
         } => {
@@ -88,6 +90,8 @@ pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
                 *comment_entry_requested,
                 *lightbox,
                 *data_prompt,
+                *data_language,
+                *data_step,
                 *uninstall_prompt,
                 app.report_notice.as_deref(),
                 &previous.apps,

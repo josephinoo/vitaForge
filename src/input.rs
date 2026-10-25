@@ -13,6 +13,17 @@ pub enum InputCommand {
     CategoryPrev,
     CategoryNext,
 }
+/// Steps of the game data prompt, in order; later ones are skipped when not needed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DataStep {
+    /// App only (VPK) or app + game data.
+    #[default]
+    Choice,
+    /// Pick among `game_data_languages` (only when the game has any).
+    Language,
+    /// Heavy data only: download on the Vita or copy from a PC.
+    Method,
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextTarget {
     Search,
@@ -109,6 +120,12 @@ pub enum AppCommand {
     CancelInstall,
     CancelDataPrompt,
     InstallAppOnly,
+    /// Game data choice in the data prompt: 0 = default, i = extra language i - 1.
+    SelectDataLanguage(usize),
+    /// Choice step: the user wants the game data too.
+    WantGameData,
+    /// Leaves the language step and continues with the chosen data.
+    ConfirmDataLanguage,
     OpenSettings,
     CloseSettings,
     OpenCredits,

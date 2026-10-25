@@ -22,6 +22,10 @@ pub enum ChromeIcon {
     Library,
     Updates,
     GameData,
+    UpdateAvailable,
+    Installed,
+    Storage,
+    Alert,
 }
 
 impl ChromeIcon {
@@ -77,6 +81,10 @@ impl ChromeIcon {
             Self::Library => '\u{e106}',
             Self::Updates => '\u{e149}',
             Self::GameData => '\u{e4ea}',
+            Self::UpdateAvailable => '\u{e07f}',
+            Self::Installed => '\u{e266}',
+            Self::Storage => '\u{e0f0}',
+            Self::Alert => '\u{e193}',
         }
     }
 }

@@ -108,13 +108,22 @@ notify-updates-failed = { $count } mise(s) à jour échouée(s)
 notify-updates-mixed = { $done } mises à jour, { $failed } échecs
 notify-restart-manual = vitaForge est à jour. Fermez-le et rouvrez-le pour utiliser la nouvelle version.
 data-heavy-title = Téléchargement lourd ({ $size })
-data-heavy-body = Via le Wi-Fi de la Vita, cela peut prendre une heure ou plus. Plus rapide depuis un PC :
-    1. Scannez le QR ou ouvrez le lien ci-dessous sur votre PC.
-    2. Téléchargez les données du jeu (.zip) depuis cette page.
-    3. Connectez la Vita au PC (VitaShell : USB ou FTP).
-    4. Extrayez le zip dans { $path } sans changer ses dossiers.
-    5. Revenez ici et appuyez sur INSTALLER L'APP SEULE.
-data-heavy-app-only = INSTALLER L'APP SEULE
+data-choice-title = Que voulez-vous installer ?
+data-choice-with-data = APP + DONNÉES DU JEU
+data-choice-app-only = APP SEULE (VPK)
+data-choice-app-only-hint = Choisissez l'app seule si les données du jeu sont déjà sur votre Vita.
+data-language-title = Dans quelle langue voulez-vous le jeu ?
+data-language-default = Original
+data-language-continue = CONTINUER
+data-heavy-choose = Choisissez comment installer les données du jeu :
+data-heavy-vita-title = Sur la Vita
+data-heavy-vita-body = Le plus simple, mais en Wi-Fi cela peut prendre une heure ou plus. Laissez la Vita en charge.
+data-heavy-pc-title = Depuis votre PC (plus rapide)
+data-heavy-pc-step1 = 1. Scannez le QR et téléchargez le .zip
+data-heavy-pc-step2 = 2. Connectez la Vita (VitaShell : USB ou FTP)
+data-heavy-pc-step3 = 3. Extrayez le zip dans { $path }
+data-heavy-pc-step4 = 4. Revenez ici et appuyez sur le bouton ci-dessous
+data-heavy-pc-done = J'AI COPIÉ LES DONNÉES
 data-heavy-download-here = TÉLÉCHARGER SUR LA VITA
 
 settings-credits = Crédits
@@ -149,9 +158,7 @@ category-utility = Utilitaire
 changelog-label = Nouveautés
 comments-label = Commentaires
 community-label = Communauté
-data-prompt-accept = TÉLÉCHARGER
 data-prompt-body = Cette application a besoin de données supplémentaires avant de pouvoir se lancer.
-data-prompt-title = Données de jeu supplémentaires requises
 description-label = Description
 download-btn = TÉLÉCHARGER
 downloads-label = Téléchargements

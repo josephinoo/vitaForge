@@ -399,18 +399,54 @@ impl Language {
         args.set("name", FluentValue::from(name));
         self.with_bundle(|bundle| format_message(bundle, "uninstall-title", Some(&args)))
     }
-    pub fn data_heavy_body(self, path: &str) -> String {
-        let mut args = FluentArgs::new();
-        args.set("path", FluentValue::from(path));
-        self.with_bundle(|bundle| format_message(bundle, "data-heavy-body", Some(&args)))
-    }
     pub fn data_heavy_title(self, size: &str) -> String {
         let mut args = FluentArgs::new();
         args.set("size", FluentValue::from(size));
         self.with_bundle(|bundle| format_message(bundle, "data-heavy-title", Some(&args)))
     }
-    pub fn data_heavy_app_only(self) -> String {
-        self.with_bundle(|bundle| format_message(bundle, "data-heavy-app-only", None))
+    pub fn data_language_title(self) -> String {
+        self.with_bundle(|bundle| format_message(bundle, "data-language-title", None))
+    }
+    pub fn data_choice_title(self) -> String {
+        self.with_bundle(|bundle| format_message(bundle, "data-choice-title", None))
+    }
+    pub fn data_choice_with_data(self) -> String {
+        self.with_bundle(|bundle| format_message(bundle, "data-choice-with-data", None))
+    }
+    pub fn data_choice_app_only(self) -> String {
+        self.with_bundle(|bundle| format_message(bundle, "data-choice-app-only", None))
+    }
+    pub fn data_choice_app_only_hint(self) -> String {
+        self.with_bundle(|bundle| format_message(bundle, "data-choice-app-only-hint", None))
+    }
+    pub fn data_language_continue(self) -> String {
+        self.with_bundle(|bundle| format_message(bundle, "data-language-continue", None))
+    }
+    pub fn data_heavy_choose(self) -> String {
+        self.with_bundle(|bundle| format_message(bundle, "data-heavy-choose", None))
+    }
+    pub fn data_heavy_vita_title(self) -> String {
+        self.with_bundle(|bundle| format_message(bundle, "data-heavy-vita-title", None))
+    }
+    pub fn data_heavy_vita_body(self) -> String {
+        self.with_bundle(|bundle| format_message(bundle, "data-heavy-vita-body", None))
+    }
+    pub fn data_heavy_pc_title(self) -> String {
+        self.with_bundle(|bundle| format_message(bundle, "data-heavy-pc-title", None))
+    }
+    pub fn data_heavy_pc_steps(self, path: &str) -> Vec<String> {
+        let mut args = FluentArgs::new();
+        args.set("path", FluentValue::from(path));
+        ["data-heavy-pc-step1", "data-heavy-pc-step2", "data-heavy-pc-step3", "data-heavy-pc-step4"]
+            .iter()
+            .map(|key| self.with_bundle(|bundle| format_message(bundle, key, Some(&args))))
+            .collect()
+    }
+    pub fn data_heavy_pc_done(self) -> String {
+        self.with_bundle(|bundle| format_message(bundle, "data-heavy-pc-done", None))
+    }
+    pub fn data_language_default(self) -> String {
+        self.with_bundle(|bundle| format_message(bundle, "data-language-default", None))
     }
     pub fn data_heavy_download_here(self) -> String {
         self.with_bundle(|bundle| format_message(bundle, "data-heavy-download-here", None))
@@ -575,14 +611,8 @@ impl Language {
     pub fn cancel_btn(self) -> &'static str {
         self.strings(|s| s.cancel_btn)
     }
-    pub fn data_prompt_title(self) -> &'static str {
-        self.strings(|s| s.data_prompt_title)
-    }
     pub fn data_prompt_body(self) -> &'static str {
         self.strings(|s| s.data_prompt_body)
-    }
-    pub fn data_prompt_accept(self) -> &'static str {
-        self.strings(|s| s.data_prompt_accept)
     }
     pub fn installed_version_value(self) -> &'static str {
         self.strings(|s| s.installed_version_value)
@@ -741,9 +771,7 @@ struct LocalizedStrings {
     settings_purge_all: &'static str,
     settings_cleared_catalog: &'static str,
     cancel_btn: &'static str,
-    data_prompt_title: &'static str,
     data_prompt_body: &'static str,
-    data_prompt_accept: &'static str,
     installed_version_value: &'static str,
 }
 impl LocalizedStrings {
@@ -880,9 +908,7 @@ impl LocalizedStrings {
             settings_purge_all: r("settings-purge-all"),
             settings_cleared_catalog: r("settings-cleared-catalog"),
             cancel_btn: r("cancel-btn"),
-            data_prompt_title: r("data-prompt-title"),
             data_prompt_body: r("data-prompt-body"),
-            data_prompt_accept: r("data-prompt-accept"),
             installed_version_value: r("installed-version-value"),
         }
     }

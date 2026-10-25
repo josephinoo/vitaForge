@@ -1,5 +1,6 @@
 use crate::app::i18n::Language;
 use crate::app::icons::IconCache;
+use crate::app::ui::chrome_icons::{self, ChromeIcon};
 use crate::app::ui::theme::*;
 use crate::app::ui::widgets::button_texture;
 use crate::input::{AppCommand, StoreTab};
@@ -37,98 +38,6 @@ pub(crate) fn status_note(installed: &InstalledIndex, icons: &IconCache) -> Stat
     }
 }
 
-fn status_icon(
-    painter: &egui::Painter,
-    center: egui::Pos2,
-    kind: StatusIcon,
-    color: egui::Color32,
-) {
-    let stroke = egui::Stroke::new(1.35_f32, color);
-    match kind {
-        StatusIcon::Library => {
-            let rect = egui::Rect::from_center_size(center, egui::vec2(9.0, 7.0));
-            painter.rect_stroke(rect, 1.5, stroke, egui::StrokeKind::Inside);
-            painter.line_segment(
-                [
-                    egui::pos2(rect.left(), center.y - 1.0),
-                    egui::pos2(rect.right(), center.y - 1.0),
-                ],
-                stroke,
-            );
-            painter.line_segment(
-                [
-                    egui::pos2(center.x, center.y - 1.0),
-                    egui::pos2(center.x, rect.bottom()),
-                ],
-                stroke,
-            );
-        }
-        StatusIcon::Update => {
-            painter.line_segment(
-                [
-                    egui::pos2(center.x, center.y + 4.0),
-                    egui::pos2(center.x, center.y - 4.0),
-                ],
-                stroke,
-            );
-            painter.line_segment(
-                [
-                    egui::pos2(center.x - 3.0, center.y - 1.0),
-                    egui::pos2(center.x, center.y - 4.0),
-                ],
-                stroke,
-            );
-            painter.line_segment(
-                [
-                    egui::pos2(center.x + 3.0, center.y - 1.0),
-                    egui::pos2(center.x, center.y - 4.0),
-                ],
-                stroke,
-            );
-            painter.line_segment(
-                [
-                    egui::pos2(center.x - 4.0, center.y + 4.0),
-                    egui::pos2(center.x + 4.0, center.y + 4.0),
-                ],
-                stroke,
-            );
-        }
-        StatusIcon::Storage => {
-            painter.circle_stroke(center, 4.5, stroke);
-            painter.line_segment([center, egui::pos2(center.x, center.y - 4.5)], stroke);
-            painter.line_segment([center, egui::pos2(center.x + 3.5, center.y + 2.5)], stroke);
-        }
-        StatusIcon::Alert => {
-            let points = [
-                egui::pos2(center.x, center.y - 5.0),
-                egui::pos2(center.x + 5.0, center.y + 4.0),
-                egui::pos2(center.x - 5.0, center.y + 4.0),
-            ];
-            painter.add(egui::Shape::convex_polygon(
-                points.to_vec(),
-                color.gamma_multiply(0.2),
-                stroke,
-            ));
-            painter.line_segment(
-                [
-                    egui::pos2(center.x, center.y - 2.0),
-                    egui::pos2(center.x, center.y + 1.0),
-                ],
-                stroke,
-            );
-            painter.circle_filled(egui::pos2(center.x, center.y + 2.8), 0.9, color);
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-enum StatusIcon {
-    Library,
-    Update,
-    Storage,
-    Alert,
-}
-
 fn status_note_widget(ui: &mut egui::Ui, lang: Language, note: StatusNote) -> Option<StoreTab> {
     let mut clicked = None;
     match note {
@@ -137,7 +46,7 @@ fn status_note_widget(ui: &mut egui::Ui, lang: Language, note: StatusNote) -> Op
                 ui,
                 "status_chip_rate_limited",
                 &message,
-                StatusIcon::Alert,
+                ChromeIcon::Alert,
                 STAR_GOLD,
             );
         }
@@ -152,7 +61,7 @@ fn status_note_widget(ui: &mut egui::Ui, lang: Language, note: StatusNote) -> Op
                     ui,
                     "status_chip_updates",
                     &label,
-                    StatusIcon::Update,
+                    ChromeIcon::UpdateAvailable,
                     STAR_GOLD,
                 ) {
                     clicked = Some(StoreTab::Updates);
@@ -163,7 +72,7 @@ fn status_note_widget(ui: &mut egui::Ui, lang: Language, note: StatusNote) -> Op
                 ui,
                 "status_chip_installed",
                 &installed_label,
-                StatusIcon::Library,
+                ChromeIcon::Installed,
                 GREEN_PLAY,
             ) {
                 clicked = Some(StoreTab::Library);
@@ -173,7 +82,7 @@ fn status_note_widget(ui: &mut egui::Ui, lang: Language, note: StatusNote) -> Op
                     ui,
                     "status_chip_storage",
                     &format!("{used:.1}/{total:.1} GB"),
-                    StatusIcon::Storage,
+                    ChromeIcon::Storage,
                     TEXT_DIM,
                 );
             }
@@ -186,11 +95,12 @@ fn status_chip_inline(
     ui: &mut egui::Ui,
     id: &'static str,
     text: &str,
-    icon: StatusIcon,
+    icon: ChromeIcon,
     color: egui::Color32,
 ) -> bool {
     let galley = ui.fonts(|fonts| fonts.layout_no_wrap(text.to_owned(), font(FONT_MICRO), color));
-    let size = egui::vec2(galley.size().x + 28.0, 22.0);
+    // 10 pad + 12 icon + 6 gap + text + 10 pad.
+    let size = egui::vec2(galley.size().x + 38.0, 22.0);
     let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
     let response = ui.interact(rect, ui.id().with(id), egui::Sense::click());
     ui.painter()
@@ -201,14 +111,17 @@ fn status_chip_inline(
         egui::Stroke::new(1.0_f32, color.gamma_multiply(0.34)),
         egui::StrokeKind::Inside,
     );
-    status_icon(
-        ui.painter(),
-        egui::pos2(rect.left() + 11.0, rect.center().y),
+    chrome_icons::paint(
+        ui,
         icon,
+        egui::Rect::from_center_size(
+            egui::pos2(rect.left() + 16.0, rect.center().y),
+            egui::Vec2::splat(12.0),
+        ),
         color,
     );
     ui.painter().galley(
-        egui::pos2(rect.left() + 20.0, rect.center().y - galley.size().y * 0.5),
+        egui::pos2(rect.left() + 28.0, rect.center().y - galley.size().y * 0.5),
         galley,
         color,
     );

@@ -25,6 +25,8 @@ pub(crate) fn detail_screen(
     comment_entry_requested: bool,
     lightbox: Option<usize>,
     data_prompt: bool,
+    data_language: usize,
+    data_step: crate::input::DataStep,
     uninstall_prompt: bool,
     report_notice: Option<&str>,
     apps: &[crate::data::AppEntry],
@@ -93,57 +95,7 @@ pub(crate) fn detail_screen(
     }
 
     if data_prompt {
-        paint_modal_scrim(ctx);
-        egui::Area::new(egui::Id::new("data_prompt"))
-            .anchor(egui::Align2::CENTER_CENTER, modal_center_offset(ctx))
-            .order(egui::Order::Foreground)
-            .show(ctx, |ui| {
-                egui::Frame::window(&ctx.style())
-                    .fill(BG_CARD)
-                    .stroke(egui::Stroke::new(1.5_f32, STAR_GOLD))
-                    .corner_radius(RADIUS_LG)
-                    .inner_margin(egui::vec2(24.0, 18.0))
-                    .show(ui, |ui| {
-                        if crate::data::is_heavy_data(entry) {
-                            heavy_data_prompt(ui, entry, lang, &mut commands);
-                            return;
-                        }
-                        ui.set_width(320.0);
-                        ui.vertical_centered(|ui| {
-                            ui.label(
-                                egui::RichText::new(lang.data_prompt_title())
-                                    .size(FONT_LARGE)
-                                    .strong()
-                                    .color(TEXT_WHITE),
-                            );
-                            ui.add_space(10.0);
-                            ui.label(
-                                egui::RichText::new(lang.data_prompt_body())
-                                    .size(FONT_BODY)
-                                    .color(TEXT_DIM),
-                            );
-                            if entry.data_size_bytes > 0 {
-                                ui.add_space(6.0);
-                                ui.label(
-                                    egui::RichText::new(entry.data_size_label())
-                                        .size(FONT_BODY)
-                                        .strong()
-                                        .color(STAR_GOLD),
-                                );
-                            }
-                            ui.add_space(18.0);
-                            ui.horizontal(|ui| {
-                                if pill_button(ui, lang.data_prompt_accept(), true) {
-                                    commands.push(AppCommand::InstallCurrent);
-                                }
-                                ui.add_space(10.0);
-                                if pill_button(ui, lang.cancel_btn(), false) {
-                                    commands.push(AppCommand::CancelDataPrompt);
-                                }
-                            });
-                        });
-                    });
-            });
+        data_prompt_modal(ctx, entry, data_language, data_step, lang, &mut commands);
     }
 
     if uninstall_prompt {
@@ -1534,19 +1486,24 @@ fn game_data_callout(
 }
 
 fn action_chip(ui: &mut egui::Ui, glyph: Glyph, label: &str) -> bool {
+    prompt_chip(ui, glyph, label, false)
+}
+
+/// Chip showing which pad button triggers it; `primary` is the solid blue action.
+fn prompt_chip(ui: &mut egui::Ui, glyph: Glyph, label: &str, primary: bool) -> bool {
     let galley = ui.fonts(|f| f.layout_no_wrap(label.to_owned(), font(FONT_SMALL), TEXT_WHITE));
     let icon = 16.0;
-    let size = egui::vec2(galley.size().x + icon + 28.0, 28.0);
+    // 14 left + icon + 6 gap + text + 14 right, so the content sits centred.
+    let size = egui::vec2(galley.size().x + icon + 34.0, 28.0);
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
     let t = if response.hovered() { 1.0_f32 } else { 0.0_f32 };
-    ui.painter()
-        .rect_filled(rect, size.y / 2.0, BG_CARD.lerp_to_gamma(BG_CARD_HOVER, t));
-    ui.painter().rect_stroke(
-        rect,
-        size.y / 2.0,
-        egui::Stroke::new(1.0_f32, SEPARATOR),
-        egui::StrokeKind::Inside,
-    );
+    let (fill, stroke) = if primary {
+        (BLUE_PLAY.lerp_to_gamma(BLUE_PLAY_HOVER, t), egui::Stroke::NONE)
+    } else {
+        (TEXT_WHITE.gamma_multiply(0.08 + 0.06 * t), egui::Stroke::NONE)
+    };
+    ui.painter().rect_filled(rect, size.y / 2.0, fill);
+    ui.painter().rect_stroke(rect, size.y / 2.0, stroke, egui::StrokeKind::Inside);
     if let Some(tex) = button_texture(ui.ctx(), glyph) {
         ui.painter().image(
             tex.id(),
@@ -1584,48 +1541,229 @@ mod tests {
     }
 }
 
-fn heavy_data_prompt(
+/// Two-step game data modal: pick a language (only when the game has extra
+/// languages), then confirm how to get the data for that choice.
+fn data_prompt_modal(
+    ctx: &egui::Context,
+    entry: &crate::data::AppEntry,
+    data_language: usize,
+    step: crate::input::DataStep,
+    lang: Language,
+    commands: &mut Vec<AppCommand>,
+) {
+    use crate::input::DataStep;
+    paint_modal_scrim(ctx);
+    let chosen = crate::data::with_data_language(entry, data_language);
+    egui::Area::new(egui::Id::new("data_prompt"))
+        .anchor(egui::Align2::CENTER_CENTER, modal_center_offset(ctx))
+        .order(egui::Order::Foreground)
+        .show(ctx, |ui| {
+            egui::Frame::window(&ctx.style())
+                .fill(BG_CARD)
+                .stroke(egui::Stroke::new(1.0_f32, SEPARATOR))
+                .corner_radius(RADIUS_LG)
+                .inner_margin(egui::vec2(24.0, 18.0))
+                .show(ui, |ui| {
+                    match step {
+                        DataStep::Choice => choice_step(ui, entry, lang, commands),
+                        DataStep::Language => language_step(ui, entry, data_language, lang, commands),
+                        DataStep::Method => heavy_data_prompt(
+                            ui,
+                            &chosen,
+                            chosen_language_label(entry, data_language, lang),
+                            lang,
+                            commands,
+                        ),
+                    }
+                });
+        });
+}
+
+/// Name of the chosen variant, only when the game offers more than one.
+fn chosen_language_label(entry: &crate::data::AppEntry, choice: usize, lang: Language) -> Option<String> {
+    if entry.game_data_languages.is_empty() {
+        return None;
+    }
+    Some(match choice.checked_sub(1).and_then(|i| entry.game_data_languages.get(i)) {
+        Some(l) => language_name(&l.language),
+        None => lang.data_language_default(),
+    })
+}
+
+fn language_step(
+    ui: &mut egui::Ui,
+    entry: &crate::data::AppEntry,
+    selected: usize,
+    lang: Language,
+    commands: &mut Vec<AppCommand>,
+) {
+    ui.set_width(380.0);
+    ui.label(egui::RichText::new(lang.data_language_title()).size(FONT_LARGE).strong().color(TEXT_WHITE));
+    ui.add_space(12.0);
+    let options = std::iter::once((lang.data_language_default(), entry.data_size_bytes)).chain(
+        entry.game_data_languages.iter().map(|l| (language_name(&l.language), l.size_bytes)),
+    );
+    for (i, (name, size)) in options.enumerate() {
+        if language_row(ui, &name, size, i == selected) {
+            commands.push(AppCommand::SelectDataLanguage(i));
+        }
+        ui.add_space(6.0);
+    }
+    ui.add_space(12.0);
+    ui.horizontal(|ui| {
+        if prompt_chip(ui, Glyph::Cross, &lang.data_language_continue(), true) {
+            commands.push(AppCommand::ConfirmDataLanguage);
+        }
+        ui.add_space(10.0);
+        if prompt_chip(ui, Glyph::Circle, lang.cancel_btn(), false) {
+            commands.push(AppCommand::CancelDataPrompt);
+        }
+    });
+}
+
+/// One selectable line: radio + name, size on the right.
+fn language_row(ui: &mut egui::Ui, name: &str, size: u64, selected: bool) -> bool {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 38.0), egui::Sense::click());
+    let painter = ui.painter();
+    // Neutral borderless pill; focus = white ring, choice = solid blue radio.
+    let lift = if selected { 0.12 } else if response.hovered() { 0.09 } else { 0.06 };
+    painter.rect_filled(rect, RADIUS_SM, TEXT_WHITE.gamma_multiply(lift));
+    if selected {
+        painter.rect_stroke(rect, RADIUS_SM, egui::Stroke::new(2.0_f32, TEXT_WHITE), egui::StrokeKind::Inside);
+    }
+    let color = if selected { TEXT_WHITE } else { TEXT_DIM };
+    let mid = rect.center().y;
+    let dot = egui::pos2(rect.left() + 20.0, mid);
+    if selected {
+        painter.circle_filled(dot, 7.0, BLUE_PLAY);
+        painter.circle_filled(dot, 2.5, TEXT_WHITE);
+    } else {
+        painter.circle_stroke(dot, 6.5, egui::Stroke::new(1.5_f32, TEXT_FAINT));
+    }
+    painter.text(egui::pos2(rect.left() + 36.0, mid), egui::Align2::LEFT_CENTER, name, font(FONT_BODY), color);
+    if size > 0 {
+        painter.text(
+            egui::pos2(rect.right() - 14.0, mid),
+            egui::Align2::RIGHT_CENTER,
+            crate::data::cache_manager::format_bytes(size),
+            font(FONT_SMALL),
+            TEXT_DIM,
+        );
+    }
+    response.clicked()
+}
+
+/// First question: just the app (VPK), or the app plus its game data.
+fn choice_step(
     ui: &mut egui::Ui,
     entry: &crate::data::AppEntry,
     lang: Language,
     commands: &mut Vec<AppCommand>,
 ) {
+    ui.set_width(420.0);
+    ui.label(egui::RichText::new(lang.data_choice_title()).size(FONT_LARGE).strong().color(TEXT_WHITE));
+    ui.add_space(8.0);
+    ui.add(egui::Label::new(egui::RichText::new(lang.data_prompt_body()).size(FONT_BODY).color(TEXT_DIM)).wrap());
+    if entry.data_size_bytes > 0 {
+        ui.add_space(4.0);
+        ui.label(egui::RichText::new(entry.data_size_label()).size(FONT_BODY).strong().color(STAR_GOLD));
+    }
+    ui.add_space(14.0);
+    if prompt_chip(ui, Glyph::Cross, &lang.data_choice_with_data(), true) {
+        commands.push(AppCommand::WantGameData);
+    }
+    ui.add_space(8.0);
+    if prompt_chip(ui, Glyph::Triangle, &lang.data_choice_app_only(), false) {
+        commands.push(AppCommand::InstallAppOnly);
+    }
+    ui.add(egui::Label::new(egui::RichText::new(lang.data_choice_app_only_hint()).size(FONT_SMALL).color(TEXT_FAINT)).wrap());
+    ui.add_space(12.0);
+    if prompt_chip(ui, Glyph::Circle, lang.cancel_btn(), false) {
+        commands.push(AppCommand::CancelDataPrompt);
+    }
+}
+
+/// Big data: two clearly separated ways to get it, each with its own button.
+fn heavy_data_prompt(
+    ui: &mut egui::Ui,
+    entry: &crate::data::AppEntry,
+    language: Option<String>,
+    lang: Language,
+    commands: &mut Vec<AppCommand>,
+) {
     let url = format!("https://vitaforge.josephinoo.dev/apps/{}", entry.id);
     let path = entry.data_extract_path.as_deref().unwrap_or("ux0:data/");
-    ui.set_width(600.0);
+    ui.set_width(640.0);
+    let mut title = lang.data_heavy_title(&entry.data_size_label());
+    if let Some(language) = language {
+        title = format!("{title} · {language}");
+    }
+    ui.label(egui::RichText::new(title).size(FONT_LARGE).strong().color(STAR_GOLD));
+    ui.label(egui::RichText::new(lang.data_heavy_choose()).size(FONT_BODY).color(TEXT_DIM));
+    ui.add_space(12.0);
     ui.horizontal_top(|ui| {
-        paint_qr(ui, &url, 170.0);
-        ui.add_space(16.0);
-        ui.vertical(|ui| {
-            ui.set_width(400.0);
-            ui.label(
-                egui::RichText::new(lang.data_heavy_title(&entry.data_size_label()))
-                    .size(FONT_LARGE)
-                    .strong()
-                    .color(STAR_GOLD),
-            );
-            ui.add_space(8.0);
-            ui.label(egui::RichText::new(lang.data_heavy_body(path)).size(FONT_SMALL).color(TEXT_DIM));
-            ui.add_space(8.0);
+        option_card(ui, 220.0, |ui| {
+            ui.label(egui::RichText::new(lang.data_heavy_vita_title()).size(FONT_BODY).strong().color(TEXT_WHITE));
+            ui.add_space(6.0);
+            ui.add(egui::Label::new(egui::RichText::new(lang.data_heavy_vita_body()).size(FONT_SMALL).color(TEXT_DIM)).wrap());
+            ui.add_space(12.0);
+            if prompt_chip(ui, Glyph::Triangle, &lang.data_heavy_download_here(), false) {
+                commands.push(AppCommand::InstallCurrent);
+            }
+        });
+        ui.add_space(12.0);
+        option_card(ui, 360.0, |ui| {
+            ui.label(egui::RichText::new(lang.data_heavy_pc_title()).size(FONT_BODY).strong().color(STAR_GOLD));
+            ui.add_space(6.0);
+            ui.horizontal_top(|ui| {
+                paint_qr(ui, &url, 110.0);
+                ui.add_space(10.0);
+                ui.vertical(|ui| {
+                    for step in lang.data_heavy_pc_steps(path) {
+                        ui.add(egui::Label::new(egui::RichText::new(step).size(FONT_SMALL).color(TEXT_DIM)).wrap());
+                    }
+                });
+            });
+            ui.add_space(4.0);
             // Wrap: a long URL has no spaces and would be clipped at the frame edge.
-            ui.add(egui::Label::new(egui::RichText::new(&url).size(FONT_SMALL).strong().color(TEXT_WHITE)).wrap());
+            ui.add(egui::Label::new(egui::RichText::new(&url).size(FONT_MICRO).color(TEXT_FAINT)).wrap());
+            ui.add_space(8.0);
+            if prompt_chip(ui, Glyph::Cross, &lang.data_heavy_pc_done(), true) {
+                commands.push(AppCommand::InstallAppOnly);
+            }
         });
     });
-    ui.add_space(14.0);
-    ui.horizontal(|ui| {
-        if pill_button(ui, &lang.data_heavy_app_only(), true) {
-            commands.push(AppCommand::InstallAppOnly);
-        }
-        ui.add_space(10.0);
-        if pill_button(ui, &lang.data_heavy_download_here(), false) {
-            commands.push(AppCommand::InstallCurrent);
-        }
-        ui.add_space(10.0);
-        if pill_button(ui, lang.cancel_btn(), false) {
-            commands.push(AppCommand::CancelDataPrompt);
-        }
-    });
+    ui.add_space(12.0);
+    if prompt_chip(ui, Glyph::Circle, lang.cancel_btn(), false) {
+        commands.push(AppCommand::CancelDataPrompt);
+    }
 }
+
+fn option_card(ui: &mut egui::Ui, width: f32, add: impl FnOnce(&mut egui::Ui)) {
+    egui::Frame::NONE
+        .fill(BG_DEEP)
+        .stroke(egui::Stroke::new(1.0_f32, SEPARATOR))
+        .corner_radius(RADIUS_MD)
+        .inner_margin(egui::vec2(12.0, 10.0))
+        .show(ui, |ui| {
+            ui.set_width(width);
+            add(ui);
+        });
+}
+
+/// Native name for common codes; the font has no CJK glyphs, so those stay as codes.
+fn language_name(code: &str) -> String {
+    match code.split('-').next().unwrap_or(code) {
+        "en" => "English".to_owned(),
+        "es" => "Español".to_owned(),
+        "fr" => "Français".to_owned(),
+        "it" => "Italiano".to_owned(),
+        "pt" => "Português".to_owned(),
+        "de" => "Deutsch".to_owned(),
+        _ => code.to_uppercase(),
+    }
+}
+
 /// Draws `text` as a QR code (black modules on a white quiet zone) in a `side` px square.
 fn paint_qr(ui: &mut egui::Ui, text: &str, side: f32) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(side, side), egui::Sense::hover());

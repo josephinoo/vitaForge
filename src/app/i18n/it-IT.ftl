@@ -108,13 +108,22 @@ notify-updates-failed = { $count } aggiornamenti non riusciti
 notify-updates-mixed = { $done } aggiornate, { $failed } non riuscite
 notify-restart-manual = vitaForge aggiornato. Chiudilo e riaprilo per usare la nuova versione.
 data-heavy-title = Download pesante ({ $size })
-data-heavy-body = Con il Wi-Fi della Vita può richiedere un'ora o più. Più veloce dal PC:
-    1. Scansiona il QR o apri il link qui sotto sul PC.
-    2. Scarica i dati del gioco (.zip) da quella pagina.
-    3. Collega la Vita al PC (VitaShell: USB o FTP).
-    4. Estrai lo zip in { $path } senza cambiare le cartelle.
-    5. Torna qui e premi INSTALLA SOLO L'APP.
-data-heavy-app-only = INSTALLA SOLO L'APP
+data-choice-title = Cosa vuoi installare?
+data-choice-with-data = APP + DATI DEL GIOCO
+data-choice-app-only = SOLO L'APP (VPK)
+data-choice-app-only-hint = Scegli solo l'app se i dati del gioco sono già sulla tua Vita.
+data-language-title = In quale lingua vuoi il gioco?
+data-language-default = Originale
+data-language-continue = CONTINUA
+data-heavy-choose = Scegli come installare i dati del gioco:
+data-heavy-vita-title = Sulla Vita
+data-heavy-vita-body = Il modo più semplice, ma in Wi-Fi può richiedere un'ora o più. Tieni la Vita in carica.
+data-heavy-pc-title = Dal tuo PC (più veloce)
+data-heavy-pc-step1 = 1. Scansiona il QR e scarica lo .zip
+data-heavy-pc-step2 = 2. Collega la Vita (VitaShell: USB o FTP)
+data-heavy-pc-step3 = 3. Estrai lo zip in { $path }
+data-heavy-pc-step4 = 4. Torna qui e premi il pulsante qui sotto
+data-heavy-pc-done = HO COPIATO I DATI
 data-heavy-download-here = SCARICA SULLA VITA
 
 settings-credits = Crediti
@@ -149,9 +158,7 @@ category-utility = Utilità
 changelog-label = Novità
 comments-label = Commenti
 community-label = Community
-data-prompt-accept = SCARICA
 data-prompt-body = Questa app ha bisogno di dati aggiuntivi prima di potersi avviare.
-data-prompt-title = Servono dati di gioco aggiuntivi
 description-label = Descrizione
 download-btn = SCARICA
 downloads-label = Download
