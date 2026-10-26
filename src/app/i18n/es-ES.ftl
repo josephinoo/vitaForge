@@ -146,9 +146,7 @@ status-installed = { $count } instaladas
 status-updates = { $count } updates
 library-empty = Aún no hay apps instaladas
 updates-empty = Todo está actualizado
-data-prompt-title = Necesita datos adicionales
 data-prompt-body = Esta app necesita descargar datos extra para poder funcionar.
-data-prompt-accept = DESCARGAR
 about-app = Acerca de esta app
 also-needs = También necesita
 ready-to-play = Listo para jugar
@@ -172,13 +170,22 @@ notify-updates-failed = { $count } actualización(es) fallida(s)
 notify-updates-mixed = { $done } actualizadas, { $failed } fallidas
 notify-restart-manual = vitaForge actualizado. Ciérralo y ábrelo de nuevo para usar la nueva versión.
 data-heavy-title = Descarga pesada ({ $size })
-data-heavy-body = Por el Wi-Fi de la Vita puede tardar una hora o más. Más rápido desde un PC:
-    1. Escanea el QR o abre el link de abajo en tu PC.
-    2. Descarga los datos del juego (.zip) desde esa página.
-    3. Conecta la Vita al PC (VitaShell: USB o FTP).
-    4. Descomprime el zip en { $path } sin cambiar sus carpetas.
-    5. Vuelve aquí y pulsa INSTALAR SOLO LA APP.
-data-heavy-app-only = INSTALAR SOLO LA APP
+data-choice-title = ¿Qué quieres instalar?
+data-choice-with-data = APP + DATOS DEL JUEGO
+data-choice-app-only = SOLO LA APP (VPK)
+data-choice-app-only-hint = Elige solo la app si ya tienes los datos del juego en la Vita.
+data-language-title = ¿En qué idioma quieres el juego?
+data-language-default = Original
+data-language-continue = CONTINUAR
+data-heavy-choose = Elige cómo instalar los datos del juego:
+data-heavy-vita-title = En la Vita
+data-heavy-vita-body = Lo más fácil, pero por Wi-Fi puede tardar una hora o más. Deja la Vita cargando.
+data-heavy-pc-title = Desde tu PC (más rápido)
+data-heavy-pc-step1 = 1. Escanea el QR y descarga el .zip
+data-heavy-pc-step2 = 2. Conecta la Vita (VitaShell: USB o FTP)
+data-heavy-pc-step3 = 3. Descomprime el zip en { $path }
+data-heavy-pc-step4 = 4. Vuelve aquí y pulsa el botón de abajo
+data-heavy-pc-done = YA COPIÉ LOS DATOS
 data-heavy-download-here = DESCARGAR EN LA VITA
 
 settings-credits = Créditos
@@ -218,3 +225,35 @@ notify-installed = { $title } instalado
 notify-install-failed = No se pudo instalar { $title }: { $reason }
 notify-self-update = Actualización de vitaForge disponible: v{ $tag }
 no-image = Sin imagen
+
+# Settings page and themes
+settings-appearance = Apariencia
+settings-about = Acerca de
+settings-theme = Tema
+settings-theme-hint = Colores de toda la app
+settings-theme-preview = Vista previa: confirma para guardarlo
+settings-language-hint = Texto de la interfaz y la tienda
+settings-notifications-hint = Avisar cuando termine una descarga
+settings-cache = Caché
+settings-clear-icons-hint = Las imágenes se descargan de nuevo al navegar
+settings-clear-catalog-hint = Vuelve a descargar la lista de apps
+settings-purge-hint = Borra todos los archivos en caché
+theme-midnight = Medianoche
+theme-obsidian = Obsidiana
+theme-aurora = Aurora
+theme-sunset = Atardecer
+theme-high-contrast = Alto contraste
+theme-vita-classic = Vita clásico
+theme-graphite = Grafito
+theme-forest = Bosque
+theme-nebula = Nebulosa
+theme-sakura = Sakura
+theme-mocha = Moca
+theme-tokyo-night = Tokyo Night
+theme-catppuccin = Catppuccin
+theme-nord = Nord
+theme-gruvbox = Gruvbox
+theme-dracula = Dracula
+theme-rose-pine = Rosé Pine
+theme-everforest = Everforest
+theme-kanagawa = Kanagawa

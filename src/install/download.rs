@@ -23,7 +23,7 @@ impl FileSink {
             .with_context(|| format!("couldn't open {}", dest.display()))?;
         let written = file.metadata().map(|m| m.len()).unwrap_or(0);
         file.seek(SeekFrom::End(0))?;
-        let file = std::io::BufWriter::with_capacity(256 * 1024, file);
+        let file = std::io::BufWriter::with_capacity(512 * 1024, file);
         Ok(Self { file, written })
     }
 }

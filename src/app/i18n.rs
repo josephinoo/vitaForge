@@ -278,6 +278,96 @@ impl Language {
     pub fn language_label(self) -> &'static str {
         self.strings(|s| s.language_label)
     }
+    pub fn settings_appearance(self) -> &'static str {
+        self.strings(|s| s.settings_appearance)
+    }
+    pub fn settings_about(self) -> &'static str {
+        self.strings(|s| s.settings_about)
+    }
+    pub fn settings_theme(self) -> &'static str {
+        self.strings(|s| s.settings_theme)
+    }
+    pub fn settings_theme_hint(self) -> &'static str {
+        self.strings(|s| s.settings_theme_hint)
+    }
+    pub fn settings_theme_preview(self) -> &'static str {
+        self.strings(|s| s.settings_theme_preview)
+    }
+    pub fn settings_language_hint(self) -> &'static str {
+        self.strings(|s| s.settings_language_hint)
+    }
+    pub fn settings_notifications_hint(self) -> &'static str {
+        self.strings(|s| s.settings_notifications_hint)
+    }
+    pub fn settings_cache(self) -> &'static str {
+        self.strings(|s| s.settings_cache)
+    }
+    pub fn settings_clear_icons_hint(self) -> &'static str {
+        self.strings(|s| s.settings_clear_icons_hint)
+    }
+    pub fn settings_clear_catalog_hint(self) -> &'static str {
+        self.strings(|s| s.settings_clear_catalog_hint)
+    }
+    pub fn settings_purge_hint(self) -> &'static str {
+        self.strings(|s| s.settings_purge_hint)
+    }
+    pub fn theme_midnight(self) -> &'static str {
+        self.strings(|s| s.theme_midnight)
+    }
+    pub fn theme_obsidian(self) -> &'static str {
+        self.strings(|s| s.theme_obsidian)
+    }
+    pub fn theme_aurora(self) -> &'static str {
+        self.strings(|s| s.theme_aurora)
+    }
+    pub fn theme_sunset(self) -> &'static str {
+        self.strings(|s| s.theme_sunset)
+    }
+    pub fn theme_high_contrast(self) -> &'static str {
+        self.strings(|s| s.theme_high_contrast)
+    }
+    pub fn theme_vita_classic(self) -> &'static str {
+        self.strings(|s| s.theme_vita_classic)
+    }
+    pub fn theme_graphite(self) -> &'static str {
+        self.strings(|s| s.theme_graphite)
+    }
+    pub fn theme_forest(self) -> &'static str {
+        self.strings(|s| s.theme_forest)
+    }
+    pub fn theme_nebula(self) -> &'static str {
+        self.strings(|s| s.theme_nebula)
+    }
+    pub fn theme_sakura(self) -> &'static str {
+        self.strings(|s| s.theme_sakura)
+    }
+    pub fn theme_mocha(self) -> &'static str {
+        self.strings(|s| s.theme_mocha)
+    }
+    pub fn theme_tokyo_night(self) -> &'static str {
+        self.strings(|s| s.theme_tokyo_night)
+    }
+    pub fn theme_catppuccin(self) -> &'static str {
+        self.strings(|s| s.theme_catppuccin)
+    }
+    pub fn theme_nord(self) -> &'static str {
+        self.strings(|s| s.theme_nord)
+    }
+    pub fn theme_gruvbox(self) -> &'static str {
+        self.strings(|s| s.theme_gruvbox)
+    }
+    pub fn theme_dracula(self) -> &'static str {
+        self.strings(|s| s.theme_dracula)
+    }
+    pub fn theme_rose_pine(self) -> &'static str {
+        self.strings(|s| s.theme_rose_pine)
+    }
+    pub fn theme_everforest(self) -> &'static str {
+        self.strings(|s| s.theme_everforest)
+    }
+    pub fn theme_kanagawa(self) -> &'static str {
+        self.strings(|s| s.theme_kanagawa)
+    }
     pub fn settings_general(self) -> &'static str {
         self.strings(|s| s.settings_general)
     }
@@ -399,18 +489,54 @@ impl Language {
         args.set("name", FluentValue::from(name));
         self.with_bundle(|bundle| format_message(bundle, "uninstall-title", Some(&args)))
     }
-    pub fn data_heavy_body(self, path: &str) -> String {
-        let mut args = FluentArgs::new();
-        args.set("path", FluentValue::from(path));
-        self.with_bundle(|bundle| format_message(bundle, "data-heavy-body", Some(&args)))
-    }
     pub fn data_heavy_title(self, size: &str) -> String {
         let mut args = FluentArgs::new();
         args.set("size", FluentValue::from(size));
         self.with_bundle(|bundle| format_message(bundle, "data-heavy-title", Some(&args)))
     }
-    pub fn data_heavy_app_only(self) -> String {
-        self.with_bundle(|bundle| format_message(bundle, "data-heavy-app-only", None))
+    pub fn data_language_title(self) -> String {
+        self.with_bundle(|bundle| format_message(bundle, "data-language-title", None))
+    }
+    pub fn data_choice_title(self) -> String {
+        self.with_bundle(|bundle| format_message(bundle, "data-choice-title", None))
+    }
+    pub fn data_choice_with_data(self) -> String {
+        self.with_bundle(|bundle| format_message(bundle, "data-choice-with-data", None))
+    }
+    pub fn data_choice_app_only(self) -> String {
+        self.with_bundle(|bundle| format_message(bundle, "data-choice-app-only", None))
+    }
+    pub fn data_choice_app_only_hint(self) -> String {
+        self.with_bundle(|bundle| format_message(bundle, "data-choice-app-only-hint", None))
+    }
+    pub fn data_language_continue(self) -> String {
+        self.with_bundle(|bundle| format_message(bundle, "data-language-continue", None))
+    }
+    pub fn data_heavy_choose(self) -> String {
+        self.with_bundle(|bundle| format_message(bundle, "data-heavy-choose", None))
+    }
+    pub fn data_heavy_vita_title(self) -> String {
+        self.with_bundle(|bundle| format_message(bundle, "data-heavy-vita-title", None))
+    }
+    pub fn data_heavy_vita_body(self) -> String {
+        self.with_bundle(|bundle| format_message(bundle, "data-heavy-vita-body", None))
+    }
+    pub fn data_heavy_pc_title(self) -> String {
+        self.with_bundle(|bundle| format_message(bundle, "data-heavy-pc-title", None))
+    }
+    pub fn data_heavy_pc_steps(self, path: &str) -> Vec<String> {
+        let mut args = FluentArgs::new();
+        args.set("path", FluentValue::from(path));
+        ["data-heavy-pc-step1", "data-heavy-pc-step2", "data-heavy-pc-step3", "data-heavy-pc-step4"]
+            .iter()
+            .map(|key| self.with_bundle(|bundle| format_message(bundle, key, Some(&args))))
+            .collect()
+    }
+    pub fn data_heavy_pc_done(self) -> String {
+        self.with_bundle(|bundle| format_message(bundle, "data-heavy-pc-done", None))
+    }
+    pub fn data_language_default(self) -> String {
+        self.with_bundle(|bundle| format_message(bundle, "data-language-default", None))
     }
     pub fn data_heavy_download_here(self) -> String {
         self.with_bundle(|bundle| format_message(bundle, "data-heavy-download-here", None))
@@ -575,14 +701,8 @@ impl Language {
     pub fn cancel_btn(self) -> &'static str {
         self.strings(|s| s.cancel_btn)
     }
-    pub fn data_prompt_title(self) -> &'static str {
-        self.strings(|s| s.data_prompt_title)
-    }
     pub fn data_prompt_body(self) -> &'static str {
         self.strings(|s| s.data_prompt_body)
-    }
-    pub fn data_prompt_accept(self) -> &'static str {
-        self.strings(|s| s.data_prompt_accept)
     }
     pub fn installed_version_value(self) -> &'static str {
         self.strings(|s| s.installed_version_value)
@@ -720,6 +840,36 @@ struct LocalizedStrings {
     credits_body: &'static str,
     language_label: &'static str,
     settings_general: &'static str,
+    theme_tokyo_night: &'static str,
+    theme_catppuccin: &'static str,
+    theme_nord: &'static str,
+    theme_gruvbox: &'static str,
+    theme_dracula: &'static str,
+    theme_rose_pine: &'static str,
+    theme_everforest: &'static str,
+    theme_kanagawa: &'static str,
+    theme_vita_classic: &'static str,
+    theme_graphite: &'static str,
+    theme_forest: &'static str,
+    theme_nebula: &'static str,
+    theme_sakura: &'static str,
+    theme_mocha: &'static str,
+    settings_appearance: &'static str,
+    settings_about: &'static str,
+    settings_theme: &'static str,
+    settings_theme_hint: &'static str,
+    settings_theme_preview: &'static str,
+    settings_language_hint: &'static str,
+    settings_notifications_hint: &'static str,
+    settings_cache: &'static str,
+    settings_clear_icons_hint: &'static str,
+    settings_clear_catalog_hint: &'static str,
+    settings_purge_hint: &'static str,
+    theme_midnight: &'static str,
+    theme_obsidian: &'static str,
+    theme_aurora: &'static str,
+    theme_sunset: &'static str,
+    theme_high_contrast: &'static str,
     settings_purge_confirm: &'static str,
     cancel_confirm: &'static str,
     plugin_pending: &'static str,
@@ -741,9 +891,7 @@ struct LocalizedStrings {
     settings_purge_all: &'static str,
     settings_cleared_catalog: &'static str,
     cancel_btn: &'static str,
-    data_prompt_title: &'static str,
     data_prompt_body: &'static str,
-    data_prompt_accept: &'static str,
     installed_version_value: &'static str,
 }
 impl LocalizedStrings {
@@ -859,6 +1007,36 @@ impl LocalizedStrings {
             credits_body: r("credits-body"),
             language_label: r("language-label"),
             settings_general: r("settings-general"),
+            theme_tokyo_night: r("theme-tokyo-night"),
+            theme_catppuccin: r("theme-catppuccin"),
+            theme_nord: r("theme-nord"),
+            theme_gruvbox: r("theme-gruvbox"),
+            theme_dracula: r("theme-dracula"),
+            theme_rose_pine: r("theme-rose-pine"),
+            theme_everforest: r("theme-everforest"),
+            theme_kanagawa: r("theme-kanagawa"),
+            theme_vita_classic: r("theme-vita-classic"),
+            theme_graphite: r("theme-graphite"),
+            theme_forest: r("theme-forest"),
+            theme_nebula: r("theme-nebula"),
+            theme_sakura: r("theme-sakura"),
+            theme_mocha: r("theme-mocha"),
+            settings_appearance: r("settings-appearance"),
+            settings_about: r("settings-about"),
+            settings_theme: r("settings-theme"),
+            settings_theme_hint: r("settings-theme-hint"),
+            settings_theme_preview: r("settings-theme-preview"),
+            settings_language_hint: r("settings-language-hint"),
+            settings_notifications_hint: r("settings-notifications-hint"),
+            settings_cache: r("settings-cache"),
+            settings_clear_icons_hint: r("settings-clear-icons-hint"),
+            settings_clear_catalog_hint: r("settings-clear-catalog-hint"),
+            settings_purge_hint: r("settings-purge-hint"),
+            theme_midnight: r("theme-midnight"),
+            theme_obsidian: r("theme-obsidian"),
+            theme_aurora: r("theme-aurora"),
+            theme_sunset: r("theme-sunset"),
+            theme_high_contrast: r("theme-high-contrast"),
             settings_purge_confirm: r("settings-purge-confirm"),
             cancel_confirm: r("cancel-confirm"),
             plugin_pending: r("plugin-pending"),
@@ -880,9 +1058,7 @@ impl LocalizedStrings {
             settings_purge_all: r("settings-purge-all"),
             settings_cleared_catalog: r("settings-cleared-catalog"),
             cancel_btn: r("cancel-btn"),
-            data_prompt_title: r("data-prompt-title"),
             data_prompt_body: r("data-prompt-body"),
-            data_prompt_accept: r("data-prompt-accept"),
             installed_version_value: r("installed-version-value"),
         }
     }

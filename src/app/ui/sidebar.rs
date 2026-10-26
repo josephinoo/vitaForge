@@ -90,7 +90,7 @@ pub(crate) fn catalog_sidebar(
     let platform_end = 1 + category_counts.len();
 
     egui::Frame::NONE
-        .fill(BG_HEADER)
+        .fill(pal().bg_header)
         .corner_radius(RADIUS_MD)
         .inner_margin(egui::Margin::symmetric(4, 4))
         .show(ui, |ui| {
@@ -109,7 +109,7 @@ pub(crate) fn catalog_sidebar(
                     ui.painter().hline(
                         sep.x_range(),
                         sep.center().y,
-                        egui::Stroke::new(1.0_f32, SEPARATOR),
+                        egui::Stroke::new(1.0_f32, pal().separator),
                     );
                     ui.add_space(6.0);
                 }
@@ -197,9 +197,9 @@ fn sidebar_action_row(
         egui::Sense::click(),
     );
     let fill = if active {
-        BLUE_PLAY.gamma_multiply(0.55)
+        pal().primary.gamma_multiply(0.55)
     } else if response.hovered() || focused {
-        BG_CARD_HOVER
+        pal().bg_card_hover
     } else {
         egui::Color32::TRANSPARENT
     };
@@ -210,7 +210,7 @@ fn sidebar_action_row(
         ui.painter().rect_filled(
             rect,
             RADIUS_SM,
-            BLUE_PLAY.gamma_multiply(0.35 + 0.45 * active_t),
+            pal().primary.gamma_multiply(0.35 + 0.45 * active_t),
         );
     } else if !matches!(fill, egui::Color32::TRANSPARENT) {
         ui.painter().rect_filled(rect, RADIUS_SM, fill);
@@ -219,14 +219,14 @@ fn sidebar_action_row(
         ui.painter().rect_stroke(
             rect,
             RADIUS_SM,
-            egui::Stroke::new(FOCUS_STROKE, ACCENT_CYAN),
+            egui::Stroke::new(FOCUS_STROKE, pal().accent_soft),
             egui::StrokeKind::Outside,
         );
     }
     let color = if active_t > 0.5 || focused {
-        TEXT_WHITE
+        pal().text
     } else {
-        TEXT_DIM
+        pal().text_dim
     };
     let icon_rect = egui::Rect::from_center_size(
         egui::pos2(
@@ -259,9 +259,9 @@ fn sidebar_row(
         egui::Sense::click(),
     );
     let fill = if active {
-        BLUE_PLAY
+        pal().primary
     } else if response.hovered() || focused {
-        BG_CARD_HOVER
+        pal().bg_card_hover
     } else {
         egui::Color32::TRANSPARENT
     };
@@ -270,7 +270,7 @@ fn sidebar_row(
         .animate_bool_with_time(ui.id().with(("side", label)), active, 0.12);
     if active_t > 0.01 {
         ui.painter()
-            .rect_filled(rect, RADIUS_SM, BLUE_PLAY.gamma_multiply(active_t));
+            .rect_filled(rect, RADIUS_SM, pal().primary.gamma_multiply(active_t));
     } else if !matches!(fill, egui::Color32::TRANSPARENT) {
         ui.painter().rect_filled(rect, RADIUS_SM, fill);
     }
@@ -278,14 +278,14 @@ fn sidebar_row(
         ui.painter().rect_stroke(
             rect,
             RADIUS_SM,
-            egui::Stroke::new(FOCUS_STROKE, ACCENT_CYAN),
+            egui::Stroke::new(FOCUS_STROKE, pal().accent_soft),
             egui::StrokeKind::Outside,
         );
     }
     let color = if active_t > 0.5 || focused {
-        TEXT_WHITE
+        pal().text
     } else {
-        TEXT_DIM
+        pal().text_dim
     };
     let icon_rect = egui::Rect::from_center_size(
         egui::pos2(
@@ -308,9 +308,9 @@ fn sidebar_row(
         count.to_string(),
         font(FONT_SMALL),
         if active || focused {
-            TEXT_WHITE
+            pal().text
         } else {
-            TEXT_FAINT
+            pal().text_faint
         },
     );
     response.clicked()

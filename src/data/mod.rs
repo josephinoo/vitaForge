@@ -165,6 +165,30 @@ pub const HEAVY_DATA_BYTES: u64 = 1024 * 1024 * 1024;
 pub fn is_heavy_data(entry: &AppEntry) -> bool {
     entry.data_url.is_some() && entry.data_size_bytes >= HEAVY_DATA_BYTES
 }
+/// Extra-language game data variant offered next to the default `data_url`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GameDataLanguage {
+    pub language: String,
+    pub url: String,
+    #[serde(default)]
+    pub extract_path: Option<String>,
+    #[serde(default)]
+    pub size_bytes: u64,
+}
+
+/// `choice` 0 = default game data; `i` = `game_data_languages[i - 1]`.
+pub fn with_data_language(entry: &AppEntry, choice: usize) -> AppEntry {
+    let mut entry = entry.clone();
+    if let Some(lang) = choice.checked_sub(1).and_then(|i| entry.game_data_languages.get(i)).cloned() {
+        entry.data_url = Some(lang.url);
+        if lang.extract_path.is_some() {
+            entry.data_extract_path = lang.extract_path;
+        }
+        entry.data_size_bytes = lang.size_bytes;
+    }
+    entry
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppEntry {
     pub id: String,
@@ -226,6 +250,8 @@ pub struct AppEntry {
     pub data_extract_path: Option<String>,
     #[serde(default)]
     pub data_size_bytes: u64,
+    #[serde(default)]
+    pub game_data_languages: Vec<GameDataLanguage>,
     #[serde(default)]
     pub plugin_install_path: Option<String>,
     #[serde(default)]

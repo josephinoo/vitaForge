@@ -1,6 +1,6 @@
 [package]
 name = "vitaforge"
-version = "0.1.8"
+version = "0.1.9"
 edition = "2024"
 license = "GPL-3.0-only"
 description = "Homebrew catalog browser for games/apps/ports on the PS Vita"
@@ -48,8 +48,8 @@ title_name = "VitaForge"
 assets = "static"
 vita_make_fself_flags = []
 # Vita/Vita3K read APP_VER from param.sfo (XX.YY). Keep in sync with package.version
-# 0.1.8 → 01.08 (minor.patch). Catalog update checks use stamped semver, not this field.
-vita_mksfoex_flags = ["-d", "ATTRIBUTE2=12", "-s", "APP_VER=01.08"]
+# 0.1.9 → 01.09 (minor.patch). Catalog update checks use stamped semver, not this field.
+vita_mksfoex_flags = ["-d", "ATTRIBUTE2=12", "-s", "APP_VER=01.09"]
 [profile.release]
 opt-level = "s"
 lto = "fat"
