@@ -5,7 +5,7 @@ pub mod sysinfo;
 pub mod text;
 pub mod ui;
 use crate::data::{self, AppEntry, Category, SortDirection, SortOrder};
-use crate::input::{AppCommand, ContentTypeGroup, InputCommand, StoreTab};
+use crate::input::{AppCommand, ContentTypeGroup, DataStep, DetailFocus, InputCommand, StoreTab};
 use anyhow::Result;
 use i18n::Language;
 use icons::IconCache;
@@ -384,6 +384,71 @@ impl CatalogState {
         true
     }
 
+    pub fn jump_letter(&mut self, forward: bool) -> bool {
+        if self.filtered_indices.is_empty() {
+            return false;
+        }
+        let current_char = self
+            .filtered_indices
+            .get(self.selected)
+            .and_then(|&idx| self.apps.get(idx))
+            .and_then(|app| app.name.trim_start().chars().next())
+            .map(|c| c.to_ascii_uppercase())
+            .unwrap_or('A');
+
+        if forward {
+            for (i, &idx) in self.filtered_indices.iter().enumerate() {
+                if let Some(app) = self.apps.get(idx) {
+                    let first = app
+                        .name
+                        .trim_start()
+                        .chars()
+                        .next()
+                        .map(|c| c.to_ascii_uppercase())
+                        .unwrap_or(' ');
+                    if first > current_char && first.is_ascii_alphanumeric() {
+                        self.selected = i;
+                        self.selection_active = true;
+                        self.scroll_to_selected = true;
+                        return true;
+                    }
+                }
+            }
+        } else {
+            let mut target_char = None;
+            for &idx in self.filtered_indices.iter().rev() {
+                if let Some(app) = self.apps.get(idx) {
+                    let first = app
+                        .name
+                        .trim_start()
+                        .chars()
+                        .next()
+                        .map(|c| c.to_ascii_uppercase())
+                        .unwrap_or(' ');
+                    if first < current_char && first.is_ascii_alphanumeric() {
+                        target_char = Some(first);
+                        break;
+                    }
+                }
+            }
+            if let Some(target) = target_char {
+                if let Some(pos) = self.filtered_indices.iter().position(|&idx| {
+                    self.apps
+                        .get(idx)
+                        .and_then(|a| a.name.trim_start().chars().next())
+                        .map(|c| c.to_ascii_uppercase())
+                        == Some(target)
+                }) {
+                    self.selected = pos;
+                    self.selection_active = true;
+                    self.scroll_to_selected = true;
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     pub fn shows_category_pills(&self) -> bool {
         self.tab == StoreTab::Categories
     }
@@ -607,12 +672,15 @@ pub enum AppState {
         comment_entry_requested: bool,
         lightbox: Option<usize>,
         data_prompt: bool,
+        /// See `data::with_data_language`; reset when the prompt opens.
+        data_language: usize,
+        data_step: DataStep,
         uninstall_prompt: bool,
+        detail_focus: DetailFocus,
     },
     Settings {
         previous: Box<CatalogState>,
-        selected: usize,
-        credits: bool,
+        nav: ui::settings::SettingsNav,
     },
 }
 enum CatalogSource {
@@ -701,6 +769,8 @@ impl App {
         });
 
         let settings = data::settings::load();
+        ui::theme::set_theme(settings.theme);
+        crate::install::log_file(&format!("boot: applied theme {:?} from settings", settings.theme));
         // So catalog outdated scans compare semver against this build, not missing SFO APP_VER.
         crate::install::installed::stamp_running_self();
         Ok(Self {
@@ -984,6 +1054,55 @@ impl App {
         }
         Ok(())
     }
+    /// ✕ inside Settings: enter the rows, open a choice list, or run the row.
+    fn settings_confirm(&mut self) -> Result<()> {
+        use ui::settings::{Row, SubPage};
+        use ui::theme::ThemeId;
+        let AppState::Settings { nav, .. } = &mut self.state else { return Ok(()) };
+        if let Some(sub) = nav.sub {
+            let index = nav.sub_index;
+            return match sub {
+                SubPage::Language => self.handle_command(AppCommand::SetLanguage(Language::ALL[index])),
+                SubPage::Theme => self.handle_command(AppCommand::SetTheme(ThemeId::ALL[index])),
+            };
+        }
+        if nav.rail {
+            nav.rail = nav.rows().is_empty();
+            return Ok(());
+        }
+        let command = match nav.current_row() {
+            Some(Row::Language) => {
+                nav.sub = Some(SubPage::Language);
+                nav.sub_index = Language::ALL.iter().position(|&l| l == self.lang).unwrap_or(0);
+                return Ok(());
+            }
+            Some(Row::Theme) => {
+                let theme = ui::theme::active_theme();
+                nav.theme_before = theme;
+                nav.sub = Some(SubPage::Theme);
+                nav.sub_index = ThemeId::ALL.iter().position(|&t| t == theme).unwrap_or(0);
+                return Ok(());
+            }
+            Some(Row::Notifications) => AppCommand::ToggleInstallNotifications,
+            Some(Row::ClearIcons) => AppCommand::ClearIconCache,
+            Some(Row::ClearCatalog) => AppCommand::ClearCatalogCache,
+            Some(Row::PurgeAll) => AppCommand::PurgeAllCache,
+            None => return Ok(()),
+        };
+        self.handle_command(command)
+    }
+
+    fn leave_settings(&mut self) {
+        self.purge_armed = false;
+        if let AppState::Settings { previous, nav } = &mut self.state {
+            close_settings_sub(nav);
+            let previous = std::mem::replace(previous.as_mut(), CatalogState::empty());
+            self.state = AppState::Catalog(previous);
+            self.needs_installed_rescan = true;
+            self.audio.play(crate::audio::Sfx::MenuFlyOut);
+        }
+    }
+
     pub fn handle_command(&mut self, command: AppCommand) -> Result<()> {
         match command {
             AppCommand::Input(InputCommand::Back) => {
@@ -1010,6 +1129,13 @@ impl App {
                     }
                     self.cancel_armed_at = None;
                     return self.handle_command(AppCommand::CancelInstall);
+                }
+                if let AppState::Detail { detail_focus, .. } = &mut self.state {
+                    if *detail_focus != DetailFocus::Primary {
+                        *detail_focus = DetailFocus::Primary;
+                        self.audio.play(crate::audio::Sfx::Navigate);
+                        return Ok(());
+                    }
                 }
                 if let AppState::Catalog(catalog) = &mut self.state {
                     if catalog.focus_pane == FocusPane::Sidebar {
@@ -1120,6 +1246,20 @@ impl App {
             AppCommand::FlipSortDirection if matches!(self.state, AppState::Detail { .. }) => {
                 return self.handle_command(AppCommand::TertiaryAction);
             }
+            AppCommand::SecondaryAction
+                if matches!(self.state, AppState::Detail { data_prompt: true, .. }) =>
+            {
+                match &self.state {
+                    AppState::Detail { data_step: DataStep::Choice, .. } => {
+                        return self.handle_command(AppCommand::InstallAppOnly);
+                    }
+                    AppState::Detail { data_step: DataStep::Method, .. } => {
+                        return self.handle_command(AppCommand::InstallCurrent);
+                    }
+                    _ => {}
+                }
+            }
+            AppCommand::TertiaryAction if matches!(self.state, AppState::Detail { data_prompt: true, .. }) => {}
             AppCommand::SecondaryAction => {
                 if let AppState::Detail { app, lightbox: None, .. } = &self.state
                     && self.install.is_none()
@@ -1276,10 +1416,50 @@ impl App {
                     }
                 }
             }
+            AppCommand::SetDetailFocus(focus) => {
+                if let AppState::Detail { detail_focus, .. } = &mut self.state {
+                    *detail_focus = focus;
+                }
+            }
+            AppCommand::AnalogScroll(delta) => {
+                if let AppState::Detail { scroll_delta, .. } = &mut self.state {
+                    *scroll_delta = (*scroll_delta + delta).max(0.0);
+                }
+            }
+            AppCommand::PageStep(step) => match &mut self.state {
+                AppState::Catalog(catalog) => {
+                    if catalog.focus_pane == FocusPane::Grid && catalog.move_selection(step as isize) {
+                        self.audio.play(crate::audio::Sfx::Navigate);
+                    }
+                }
+                AppState::Detail { scroll_delta, .. } => {
+                    *scroll_delta = (*scroll_delta + step as f32 * 20.0).max(0.0);
+                }
+                _ => {}
+            },
+            AppCommand::LetterJump(forward) => {
+                if let AppState::Catalog(catalog) = &mut self.state {
+                    if catalog.focus_pane == FocusPane::Grid && catalog.jump_letter(forward) {
+                        self.audio.play(crate::audio::Sfx::Activation);
+                    }
+                }
+            }
             AppCommand::FlipSortDirection => {
                 if let AppState::Catalog(catalog) = &mut self.state {
                     catalog.flip_sort_direction();
                     self.audio.play(crate::audio::Sfx::Activation);
+                }
+            }
+            AppCommand::Input(direction @ (InputCommand::MoveUp | InputCommand::MoveDown))
+                if matches!(
+                    &self.state,
+                    AppState::Detail { data_prompt: true, data_step: DataStep::Language, .. }
+                ) =>
+            {
+                if let AppState::Detail { app, data_language, .. } = &self.state {
+                    let options = app.game_data_languages.len() + 1;
+                    let step = if direction == InputCommand::MoveUp { options - 1 } else { 1 };
+                    return self.handle_command(AppCommand::SelectDataLanguage((*data_language + step) % options));
                 }
             }
             AppCommand::Input(
@@ -1295,29 +1475,52 @@ impl App {
                 return self.handle_command(AppCommand::ScreenshotStep(step));
             }
             AppCommand::Input(InputCommand::Confirm) => {
-                if let AppState::Detail { data_prompt: true, app, .. } = &self.state {
-                    // Heavy data: the recommended (default) path is the manual download.
-                    return self.handle_command(if crate::data::is_heavy_data(app) {
-                        AppCommand::InstallAppOnly
-                    } else {
-                        AppCommand::InstallCurrent
+                if let AppState::Detail { data_prompt: true, data_step, .. } = &self.state {
+                    return self.handle_command(match data_step {
+                        DataStep::Choice => AppCommand::WantGameData,
+                        DataStep::Language => AppCommand::ConfirmDataLanguage,
+                        // Heavy data: the recommended path is copying it from a PC.
+                        DataStep::Method => AppCommand::InstallAppOnly,
                     });
                 }
                 if matches!(self.state, AppState::Detail { uninstall_prompt: true, .. }) {
                     return self.handle_command(AppCommand::ConfirmUninstall);
                 }
-                if let AppState::Detail { lightbox: None, app, .. } = &self.state {
-                    let primary = detail_actions::primary(app, self.installed.state(app));
-                    return match &self.install {
-                        None if primary == detail_actions::DetailAction::Open => {
-                            self.handle_command(AppCommand::LaunchCurrent)
+                if let AppState::Detail { lightbox: None, app, detail_focus, previous, .. } = &self.state {
+                    match detail_focus {
+                        DetailFocus::Author => {
+                            return self.handle_command(AppCommand::MoreByAuthor(app.author.clone()));
                         }
-                        None => self.handle_command(AppCommand::InstallCurrent),
-                        Some(job) if job.progress.is_finished() => {
-                            self.handle_command(AppCommand::DismissInstall)
+                        DetailFocus::Screenshots => {
+                            if !app.screenshot_urls.is_empty() {
+                                return self.handle_command(AppCommand::OpenScreenshot(0));
+                            }
                         }
-                        Some(_) => Ok(()),
-                    };
+                        DetailFocus::Requirements => {
+                            if let Some(dep) =
+                                crate::install::requirements::cached_missing_dependency(&app.id, &previous.apps)
+                            {
+                                return self.handle_command(AppCommand::InstallDependency {
+                                    id: dep.id,
+                                    dir: dep.dir,
+                                    file: dep.file,
+                                });
+                            }
+                        }
+                        DetailFocus::Primary => {
+                            let primary = detail_actions::primary(app, self.installed.state(app));
+                            return match &self.install {
+                                None if primary == detail_actions::DetailAction::Open => {
+                                    self.handle_command(AppCommand::LaunchCurrent)
+                                }
+                                None => self.handle_command(AppCommand::InstallCurrent),
+                                Some(job) if job.progress.is_finished() => {
+                                    self.handle_command(AppCommand::DismissInstall)
+                                }
+                                Some(_) => Ok(()),
+                            };
+                        }
+                    }
                 }
                 if let AppState::Catalog(catalog) = &mut self.state {
                     if catalog.focus_pane == FocusPane::Sidebar {
@@ -1339,34 +1542,40 @@ impl App {
                 };
                 if let Some(index) = target {
                     self.open_app(index);
-                } else if let AppState::Settings { selected, credits, .. } = &self.state {
-                    if *credits { return Ok(()); }
-                    return match *selected {
-                        index if index < Language::ALL.len() => self.handle_command(AppCommand::SetLanguage(Language::ALL[index])),
-                        5 => self.handle_command(AppCommand::ClearIconCache),
-                        6 => self.handle_command(AppCommand::ClearCatalogCache),
-                        7 => self.handle_command(AppCommand::PurgeAllCache),
-                        8 => self.handle_command(AppCommand::ToggleInstallNotifications),
-                        9 => self.handle_command(AppCommand::OpenCredits),
-                        _ => Ok(()),
-                    };
+                } else if matches!(self.state, AppState::Settings { .. }) {
+                    return self.settings_confirm();
                 }
             }
             AppCommand::Input(step @ (InputCommand::CategoryPrev | InputCommand::CategoryNext))
-                if matches!(self.state, AppState::Settings { credits: false, .. }) =>
+                if matches!(self.state, AppState::Settings { .. }) =>
             {
-                let AppState::Settings { selected, .. } = &self.state else { unreachable!() };
-                let tabs = ui::settings::SETTINGS_TABS.len();
-                let tab = ui::settings::settings_tab(*selected);
-                let tab = if step == InputCommand::CategoryPrev { (tab + tabs - 1) % tabs } else { (tab + 1) % tabs };
-                return self.handle_command(AppCommand::SettingsTab(tab));
+                let AppState::Settings { nav, .. } = &self.state else { unreachable!() };
+                let count = ui::settings::SECTIONS.len();
+                let section = if step == InputCommand::CategoryPrev { nav.section + count - 1 } else { nav.section + 1 };
+                return self.handle_command(AppCommand::SettingsSection(section % count));
             }
-            AppCommand::SettingsTab(tab) => {
+            AppCommand::SettingsSection(section) => {
                 self.purge_armed = false;
-                if let AppState::Settings { selected, .. } = &mut self.state {
-                    if ui::settings::settings_tab(*selected) != tab {
-                        *selected = ui::settings::SETTINGS_TABS[tab][0];
-                    }
+                self.cache_notice = None;
+                if let AppState::Settings { nav, .. } = &mut self.state {
+                    close_settings_sub(nav);
+                    nav.go_section(section);
+                    self.audio.play(crate::audio::Sfx::Navigate);
+                }
+            }
+            AppCommand::SettingsRow(row) => {
+                if let AppState::Settings { nav, .. } = &mut self.state {
+                    nav.rail = false;
+                    nav.row = row;
+                }
+                return self.settings_confirm();
+            }
+            AppCommand::SetTheme(theme) => {
+                ui::theme::set_theme(theme);
+                data::settings::set_theme(theme);
+                if let AppState::Settings { nav, .. } = &mut self.state {
+                    nav.theme_before = theme;
+                    nav.sub = None;
                 }
             }
             AppCommand::Input(InputCommand::CategoryPrev) => {
@@ -1476,43 +1685,107 @@ impl App {
                             self.audio.play(crate::audio::Sfx::Navigate);
                         }
                     }
-                    AppState::Detail { scroll_delta, .. } => {
+                    AppState::Detail {
+                        scroll_delta,
+                        detail_focus,
+                        app,
+                        lightbox: None,
+                        data_prompt: false,
+                        uninstall_prompt: false,
+                        ..
+                    } => {
+                        let has_shots = !app.screenshot_urls.is_empty();
                         match direction {
-                            InputCommand::MoveUp => *scroll_delta -= 60.0,
-                            InputCommand::MoveDown => *scroll_delta += 60.0,
+                            InputCommand::MoveRight => {
+                                if *detail_focus == DetailFocus::Primary || *detail_focus == DetailFocus::Author {
+                                    *detail_focus = if has_shots {
+                                        DetailFocus::Screenshots
+                                    } else {
+                                        DetailFocus::Requirements
+                                    };
+                                    self.audio.play(crate::audio::Sfx::Navigate);
+                                }
+                            }
+                            InputCommand::MoveLeft => {
+                                if *detail_focus == DetailFocus::Screenshots
+                                    || *detail_focus == DetailFocus::Requirements
+                                {
+                                    *detail_focus = DetailFocus::Primary;
+                                    self.audio.play(crate::audio::Sfx::Navigate);
+                                }
+                            }
+                            InputCommand::MoveUp => match *detail_focus {
+                                DetailFocus::Primary => {
+                                    if *scroll_delta <= 0.0 {
+                                        *detail_focus = DetailFocus::Author;
+                                        self.audio.play(crate::audio::Sfx::Navigate);
+                                    } else {
+                                        *scroll_delta = (*scroll_delta - 60.0).max(0.0);
+                                    }
+                                }
+                                DetailFocus::Requirements => {
+                                    if has_shots {
+                                        *detail_focus = DetailFocus::Screenshots;
+                                        self.audio.play(crate::audio::Sfx::Navigate);
+                                    }
+                                }
+                                _ => {}
+                            },
+                            InputCommand::MoveDown => match *detail_focus {
+                                DetailFocus::Author => {
+                                    *detail_focus = DetailFocus::Primary;
+                                    self.audio.play(crate::audio::Sfx::Navigate);
+                                }
+                                DetailFocus::Primary => {
+                                    *scroll_delta += 60.0;
+                                }
+                                DetailFocus::Screenshots => {
+                                    *detail_focus = DetailFocus::Requirements;
+                                    self.audio.play(crate::audio::Sfx::Navigate);
+                                }
+                                _ => {}
+                            },
                             _ => {}
                         }
                     }
-                    AppState::Settings { selected, credits, .. } => {
-                        if *credits { return Ok(()); }
+                    AppState::Settings { nav, .. } => {
                         self.purge_armed = false;
                         self.cache_notice = None;
-                        let languages = Language::ALL.len();
-                        match direction {
-                            // The language chips sit on one line: left/right walks them.
-                            InputCommand::MoveLeft if *selected < languages => *selected = selected.saturating_sub(1),
-                            InputCommand::MoveRight if *selected < languages => *selected = (*selected + 1).min(languages - 1),
-                            InputCommand::MoveUp | InputCommand::MoveDown => {
-                                // The chip line counts as one row (id 0); landing on it focuses the active language.
-                                let rows: Vec<usize> = ui::settings::SETTINGS_TABS[ui::settings::settings_tab(*selected)]
-                                    .iter()
-                                    .copied()
-                                    .filter(|&row| row == 0 || row >= languages)
-                                    .collect();
-                                let current = if *selected < languages { 0 } else { *selected };
-                                let pos = rows.iter().position(|&row| row == current).unwrap_or(0);
-                                let pos = if direction == InputCommand::MoveUp {
-                                    pos.saturating_sub(1)
-                                } else {
-                                    (pos + 1).min(rows.len() - 1)
-                                };
-                                *selected = match rows[pos] {
-                                    0 if *selected < languages => *selected,
-                                    0 => Language::ALL.iter().position(|&l| l == self.lang).unwrap_or(0),
-                                    row => row,
-                                };
+                        let before = (nav.section, nav.row, nav.rail, nav.sub_index);
+                        if nav.sub.is_some() {
+                            let last = nav.sub_len().saturating_sub(1);
+                            match direction {
+                                InputCommand::MoveUp => nav.sub_index = nav.sub_index.saturating_sub(1),
+                                InputCommand::MoveDown => nav.sub_index = (nav.sub_index + 1).min(last),
+                                _ => {}
                             }
-                            _ => {}
+                            // Live preview: the whole app recolors as the cursor moves, persisting the theme.
+                            if nav.sub == Some(ui::settings::SubPage::Theme) {
+                                let theme = ui::theme::ThemeId::ALL[nav.sub_index];
+                                ui::theme::set_theme(theme);
+                                data::settings::set_theme(theme);
+                                nav.theme_before = theme;
+                            }
+                        } else if nav.rail {
+                            match direction {
+                                InputCommand::MoveUp if nav.section > 0 => nav.go_section(nav.section - 1),
+                                InputCommand::MoveDown if nav.section + 1 < ui::settings::SECTIONS.len() => {
+                                    nav.go_section(nav.section + 1)
+                                }
+                                InputCommand::MoveRight if !nav.rows().is_empty() => nav.rail = false,
+                                _ => {}
+                            }
+                        } else {
+                            let last = nav.rows().len().saturating_sub(1);
+                            match direction {
+                                InputCommand::MoveUp => nav.row = nav.row.saturating_sub(1),
+                                InputCommand::MoveDown => nav.row = (nav.row + 1).min(last),
+                                InputCommand::MoveLeft => nav.rail = true,
+                                _ => {}
+                            }
+                        }
+                        if before != (nav.section, nav.row, nav.rail, nav.sub_index) {
+                            self.audio.play(crate::audio::Sfx::Navigate);
                         }
                     }
                     _ => {}
@@ -1586,21 +1859,51 @@ impl App {
             AppCommand::BackToCatalog => self.back_to_catalog(),
             AppCommand::InstallCurrent => {
                 let busy = self.install.as_ref().is_some_and(|job| !job.progress.is_finished());
-                if let AppState::Detail { app, data_prompt, .. } = &mut self.state
+                if let AppState::Detail { app, data_prompt, data_language, data_step, .. } =
+                    &mut self.state
                     && !busy
                     && app.data_url.is_some()
                     && !*data_prompt
                 {
                     *data_prompt = true;
+                    *data_step = DataStep::Choice;
+                    *data_language = preferred_data_language(app, self.lang);
                     self.audio.play(crate::audio::Sfx::ShowModal);
                     return Ok(());
                 }
-                if let AppState::Detail { app, .. } = &self.state
+                if let AppState::Detail { app, data_language, .. } = &self.state
                     && !busy
-                    && crate::install::space_shortfall(app).is_none()
                 {
-                    let entry = app.clone();
-                    self.start_install(entry);
+                    let entry = data::with_data_language(app, *data_language);
+                    if crate::install::space_shortfall(&entry).is_none() {
+                        self.start_install(entry);
+                    }
+                }
+            }
+            AppCommand::WantGameData => {
+                if let AppState::Detail { app, data_prompt: true, data_step, .. } = &mut self.state
+                    && *data_step == DataStep::Choice
+                {
+                    if !app.game_data_languages.is_empty() {
+                        *data_step = DataStep::Language;
+                        self.audio.play(crate::audio::Sfx::Activation);
+                        return Ok(());
+                    }
+                    return self.continue_with_data();
+                }
+            }
+            AppCommand::ConfirmDataLanguage => {
+                if matches!(self.state, AppState::Detail { data_prompt: true, data_step: DataStep::Language, .. }) {
+                    return self.continue_with_data();
+                }
+            }
+            AppCommand::SelectDataLanguage(choice) => {
+                if let AppState::Detail { app, data_prompt: true, data_language, .. } = &mut self.state
+                    && choice <= app.game_data_languages.len()
+                    && *data_language != choice
+                {
+                    *data_language = choice;
+                    self.audio.play(crate::audio::Sfx::Activation);
                 }
             }
             AppCommand::InstallAppOnly => {
@@ -1666,6 +1969,7 @@ impl App {
                         data_url: None,
                         data_extract_path: None,
                         data_size_bytes: 0,
+                        game_data_languages: Vec::new(),
                         plugin_install_path: None,
                         plugin_config_section: None,
                         plugin_config_line: None,
@@ -1715,42 +2019,38 @@ impl App {
                 let previous = match std::mem::replace(&mut self.state, AppState::Loading) {
                     AppState::Catalog(catalog) => Box::new(catalog),
                     AppState::Detail { previous, .. } => previous,
-                    other @ (AppState::Loading | AppState::Settings { .. }) => {
+                    // Start toggles: pressing it inside Settings leaves.
+                    other @ AppState::Settings { .. } => {
+                        self.state = other;
+                        self.leave_settings();
+                        return Ok(());
+                    }
+                    other @ AppState::Loading => {
                         self.state = other;
                         return Ok(());
                     }
                 };
-                let selected = Language::ALL.iter().position(|&language| language == self.lang).unwrap_or(0);
                 self.refresh_cache_stats();
                 self.cache_notice = None;
-                self.state = AppState::Settings { previous, selected, credits: false };
+                self.state = AppState::Settings { previous, nav: ui::settings::SettingsNav::new() };
                 self.audio.play(crate::audio::Sfx::MenuFlyIn);
             }
-            AppCommand::OpenCredits => {
-                if let AppState::Settings { credits, .. } = &mut self.state {
-                    *credits = true;
-                }
-            }
             AppCommand::CloseSettings => {
+                // ○ backs out one level: an open choice list first, then Settings itself.
                 self.purge_armed = false;
-                if let AppState::Settings { credits, .. } = &mut self.state {
-                    if *credits {
-                        *credits = false;
+                if let AppState::Settings { nav, .. } = &mut self.state {
+                    if nav.sub.is_some() {
+                        close_settings_sub(nav);
                         return Ok(());
                     }
                 }
-                if let AppState::Settings { previous, .. } = &mut self.state {
-                    let previous = std::mem::replace(previous.as_mut(), CatalogState::empty());
-                    self.state = AppState::Catalog(previous);
-                    self.needs_installed_rescan = true;
-                    self.audio.play(crate::audio::Sfx::MenuFlyOut);
-                }
+                self.leave_settings();
             }
             AppCommand::SetLanguage(lang) => {
                 self.lang = lang;
                 data::settings::set_language(lang);
-                if let AppState::Settings { selected, .. } = &mut self.state {
-                    *selected = Language::ALL.iter().position(|&language| language == lang).unwrap_or(0);
+                if let AppState::Settings { nav, .. } = &mut self.state {
+                    nav.sub = None;
                 }
             }
             AppCommand::ToggleInstallNotifications => {
@@ -1857,6 +2157,18 @@ impl App {
         }
         Ok(())
     }
+    /// After choosing game data (and its language): heavy data asks how to get it,
+    /// light data starts downloading right away.
+    fn continue_with_data(&mut self) -> Result<()> {
+        if let AppState::Detail { app, data_language, data_step, .. } = &mut self.state
+            && crate::data::is_heavy_data(&data::with_data_language(app, *data_language))
+        {
+            *data_step = DataStep::Method;
+            self.audio.play(crate::audio::Sfx::Activation);
+            return Ok(());
+        }
+        self.handle_command(AppCommand::InstallCurrent)
+    }
     fn start_install(&mut self, entry: AppEntry) {
         let app_id = entry.id.clone();
         let app_id_title = crate::install::installed::index_key(&entry);
@@ -1955,8 +2267,11 @@ impl App {
             comments_loaded: false,
             comment_entry_requested: false,
             data_prompt: false,
+            data_language: 0,
+            data_step: DataStep::Choice,
             uninstall_prompt: false,
             lightbox: None,
+            detail_focus: DetailFocus::Primary,
         };
         let AppState::Catalog(mut catalog) = std::mem::replace(&mut self.state, placeholder) else {
             unreachable!("checked above that self.state is Catalog")
@@ -1995,8 +2310,11 @@ impl App {
             comments_loaded: false,
             comment_entry_requested: false,
             data_prompt: false,
+            data_language: 0,
+            data_step: DataStep::Choice,
             uninstall_prompt: false,
             lightbox: None,
+            detail_focus: DetailFocus::Primary,
         };
         self.audio.play(crate::audio::Sfx::IntoDetail);
     }
@@ -2100,6 +2418,7 @@ mod sort_tests {
             data_url: None,
             data_extract_path: None,
             data_size_bytes: 0,
+            game_data_languages: Vec::new(),
             plugin_install_path: None,
             plugin_config_section: None,
             plugin_config_line: None,
@@ -2195,6 +2514,25 @@ mod sort_tests {
         catalog.set_sort(SortOrder::Name);
         assert_eq!(catalog.selected, 0);
         assert!(catalog.selection_active);
+    }
+
+    #[test]
+    fn jump_letter_steps_forward_and_back() {
+        let mut a = entry("1", "vdb", 0, 0, 0.0, "");
+        a.name = "Aardvark".into();
+        let mut b = entry("2", "vdb", 0, 0, 0.0, "");
+        b.name = "Bear".into();
+        let mut c = entry("3", "vdb", 0, 0, 0.0, "");
+        c.name = "Cat".into();
+        let mut catalog = CatalogState::new(vec![a, b, c]);
+        catalog.filtered_indices = vec![0, 1, 2];
+        catalog.selected = 0;
+        assert!(catalog.jump_letter(true));
+        assert_eq!(catalog.selected, 1);
+        assert!(catalog.jump_letter(true));
+        assert_eq!(catalog.selected, 2);
+        assert!(catalog.jump_letter(false));
+        assert_eq!(catalog.selected, 1);
     }
 
     fn entry_titled(id: &str, titleid: &str, source_catalog: &str, downloads: u64) -> AppEntry {
@@ -2300,4 +2638,53 @@ mod precache_tests {
             .collect();
         assert_eq!(precache_art_urls(&apps).len(), MAX_PRECACHE_PER_LAUNCH);
     }
+}
+
+/// Preselects the extra language matching the app's UI language, else the default (0).
+fn preferred_data_language(app: &AppEntry, ui: crate::app::i18n::Language) -> usize {
+    use crate::app::i18n::Language;
+    let code = match ui {
+        Language::English => "en",
+        Language::Spanish => "es",
+        Language::French => "fr",
+        Language::Italian => "it",
+        Language::Portuguese => "pt",
+    };
+    app.game_data_languages
+        .iter()
+        .position(|l| l.language.split('-').next() == Some(code))
+        .map_or(0, |i| i + 1)
+}
+
+#[cfg(test)]
+mod data_language_tests {
+    use super::preferred_data_language;
+    use crate::app::i18n::Language;
+    use crate::data::GameDataLanguage;
+
+    #[test]
+    fn preselects_ui_language_or_default() {
+        let mut app = super::sort_tests::entry("1", "vitadb", 0, 0, 0.0, "");
+        let lang = |code: &str| GameDataLanguage {
+            language: code.to_owned(),
+            url: format!("https://h/{code}.zip"),
+            extract_path: None,
+            size_bytes: 0,
+        };
+        assert_eq!(preferred_data_language(&app, Language::Spanish), 0);
+        app.game_data_languages = vec![lang("ja"), lang("es")];
+        assert_eq!(preferred_data_language(&app, Language::Spanish), 2);
+        assert_eq!(preferred_data_language(&app, Language::French), 0);
+    }
+}
+
+/// Closes an open choice list; ensures the active theme is persisted.
+fn close_settings_sub(nav: &mut ui::settings::SettingsNav) {
+    if nav.sub == Some(ui::settings::SubPage::Theme) {
+        let theme = ui::theme::ThemeId::ALL[nav.sub_index.min(ui::theme::ThemeId::ALL.len() - 1)];
+        ui::theme::set_theme(theme);
+        data::settings::set_theme(theme);
+        nav.theme_before = theme;
+    }
+    nav.sub = None;
 }

@@ -37,17 +37,17 @@ pub(crate) fn loading_screen(
                             egui::RichText::new("VitaForge")
                                 .size(FONT_HEADLINE)
                                 .strong()
-                                .color(ACCENT_STEAM),
+                                .color(pal().accent),
                         );
                         ui.label(
                             egui::RichText::new(concat!("v", env!("CARGO_PKG_VERSION")))
                                 .size(FONT_SMALL)
-                                .color(TEXT_DIM),
+                                .color(pal().text_dim),
                         );
                         ui.label(
                             egui::RichText::new("by josephinoo")
                                 .size(FONT_SMALL)
-                                .color(TEXT_FAINT),
+                                .color(pal().text_faint),
                         );
                         ui.add_space(8.0);
                         if let Some(progress) = install_progress {
@@ -59,14 +59,14 @@ pub(crate) fn loading_screen(
                             };
                             ui.label(
                                 egui::RichText::new(title)
-                                    .color(STAR_GOLD)
+                                    .color(pal().warning)
                                     .size(FONT_LARGE)
                                     .strong(),
                             );
                             ui.add_space(8.0);
                             ui.label(
                                 egui::RichText::new(progress.label_for(lang))
-                                    .color(TEXT_DIM)
+                                    .color(pal().text_dim)
                                     .size(FONT_BODY),
                             );
                         } else {
@@ -74,7 +74,7 @@ pub(crate) fn loading_screen(
                                 egui::RichText::new(
                                     "Bringing catalog information from databases...",
                                 )
-                                .color(TEXT_DIM)
+                                .color(pal().text_dim)
                                 .size(FONT_BODY),
                             );
                             if let Some(info) = self_update {
@@ -102,7 +102,7 @@ pub(crate) fn loading_screen(
                             ui.painter().circle_filled(
                                 pos,
                                 2.2,
-                                ACCENT_STEAM.gamma_multiply(0.2 + 0.8 * alpha),
+                                pal().accent.gamma_multiply(0.2 + 0.8 * alpha),
                             );
                         }
                     },

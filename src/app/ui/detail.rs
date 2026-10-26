@@ -7,7 +7,7 @@ use crate::app::ui::grid::cover_fit_uv;
 use crate::app::ui::theme::*;
 use crate::app::ui::widgets::*;
 use crate::data::{Category, Platform};
-use crate::input::AppCommand;
+use crate::input::{AppCommand, DetailFocus};
 use crate::install::installed::{InstallState, InstalledIndex};
 
 pub(crate) fn detail_screen(
@@ -25,10 +25,13 @@ pub(crate) fn detail_screen(
     comment_entry_requested: bool,
     lightbox: Option<usize>,
     data_prompt: bool,
+    data_language: usize,
+    data_step: crate::input::DataStep,
     uninstall_prompt: bool,
     report_notice: Option<&str>,
     apps: &[crate::data::AppEntry],
     dep_job: Option<(&str, &crate::install::Progress)>,
+    detail_focus: DetailFocus,
 ) -> Vec<AppCommand> {
     let mut commands = Vec::new();
     let state = installed.state(entry);
@@ -36,7 +39,7 @@ pub(crate) fn detail_screen(
         .exact_height(46.0)
         .frame(
             egui::Frame::NONE
-                .fill(glass(BG_HEADER))
+                .fill(glass(pal().bg_header))
                 .inner_margin(egui::vec2(SCREEN_MARGIN, 4.0)),
         )
         .show(ctx, |ui| {
@@ -45,7 +48,7 @@ pub(crate) fn detail_screen(
                     ui.label(
                         egui::RichText::new(lang.install_in_progress())
                             .size(FONT_BODY)
-                            .color(STAR_GOLD),
+                            .color(pal().warning),
                     );
                 } else if back_button(ui, lang.back()) {
                     commands.push(AppCommand::BackToCatalog);
@@ -74,15 +77,26 @@ pub(crate) fn detail_screen(
             Some(status_note(installed, icons)),
         ));
     } else {
-        let mut hints = vec![
-            (Glyph::Circle, lang.btn_back()),
-            (Glyph::Cross, action_label(lang, primary)),
-        ];
-        if let Some(action) = detail_actions::secondary(entry, state) {
-            hints.push((Glyph::Triangle, action_label(lang, action)));
-        }
-        if let Some(action) = detail_actions::tertiary(entry, state) {
-            hints.push((Glyph::Square, action_label(lang, action)));
+        let mut hints = vec![(Glyph::Circle, lang.btn_back())];
+        match detail_focus {
+            DetailFocus::Author => {
+                hints.push((Glyph::Cross, lang.see_all()));
+            }
+            DetailFocus::Screenshots => {
+                hints.push((Glyph::Cross, lang.btn_open()));
+            }
+            DetailFocus::Requirements => {
+                hints.push((Glyph::Cross, lang.get_btn()));
+            }
+            DetailFocus::Primary => {
+                hints.push((Glyph::Cross, action_label(lang, primary)));
+                if let Some(action) = detail_actions::secondary(entry, state) {
+                    hints.push((Glyph::Triangle, action_label(lang, action)));
+                }
+                if let Some(action) = detail_actions::tertiary(entry, state) {
+                    hints.push((Glyph::Square, action_label(lang, action)));
+                }
+            }
         }
         commands.extend(button_hints(
             ctx,
@@ -93,57 +107,7 @@ pub(crate) fn detail_screen(
     }
 
     if data_prompt {
-        paint_modal_scrim(ctx);
-        egui::Area::new(egui::Id::new("data_prompt"))
-            .anchor(egui::Align2::CENTER_CENTER, modal_center_offset(ctx))
-            .order(egui::Order::Foreground)
-            .show(ctx, |ui| {
-                egui::Frame::window(&ctx.style())
-                    .fill(BG_CARD)
-                    .stroke(egui::Stroke::new(1.5_f32, STAR_GOLD))
-                    .corner_radius(RADIUS_LG)
-                    .inner_margin(egui::vec2(24.0, 18.0))
-                    .show(ui, |ui| {
-                        if crate::data::is_heavy_data(entry) {
-                            heavy_data_prompt(ui, entry, lang, &mut commands);
-                            return;
-                        }
-                        ui.set_width(320.0);
-                        ui.vertical_centered(|ui| {
-                            ui.label(
-                                egui::RichText::new(lang.data_prompt_title())
-                                    .size(FONT_LARGE)
-                                    .strong()
-                                    .color(TEXT_WHITE),
-                            );
-                            ui.add_space(10.0);
-                            ui.label(
-                                egui::RichText::new(lang.data_prompt_body())
-                                    .size(FONT_BODY)
-                                    .color(TEXT_DIM),
-                            );
-                            if entry.data_size_bytes > 0 {
-                                ui.add_space(6.0);
-                                ui.label(
-                                    egui::RichText::new(entry.data_size_label())
-                                        .size(FONT_BODY)
-                                        .strong()
-                                        .color(STAR_GOLD),
-                                );
-                            }
-                            ui.add_space(18.0);
-                            ui.horizontal(|ui| {
-                                if pill_button(ui, lang.data_prompt_accept(), true) {
-                                    commands.push(AppCommand::InstallCurrent);
-                                }
-                                ui.add_space(10.0);
-                                if pill_button(ui, lang.cancel_btn(), false) {
-                                    commands.push(AppCommand::CancelDataPrompt);
-                                }
-                            });
-                        });
-                    });
-            });
+        data_prompt_modal(ctx, entry, data_language, data_step, lang, &mut commands);
     }
 
     if uninstall_prompt {
@@ -153,10 +117,10 @@ pub(crate) fn detail_screen(
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
                 egui::Frame::window(&ctx.style())
-                    .fill(BG_CARD)
+                    .fill(pal().bg_card)
                     .stroke(egui::Stroke::new(
                         1.5_f32,
-                        egui::Color32::from_rgb(0xff, 0x6b, 0x6b),
+                        pal().danger,
                     ))
                     .corner_radius(RADIUS_LG)
                     .inner_margin(egui::vec2(24.0, 18.0))
@@ -167,13 +131,13 @@ pub(crate) fn detail_screen(
                                 egui::RichText::new(lang.uninstall_title(&entry.name))
                                     .size(FONT_LARGE)
                                     .strong()
-                                    .color(TEXT_WHITE),
+                                    .color(pal().text),
                             );
                             ui.add_space(10.0);
                             ui.label(
                                 egui::RichText::new(lang.uninstall_body())
                                     .size(FONT_BODY)
-                                    .color(TEXT_DIM),
+                                    .color(pal().text_dim),
                             );
                             ui.add_space(18.0);
                             ui.horizontal(|ui| {
@@ -218,7 +182,7 @@ pub(crate) fn detail_screen(
                             egui::Align2::CENTER_CENTER,
                             format!("{} / {total}", shot_idx + 1),
                             font(FONT_BODY),
-                            TEXT_DIM,
+                            pal().text_dim,
                         );
                         for (step, label, x) in [
                             (-1, "<", screen.center().x - 400.0),
@@ -237,9 +201,9 @@ pub(crate) fn detail_screen(
                                 rect,
                                 RADIUS_MD,
                                 if response.hovered() {
-                                    BG_CARD_HOVER
+                                    pal().bg_card_hover
                                 } else {
-                                    BG_CARD
+                                    pal().bg_card
                                 },
                             );
                             ui.painter().text(
@@ -247,7 +211,7 @@ pub(crate) fn detail_screen(
                                 egui::Align2::CENTER_CENTER,
                                 label,
                                 font(FONT_HEADLINE),
-                                TEXT_WHITE,
+                                pal().text,
                             );
                             if response.clicked() {
                                 commands.push(AppCommand::ScreenshotStep(step));
@@ -308,6 +272,7 @@ pub(crate) fn detail_screen(
                                     state,
                                     install,
                                     report_notice,
+                                    detail_focus,
                                     &mut commands,
                                 );
                             },
@@ -326,6 +291,7 @@ pub(crate) fn detail_screen(
                                     state,
                                     apps,
                                     dep_job,
+                                    detail_focus,
                                     &mut commands,
                                 );
                             },
@@ -335,9 +301,9 @@ pub(crate) fn detail_screen(
                     if !entry.changelog.trim().is_empty() {
                         ui.add_space(16.0);
                         egui::Frame::NONE
-                            .fill(glass(BG_CARD))
+                            .fill(glass(pal().bg_card))
                             .corner_radius(CARD_RADIUS)
-                            .stroke(egui::Stroke::new(1.0_f32, ACCENT_CYAN.gamma_multiply(0.45)))
+                            .stroke(egui::Stroke::new(1.0_f32, pal().accent_soft.gamma_multiply(0.45)))
                             .inner_margin(14.0)
                             .show(ui, |ui| {
                                 section_label(ui, lang.changelog());
@@ -345,13 +311,13 @@ pub(crate) fn detail_screen(
                                 ui.label(
                                     egui::RichText::new(entry.changelog.trim())
                                         .size(FONT_BODY)
-                                        .color(TEXT_WHITE),
+                                        .color(pal().text),
                                 );
                             });
                         ui.add_space(16.0);
                     }
                     if entry.platform == Platform::Plugin {
-                        text_panel(ui, lang.plugin_manual_note(), STAR_GOLD);
+                        text_panel(ui, lang.plugin_manual_note(), pal().warning);
                         ui.add_space(22.0);
                     }
                     if !entry.overview.is_empty() {
@@ -394,7 +360,7 @@ pub(crate) fn detail_screen(
                         ui.label(
                             egui::RichText::new(lang.your_rating())
                                 .size(FONT_BODY)
-                                .color(TEXT_DIM),
+                                .color(pal().text_dim),
                         );
                         ui.add_space(8.0);
                         if let Some(score) = tappable_stars(ui, entry.user_rating) {
@@ -412,7 +378,7 @@ pub(crate) fn detail_screen(
                             ))
                             .size(FONT_BODY)
                             .strong()
-                            .color(TEXT_WHITE),
+                            .color(pal().text),
                         );
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if !comment_entry_requested
@@ -421,7 +387,7 @@ pub(crate) fn detail_screen(
                                         egui::Button::new(
                                             egui::RichText::new(lang.add_comment())
                                                 .size(FONT_SMALL)
-                                                .color(ACCENT_CYAN),
+                                                .color(pal().accent_soft),
                                         )
                                         .frame(false),
                                     )
@@ -436,20 +402,20 @@ pub(crate) fn detail_screen(
                         ui.label(
                             egui::RichText::new(lang.loading_comments())
                                 .size(FONT_SMALL)
-                                .color(TEXT_FAINT),
+                                .color(pal().text_faint),
                         );
                     } else if comments.is_empty() {
                         ui.label(
                             egui::RichText::new(lang.no_comments_yet())
                                 .size(FONT_SMALL)
-                                .color(TEXT_FAINT),
+                                .color(pal().text_faint),
                         );
                     } else {
                         for comment in comments {
                             egui::Frame::NONE
-                                .fill(glass(BG_HEADER))
+                                .fill(glass(pal().bg_header))
                                 .corner_radius(RADIUS_MD)
-                                .stroke(egui::Stroke::new(1.0_f32, GLASS_EDGE))
+                                .stroke(egui::Stroke::new(1.0_f32, pal().glass_edge))
                                 .inner_margin(10.0)
                                 .show(ui, |ui| {
                                     ui.vertical(|ui| {
@@ -457,13 +423,13 @@ pub(crate) fn detail_screen(
                                             egui::RichText::new(&comment.author_name)
                                                 .size(FONT_SMALL)
                                                 .strong()
-                                                .color(ACCENT_CYAN),
+                                                .color(pal().accent_soft),
                                         );
                                         ui.add_space(2.0);
                                         ui.label(
                                             egui::RichText::new(&comment.content)
                                                 .size(FONT_BODY)
-                                                .color(TEXT_WHITE),
+                                                .color(pal().text),
                                         );
                                     });
                                 });
@@ -485,7 +451,7 @@ pub(crate) fn detail_screen(
 /// down to the bar itself.
 fn fade_into_footer(ui: &egui::Ui, viewport: egui::Rect) {
     const FADE_H: f32 = 26.0;
-    let bar = BG_HEADER;
+    let bar = pal().bg_header;
     let clear = egui::Color32::from_rgba_unmultiplied(bar.r(), bar.g(), bar.b(), 0);
     let left = viewport.left() - SCREEN_MARGIN;
     let right = viewport.right() + SCREEN_MARGIN;
@@ -549,10 +515,10 @@ fn install_progress_modal(
         .order(egui::Order::Foreground)
         .show(ctx, |ui| {
             egui::Frame::window(&ctx.style())
-                .fill(BG_CARD)
+                .fill(pal().bg_card)
                 .stroke(egui::Stroke::new(
                     if cancel_armed { 2.5_f32 } else { 1.5_f32 },
-                    if cancel_armed { DANGER } else { ACCENT_STEAM },
+                    if cancel_armed { pal().danger } else { pal().accent },
                 ))
                 .corner_radius(RADIUS_LG)
                 .inner_margin(egui::vec2(28.0, 20.0))
@@ -563,7 +529,7 @@ fn install_progress_modal(
                             egui::RichText::new(entry.name.as_str())
                                 .size(FONT_LARGE)
                                 .strong()
-                                .color(TEXT_WHITE),
+                                .color(pal().text),
                         );
                         ui.add_space(16.0);
                         if !matches!(job, crate::install::Progress::Failed(_)) {
@@ -572,16 +538,16 @@ fn install_progress_modal(
                         ui.add_space(16.0);
                         if !finished {
                             if let Some(fraction) = job.fraction() {
-                                ui.add(egui::ProgressBar::new(fraction).desired_width(360.0).fill(ACCENT_STEAM));
+                                ui.add(egui::ProgressBar::new(fraction).desired_width(360.0).fill(pal().accent));
                             } else {
-                                ui.add(egui::Spinner::new().size(20.0).color(ACCENT_STEAM));
+                                ui.add(egui::Spinner::new().size(20.0).color(pal().accent));
                             }
                             ui.add_space(8.0);
                         }
                         ui.label(
                             egui::RichText::new(job.label_for(lang))
                                 .size(FONT_SMALL)
-                                .color(TEXT_DIM),
+                                .color(pal().text_dim),
                         );
                         if cancellable {
                             ui.add_space(14.0);
@@ -590,7 +556,7 @@ fn install_progress_modal(
                                     egui::RichText::new(lang.cancel_confirm())
                                         .size(FONT_SMALL)
                                         .strong()
-                                        .color(DANGER),
+                                        .color(pal().danger),
                                 );
                                 ui.add_space(6.0);
                             }
@@ -644,9 +610,9 @@ fn install_stepper(ui: &mut egui::Ui, progress: &crate::install::Progress, lang:
         if index > 0 {
             let previous = egui::pos2(start_x + (index - 1) as f32 * spacing, center_y);
             let color = if step <= current && !(failed && step == current) {
-                ACCENT_STEAM
+                pal().accent
             } else {
-                SEPARATOR
+                pal().separator
             };
             ui.painter().line_segment(
                 [
@@ -660,18 +626,18 @@ fn install_stepper(ui: &mut egui::Ui, progress: &crate::install::Progress, lang:
         let is_done = step < current || (is_current && !failed && progress.is_finished());
         let (fill, text) = if failed && is_current {
             (
-                egui::Color32::from_rgb(0x3a, 0x1c, 0x1c),
-                egui::Color32::from_rgb(0xff, 0x6b, 0x6b),
+                pal().danger_bg,
+                pal().danger,
             )
         } else if is_done || is_current {
-            (ACCENT_STEAM, TEXT_WHITE)
+            (pal().accent, pal().text)
         } else {
-            (BG_CARD_HOVER, TEXT_DIM)
+            (pal().bg_card_hover, pal().text_dim)
         };
         ui.painter().circle_filled(center, circle_r, fill);
         if !is_done && !is_current {
             ui.painter()
-                .circle_stroke(center, circle_r, egui::Stroke::new(1.0_f32, SEPARATOR));
+                .circle_stroke(center, circle_r, egui::Stroke::new(1.0_f32, pal().separator));
         }
         ui.painter().text(
             center,
@@ -685,16 +651,16 @@ fn install_stepper(ui: &mut egui::Ui, progress: &crate::install::Progress, lang:
             egui::Align2::CENTER_CENTER,
             label,
             font(FONT_SMALL),
-            if is_current { TEXT_WHITE } else { TEXT_DIM },
+            if is_current { pal().text } else { pal().text_dim },
         );
     }
 }
 
 fn text_panel(ui: &mut egui::Ui, text: &str, color: egui::Color32) {
     egui::Frame::NONE
-        .fill(glass(BG_CARD))
+        .fill(glass(pal().bg_card))
         .corner_radius(RADIUS_MD)
-        .stroke(egui::Stroke::new(1.0_f32, GLASS_EDGE))
+        .stroke(egui::Stroke::new(1.0_f32, pal().glass_edge))
         .inner_margin(egui::vec2(14.0, 12.0))
         .show(ui, |ui| {
             ui.label(egui::RichText::new(text).size(FONT_BODY).color(color));
@@ -729,7 +695,7 @@ fn is_game_data_req_text(text: &str) -> bool {
 fn section_label(ui: &mut egui::Ui, text: &str) {
     ui.label(
         egui::RichText::new(text.to_uppercase())
-            .color(ACCENT_CYAN)
+            .color(pal().accent_soft)
             .size(FONT_SMALL)
             .strong(),
     );
@@ -757,7 +723,7 @@ fn version_info_block(
                 catalog_date
             ))
             .size(FONT_SMALL)
-            .color(TEXT_DIM),
+            .color(pal().text_dim),
         );
         if state != InstallState::Absent {
             let info = installed
@@ -771,23 +737,23 @@ fn version_info_block(
             ui.label(
                 egui::RichText::new(installed_line)
                     .size(FONT_SMALL)
-                    .color(TEXT_FAINT),
+                    .color(pal().text_faint),
             );
         }
     });
 }
 
 fn cancel_button(ui: &mut egui::Ui, label: &str) -> bool {
-    let galley = ui.fonts(|f| f.layout_no_wrap(label.to_owned(), font(FONT_SMALL), TEXT_WHITE));
+    let galley = ui.fonts(|f| f.layout_no_wrap(label.to_owned(), font(FONT_SMALL), pal().text));
     let desired = egui::vec2(galley.size().x + 24.0, 30.0);
     let (rect, response) = ui.allocate_exact_size(desired, egui::Sense::click());
     let (fill, stroke) = if response.hovered() {
         (
-            egui::Color32::from_rgb(0x3a, 0x1c, 0x1c),
-            egui::Color32::from_rgb(0xff, 0x6b, 0x6b),
+            pal().danger_bg,
+            pal().danger,
         )
     } else {
-        (BG_CARD_HOVER, SEPARATOR)
+        (pal().bg_card_hover, pal().separator)
     };
     ui.painter().rect_filled(rect, RADIUS_SM, fill);
     ui.painter().rect_stroke(
@@ -801,7 +767,7 @@ fn cancel_button(ui: &mut egui::Ui, label: &str) -> bool {
         egui::Align2::CENTER_CENTER,
         label,
         font(FONT_SMALL),
-        TEXT_WHITE,
+        pal().text,
     );
     response.clicked()
 }
@@ -843,11 +809,11 @@ fn draw_screenshot(
     fetch: bool,
     lang: Language,
 ) {
-    ui.painter().rect_filled(rect, RADIUS_MD, BG_DEEP);
+    ui.painter().rect_filled(rect, RADIUS_MD, pal().bg_deep);
     ui.painter().rect_stroke(
         rect,
         RADIUS_MD,
-        egui::Stroke::new(1.0_f32, SEPARATOR),
+        egui::Stroke::new(1.0_f32, pal().separator),
         egui::StrokeKind::Inside,
     );
     if !fetch {
@@ -858,12 +824,12 @@ fn draw_screenshot(
             texture.id(),
             rect,
             egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-            TEXT_WHITE,
+            pal().text,
         );
         ui.painter().rect_stroke(
             rect,
             RADIUS_MD,
-            egui::Stroke::new(1.0_f32, SEPARATOR),
+            egui::Stroke::new(1.0_f32, pal().separator),
             egui::StrokeKind::Inside,
         );
         return;
@@ -890,7 +856,7 @@ fn draw_screenshot(
             egui::Align2::CENTER_CENTER,
             lang.tr("no-image"),
             font(FONT_SMALL),
-            TEXT_DIM,
+            pal().text_dim,
         );
     }
 }
@@ -905,13 +871,13 @@ fn draw_icon(
 
     let color = category_color(entry.category);
     let corner_r = rect.width() * 0.22;
-    let plate = color.lerp_to_gamma(BG_DEEP, 0.62);
+    let plate = color.lerp_to_gamma(pal().bg_deep, 0.62);
     ui.painter().rect_filled(rect, corner_r, plate);
     let art = tile_art_url(entry);
     if let Some(url) = art {
         if let Some(texture) = icons.get(ui.ctx(), url) {
             ui.painter().add(
-                egui::epaint::RectShape::filled(rect, corner_r, TEXT_WHITE)
+                egui::epaint::RectShape::filled(rect, corner_r, pal().text)
                     .with_texture(texture.id(), cover_fit_uv(texture.size_vec2(), rect)),
             );
             return;
@@ -936,7 +902,7 @@ fn draw_icon(
             ui,
             ChromeIcon::Plugins,
             icon_rect,
-            TEXT_WHITE.gamma_multiply(pulse),
+            pal().text.gamma_multiply(pulse),
         );
     } else {
         let letter = entry
@@ -951,7 +917,7 @@ fn draw_icon(
             egui::Align2::CENTER_CENTER,
             letter,
             font((rect.width() * 0.42).round()),
-            TEXT_WHITE.gamma_multiply(pulse),
+            pal().text.gamma_multiply(pulse),
         );
     }
     if loading {
@@ -986,15 +952,28 @@ fn stats_row(ui: &mut egui::Ui, lang: Language, entry: &crate::data::AppEntry) {
     } else {
         entry.version.clone()
     };
-    let cells = [
-        (short_count(entry.downloads), lang.downloads()),
-        (entry.size_label(), lang.size()),
-        (version, lang.version()),
+    let dl_count = short_count(entry.downloads);
+    let size_label = entry.size_label();
+    let (size_cap, size_color) = if let Some((used, total)) = crate::app::sysinfo::storage("ux0:") {
+        let available = total.saturating_sub(used);
+        let free_gb = available as f64 / (1024.0 * 1024.0 * 1024.0);
+        let is_short = crate::install::space_shortfall(entry).is_some();
+        (
+            format!("{free_gb:.1} GB ux0:"),
+            if is_short { pal().danger } else { pal().text },
+        )
+    } else {
+        (lang.size().to_owned(), pal().text)
+    };
+    let cells: [(&str, String, egui::Color32); 3] = [
+        (&dl_count, lang.downloads().to_owned(), pal().text),
+        (&size_label, size_cap, size_color),
+        (&version, lang.version().to_owned(), pal().text),
     ];
     let width = ui.available_width();
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 34.0), egui::Sense::hover());
     let cell_w = width / cells.len() as f32;
-    for (index, (value, caption)) in cells.iter().enumerate() {
+    for (index, (value, caption, val_color)) in cells.iter().enumerate() {
         let center_x = rect.left() + cell_w * (index as f32 + 0.5);
         if index > 0 {
             let x = rect.left() + cell_w * index as f32;
@@ -1003,22 +982,22 @@ fn stats_row(ui: &mut egui::Ui, lang: Language, entry: &crate::data::AppEntry) {
                     egui::pos2(x, rect.top() + 4.0),
                     egui::pos2(x, rect.bottom() - 4.0),
                 ],
-                egui::Stroke::new(1.0_f32, SEPARATOR),
+                egui::Stroke::new(1.0_f32, pal().separator),
             );
         }
         ui.painter().text(
             egui::pos2(center_x, rect.top() + 9.0),
             egui::Align2::CENTER_CENTER,
-            value,
+            *value,
             font(FONT_TITLE),
-            TEXT_WHITE,
+            *val_color,
         );
         ui.painter().text(
             egui::pos2(center_x, rect.top() + 27.0),
             egui::Align2::CENTER_CENTER,
             caption,
             font(FONT_SMALL),
-            TEXT_FAINT,
+            pal().text_faint,
         );
     }
 }
@@ -1052,14 +1031,14 @@ fn install_action(
             .then(|| crate::install::space_shortfall(entry))
             .flatten();
             let (base, hover) = if short.is_some() {
-                let red = egui::Color32::from_rgb(0x5a, 0x24, 0x24);
+                let red = pal().danger_bg;
                 (red, red)
             } else {
                 match action {
-                    DetailAction::Update => (STAR_GOLD, STAR_GOLD_HOVER),
-                    DetailAction::Install | DetailAction::Open => (GREEN_PLAY, GREEN_PLAY_HOVER),
-                    DetailAction::Download => (BLUE_PLAY, BLUE_PLAY_HOVER),
-                    _ => (BG_CARD_HOVER, BG_CARD_HOVER.gamma_multiply(1.3)),
+                    DetailAction::Update => (pal().warning, pal().warning_hover),
+                    DetailAction::Install | DetailAction::Open => (pal().success, pal().success_hover),
+                    DetailAction::Download => (pal().primary, pal().primary_hover),
+                    _ => (pal().bg_card_hover, pal().bg_card_hover.gamma_multiply(1.3)),
                 }
             };
             let enabled = short.is_none();
@@ -1085,8 +1064,8 @@ fn install_action(
                 }
             };
             let text_color = match action {
-                DetailAction::Install | DetailAction::Open if enabled => BG_DEEP,
-                _ => TEXT_WHITE,
+                DetailAction::Install | DetailAction::Open if enabled => pal().bg_deep,
+                _ => pal().text,
             };
             let galley = ui.fonts(|f| f.layout_no_wrap(label, font(FONT_LARGE), text_color));
             let glyph = enabled
@@ -1120,9 +1099,9 @@ fn install_action(
                     radius + 2.0,
                     egui::Stroke::new(
                         FOCUS_STROKE * glow_t,
-                        ACCENT_CYAN
+                        pal().accent_soft
                             .gamma_multiply(0.65)
-                            .lerp_to_gamma(SELECT_GLOW, hover_t),
+                            .lerp_to_gamma(pal().focus_glow, hover_t),
                     ),
                     egui::StrokeKind::Outside,
                 );
@@ -1139,21 +1118,21 @@ fn install_action(
             let finished = job.is_finished();
             let (fill, text_color, track) = match job {
                 Progress::Done | Progress::RebootRequired | Progress::Restarting => (
-                    GREEN_PLAY.gamma_multiply(0.30),
-                    GREEN_PLAY_HOVER,
-                    GREEN_PLAY.gamma_multiply(0.30),
+                    pal().success.gamma_multiply(0.30),
+                    pal().success_hover,
+                    pal().success.gamma_multiply(0.30),
                 ),
                 Progress::Queued => (
-                    egui::Color32::from_rgb(0x3a, 0x30, 0x14),
-                    egui::Color32::from_rgb(0xf5, 0xb8, 0x42),
-                    egui::Color32::from_rgb(0x3a, 0x30, 0x14),
+                    pal().warning.gamma_multiply(0.2),
+                    pal().warning,
+                    pal().warning.gamma_multiply(0.2),
                 ),
                 Progress::Failed(_) => (
-                    egui::Color32::from_rgb(0x3a, 0x1c, 0x1c),
-                    egui::Color32::from_rgb(0xff, 0x6b, 0x6b),
-                    egui::Color32::from_rgb(0x3a, 0x1c, 0x1c),
+                    pal().danger_bg,
+                    pal().danger,
+                    pal().danger_bg,
                 ),
-                _ => (ACCENT_STEAM, TEXT_WHITE, BG_CARD_HOVER),
+                _ => (pal().accent, pal().text, pal().bg_card_hover),
             };
             painter.rect_filled(rect, radius, track);
             if !finished {
@@ -1204,6 +1183,7 @@ fn left_column(
     state: InstallState,
     install: Option<&crate::install::Progress>,
     report_notice: Option<&str>,
+    detail_focus: DetailFocus,
     commands: &mut Vec<AppCommand>,
 ) {
     ui.vertical_centered(|ui| {
@@ -1218,25 +1198,35 @@ fn left_column(
                     egui::RichText::new(&entry.name)
                         .size(FONT_HEADLINE)
                         .strong()
-                        .color(TEXT_WHITE),
+                        .color(pal().text),
                 );
+                let is_author_focused = detail_focus == DetailFocus::Author;
                 let author_btn = ui.add(
                     egui::Button::new(
                         egui::RichText::new(&entry.author)
-                            .color(ACCENT_CYAN)
+                            .color(if is_author_focused { pal().focus } else { pal().accent_soft })
                             .size(FONT_BODY)
                             .strong(),
                     )
                     .frame(false),
                 );
+                if is_author_focused {
+                    ui.painter().rect_stroke(
+                        author_btn.rect.expand(2.0),
+                        RADIUS_XS,
+                        egui::Stroke::new(FOCUS_STROKE, pal().focus),
+                        egui::StrokeKind::Outside,
+                    );
+                }
                 if author_btn.clicked() {
+                    commands.push(AppCommand::SetDetailFocus(DetailFocus::Author));
                     commands.push(AppCommand::MoreByAuthor(entry.author.clone()));
                 }
                 if !entry.version.trim().is_empty() {
                     ui.label(
                         egui::RichText::new(format!("v.{}", entry.version.trim()))
                             .size(FONT_SMALL)
-                            .color(TEXT_FAINT),
+                            .color(pal().text_faint),
                     );
                 }
                 ui.add_space(2.0);
@@ -1316,7 +1306,7 @@ fn left_column(
                 ui.label(
                     egui::RichText::new(notice)
                         .size(FONT_SMALL)
-                        .color(GREEN_PLAY),
+                        .color(pal().success),
                 );
             }
         }
@@ -1330,7 +1320,7 @@ fn left_column(
     } else {
         &entry.long_description
     };
-    text_panel(ui, body, TEXT_WHITE);
+    text_panel(ui, body, pal().text);
 }
 
 fn right_column(
@@ -1341,6 +1331,7 @@ fn right_column(
     state: InstallState,
     apps: &[crate::data::AppEntry],
     dep_job: Option<(&str, &crate::install::Progress)>,
+    detail_focus: DetailFocus,
     commands: &mut Vec<AppCommand>,
 ) {
     if let Some(first) = entry.screenshot_urls.first() {
@@ -1349,8 +1340,18 @@ fn right_column(
             egui::vec2(width, (width * 9.0 / 16.0).round()),
             egui::Sense::click(),
         );
+        let is_shot_focused = detail_focus == DetailFocus::Screenshots;
         draw_screenshot(ui, icons, rect, first, entry.category, true, lang);
+        if is_shot_focused {
+            ui.painter().rect_stroke(
+                rect.expand(2.0),
+                RADIUS_MD,
+                egui::Stroke::new(FOCUS_STROKE, pal().focus),
+                egui::StrokeKind::Outside,
+            );
+        }
         if response.clicked() {
+            commands.push(AppCommand::SetDetailFocus(DetailFocus::Screenshots));
             commands.push(AppCommand::OpenScreenshot(0));
         }
         if entry.screenshot_urls.len() > 1 {
@@ -1359,7 +1360,7 @@ fn right_column(
         }
         ui.add_space(14.0);
     }
-    requirements_block(ui, lang, entry, state, apps, dep_job, commands);
+    requirements_block(ui, lang, entry, state, apps, dep_job, detail_focus, commands);
 }
 
 fn requirements_block(
@@ -1369,6 +1370,7 @@ fn requirements_block(
     state: InstallState,
     apps: &[crate::data::AppEntry],
     dep_job: Option<(&str, &crate::install::Progress)>,
+    detail_focus: DetailFocus,
     commands: &mut Vec<AppCommand>,
 ) {
     use crate::install::requirements::{ReqStatus, Verdict};
@@ -1394,14 +1396,14 @@ fn requirements_block(
     }
     let verdict = crate::install::requirements::verdict(&items, installed);
     let (heading, color) = match verdict {
-        Verdict::Ready => (lang.ready_to_play(), GREEN_PLAY),
-        Verdict::NeedsFiles => (lang.needs_your_files(), STAR_GOLD),
-        Verdict::Plain => (lang.also_needs(), STAR_GOLD),
+        Verdict::Ready => (lang.ready_to_play(), pal().success),
+        Verdict::NeedsFiles => (lang.needs_your_files(), pal().warning),
+        Verdict::Plain => (lang.also_needs(), pal().warning),
     };
     egui::Frame::NONE
-        .fill(glass(BG_CARD))
+        .fill(glass(pal().bg_card))
         .corner_radius(CARD_RADIUS)
-        .stroke(egui::Stroke::new(1.0_f32, GLASS_EDGE))
+        .stroke(egui::Stroke::new(1.0_f32, pal().glass_edge))
         .inner_margin(egui::vec2(12.0, 10.0))
         .show(ui, |ui| {
             ui.label(
@@ -1421,9 +1423,9 @@ fn requirements_block(
                 ui.horizontal_wrapped(|ui| {
                     if installed {
                         let dot = match item.status {
-                            ReqStatus::Found => GREEN_PLAY,
-                            ReqStatus::Missing => STAR_GOLD,
-                            ReqStatus::Unknown => TEXT_WHITE.gamma_multiply(0.25),
+                            ReqStatus::Found => pal().success,
+                            ReqStatus::Missing => pal().warning,
+                            ReqStatus::Unknown => pal().text.gamma_multiply(0.25),
                         };
                         let (rect, _) =
                             ui.allocate_exact_size(egui::vec2(10.0, 14.0), egui::Sense::hover());
@@ -1432,7 +1434,7 @@ fn requirements_block(
                     ui.label(
                         egui::RichText::new(&item.text)
                             .size(FONT_BODY)
-                            .color(TEXT_WHITE),
+                            .color(pal().text),
                     );
                     if installed
                         && item.status == ReqStatus::Missing
@@ -1445,11 +1447,13 @@ fn requirements_block(
                                 ui.label(
                                     egui::RichText::new(progress.label_for(lang))
                                         .size(FONT_SMALL)
-                                        .color(STAR_GOLD),
+                                        .color(pal().warning),
                                 );
                             }
                             _ => {
-                                if pill_button(ui, lang.get_btn(), false) {
+                                let is_req_focused = detail_focus == DetailFocus::Requirements;
+                                if pill_button_focused(ui, lang.get_btn(), false, is_req_focused) {
+                                    commands.push(AppCommand::SetDetailFocus(DetailFocus::Requirements));
                                     commands.push(AppCommand::InstallDependency {
                                         id: dep.id.clone(),
                                         dir: dep.dir.clone(),
@@ -1466,7 +1470,7 @@ fn requirements_block(
                 ui.label(
                     egui::RichText::new(lang.needs_nonpdrm())
                         .size(FONT_SMALL)
-                        .color(STAR_GOLD),
+                        .color(pal().warning),
                 );
             }
         });
@@ -1483,9 +1487,9 @@ fn game_data_callout(
     ui.set_opacity(prev * appear);
     ui.add_space((1.0 - appear) * 6.0);
     egui::Frame::NONE
-        .fill(STAR_GOLD.gamma_multiply(0.12))
+        .fill(pal().warning.gamma_multiply(0.12))
         .corner_radius(RADIUS_MD)
-        .stroke(egui::Stroke::new(1.0_f32, STAR_GOLD.gamma_multiply(0.55)))
+        .stroke(egui::Stroke::new(1.0_f32, pal().warning.gamma_multiply(0.55)))
         .inner_margin(egui::vec2(10.0, 8.0))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
@@ -1496,7 +1500,7 @@ fn game_data_callout(
                         egui::RichText::new(lang.needs_game_data())
                             .size(FONT_SMALL)
                             .strong()
-                            .color(STAR_GOLD),
+                            .color(pal().warning),
                     );
                     let mut detail = String::new();
                     if entry.data_size_bytes > 0 {
@@ -1517,14 +1521,14 @@ fn game_data_callout(
                         ui.label(
                             egui::RichText::new(detail)
                                 .size(FONT_MICRO)
-                                .color(TEXT_DIM),
+                                .color(pal().text_dim),
                         );
                     }
                     if entry.data_url.is_none() {
                         ui.label(
                             egui::RichText::new(lang.data_not_auto())
                                 .size(FONT_MICRO)
-                                .color(TEXT_FAINT),
+                                .color(pal().text_faint),
                         );
                     }
                 });
@@ -1534,19 +1538,24 @@ fn game_data_callout(
 }
 
 fn action_chip(ui: &mut egui::Ui, glyph: Glyph, label: &str) -> bool {
-    let galley = ui.fonts(|f| f.layout_no_wrap(label.to_owned(), font(FONT_SMALL), TEXT_WHITE));
+    prompt_chip(ui, glyph, label, false)
+}
+
+/// Chip showing which pad button triggers it; `primary` is the solid blue action.
+fn prompt_chip(ui: &mut egui::Ui, glyph: Glyph, label: &str, primary: bool) -> bool {
+    let galley = ui.fonts(|f| f.layout_no_wrap(label.to_owned(), font(FONT_SMALL), pal().text));
     let icon = 16.0;
-    let size = egui::vec2(galley.size().x + icon + 28.0, 28.0);
+    // 14 left + icon + 6 gap + text + 14 right, so the content sits centred.
+    let size = egui::vec2(galley.size().x + icon + 34.0, 28.0);
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
     let t = if response.hovered() { 1.0_f32 } else { 0.0_f32 };
-    ui.painter()
-        .rect_filled(rect, size.y / 2.0, BG_CARD.lerp_to_gamma(BG_CARD_HOVER, t));
-    ui.painter().rect_stroke(
-        rect,
-        size.y / 2.0,
-        egui::Stroke::new(1.0_f32, SEPARATOR),
-        egui::StrokeKind::Inside,
-    );
+    let (fill, stroke) = if primary {
+        (pal().primary.lerp_to_gamma(pal().primary_hover, t), egui::Stroke::NONE)
+    } else {
+        (pal().text.gamma_multiply(0.08 + 0.06 * t), egui::Stroke::NONE)
+    };
+    ui.painter().rect_filled(rect, size.y / 2.0, fill);
+    ui.painter().rect_stroke(rect, size.y / 2.0, stroke, egui::StrokeKind::Inside);
     if let Some(tex) = button_texture(ui.ctx(), glyph) {
         ui.painter().image(
             tex.id(),
@@ -1564,7 +1573,7 @@ fn action_chip(ui: &mut egui::Ui, glyph: Glyph, label: &str) -> bool {
             rect.center().y - galley.size().y / 2.0,
         ),
         galley,
-        TEXT_WHITE,
+        pal().text,
     );
     response.clicked()
 }
@@ -1582,50 +1591,249 @@ mod tests {
         assert!(!is_game_data_req_text("kubridge.skprx in ur0:tai"));
         assert!(!is_game_data_req_text("libshacccg.suprx"));
     }
+
+    #[test]
+    fn data_prompt_modal_renders_all_steps() {
+        let ctx = egui::Context::default();
+        let mut entry = crate::app::sort_tests::entry("dragon-ball-z", "vitadb", 0, 350 * 1024 * 1024, 0.0, "");
+        entry.data_size_bytes = 350 * 1024 * 1024;
+        entry.game_data_languages = vec![
+            crate::data::GameDataLanguage {
+                language: "es".into(),
+                size_bytes: 350 * 1024 * 1024,
+                url: "https://example.com/data_es.zip".into(),
+                extract_path: None,
+            },
+        ];
+
+        for step in [
+            crate::input::DataStep::Choice,
+            crate::input::DataStep::Language,
+            crate::input::DataStep::Method,
+        ] {
+            let mut commands = Vec::new();
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                super::data_prompt_modal(
+                    ctx,
+                    &entry,
+                    1,
+                    step,
+                    crate::app::Language::English,
+                    &mut commands,
+                );
+            });
+        }
+    }
 }
 
-fn heavy_data_prompt(
+/// Two-step game data modal: pick a language (only when the game has extra
+/// languages), then confirm how to get the data for that choice.
+fn data_prompt_modal(
+    ctx: &egui::Context,
+    entry: &crate::data::AppEntry,
+    data_language: usize,
+    step: crate::input::DataStep,
+    lang: Language,
+    commands: &mut Vec<AppCommand>,
+) {
+    use crate::input::DataStep;
+    paint_modal_scrim(ctx);
+    let chosen = crate::data::with_data_language(entry, data_language);
+    egui::Area::new(egui::Id::new("data_prompt").with(step as u8))
+        .anchor(egui::Align2::CENTER_CENTER, modal_center_offset(ctx))
+        .order(egui::Order::Foreground)
+        .show(ctx, |ui| {
+            egui::Frame::window(&ctx.style())
+                .fill(pal().bg_card)
+                .stroke(egui::Stroke::new(1.0_f32, pal().separator))
+                .corner_radius(RADIUS_LG)
+                .inner_margin(egui::vec2(20.0, 14.0))
+                .show(ui, |ui| {
+                    match step {
+                        DataStep::Choice => choice_step(ui, entry, lang, commands),
+                        DataStep::Language => language_step(ui, entry, data_language, lang, commands),
+                        DataStep::Method => heavy_data_prompt(
+                            ui,
+                            &chosen,
+                            chosen_language_label(entry, data_language, lang),
+                            lang,
+                            commands,
+                        ),
+                    }
+                });
+        });
+}
+
+/// Name of the chosen variant, only when the game offers more than one.
+fn chosen_language_label(entry: &crate::data::AppEntry, choice: usize, lang: Language) -> Option<String> {
+    if entry.game_data_languages.is_empty() {
+        return None;
+    }
+    Some(match choice.checked_sub(1).and_then(|i| entry.game_data_languages.get(i)) {
+        Some(l) => language_name(&l.language),
+        None => lang.data_language_default(),
+    })
+}
+
+fn language_step(
+    ui: &mut egui::Ui,
+    entry: &crate::data::AppEntry,
+    selected: usize,
+    lang: Language,
+    commands: &mut Vec<AppCommand>,
+) {
+    ui.set_width(380.0);
+    ui.label(egui::RichText::new(lang.data_language_title()).size(FONT_LARGE).strong().color(pal().text));
+    ui.add_space(12.0);
+    let options = std::iter::once((lang.data_language_default(), entry.data_size_bytes)).chain(
+        entry.game_data_languages.iter().map(|l| (language_name(&l.language), l.size_bytes)),
+    );
+    for (i, (name, size)) in options.enumerate() {
+        if language_row(ui, &name, size, i == selected) {
+            commands.push(AppCommand::SelectDataLanguage(i));
+        }
+        ui.add_space(6.0);
+    }
+    ui.add_space(12.0);
+    ui.horizontal(|ui| {
+        if prompt_chip(ui, Glyph::Cross, &lang.data_language_continue(), true) {
+            commands.push(AppCommand::ConfirmDataLanguage);
+        }
+        ui.add_space(10.0);
+        if prompt_chip(ui, Glyph::Circle, lang.cancel_btn(), false) {
+            commands.push(AppCommand::CancelDataPrompt);
+        }
+    });
+}
+
+/// One selectable line: radio + name, size on the right.
+fn language_row(ui: &mut egui::Ui, name: &str, size: u64, selected: bool) -> bool {
+    let size = (size > 0).then(|| crate::data::cache_manager::format_bytes(size));
+    crate::app::ui::widgets::radio_row(ui, name, size.as_deref(), selected, selected)
+}
+
+/// First question: just the app (VPK), or the app plus its game data.
+fn choice_step(
     ui: &mut egui::Ui,
     entry: &crate::data::AppEntry,
     lang: Language,
     commands: &mut Vec<AppCommand>,
 ) {
+    ui.set_width(420.0);
+    ui.label(egui::RichText::new(lang.data_choice_title()).size(FONT_LARGE).strong().color(pal().text));
+    ui.add_space(8.0);
+    ui.add(egui::Label::new(egui::RichText::new(lang.data_prompt_body()).size(FONT_BODY).color(pal().text_dim)).wrap());
+    if entry.data_size_bytes > 0 {
+        ui.add_space(4.0);
+        ui.label(egui::RichText::new(entry.data_size_label()).size(FONT_BODY).strong().color(pal().warning));
+    }
+    ui.add_space(14.0);
+    if prompt_chip(ui, Glyph::Cross, &lang.data_choice_with_data(), true) {
+        commands.push(AppCommand::WantGameData);
+    }
+    ui.add_space(8.0);
+    if prompt_chip(ui, Glyph::Triangle, &lang.data_choice_app_only(), false) {
+        commands.push(AppCommand::InstallAppOnly);
+    }
+    ui.add(egui::Label::new(egui::RichText::new(lang.data_choice_app_only_hint()).size(FONT_SMALL).color(pal().text_faint)).wrap());
+    ui.add_space(12.0);
+    if prompt_chip(ui, Glyph::Circle, lang.cancel_btn(), false) {
+        commands.push(AppCommand::CancelDataPrompt);
+    }
+}
+
+/// Big data: two clearly separated ways to get it, each with its own button.
+fn heavy_data_prompt(
+    ui: &mut egui::Ui,
+    entry: &crate::data::AppEntry,
+    language: Option<String>,
+    lang: Language,
+    commands: &mut Vec<AppCommand>,
+) {
     let url = format!("https://vitaforge.josephinoo.dev/apps/{}", entry.id);
     let path = entry.data_extract_path.as_deref().unwrap_or("ux0:data/");
-    ui.set_width(600.0);
+    ui.set_width(640.0);
+    let mut title = lang.data_heavy_title(&entry.data_size_label());
+    if let Some(language) = language {
+        title = format!("{title} · {language}");
+    }
+    ui.label(egui::RichText::new(title).size(FONT_LARGE).strong().color(pal().warning));
+    ui.label(egui::RichText::new(lang.data_heavy_choose()).size(FONT_BODY).color(pal().text_dim));
+    ui.add_space(12.0);
     ui.horizontal_top(|ui| {
-        paint_qr(ui, &url, 170.0);
-        ui.add_space(16.0);
-        ui.vertical(|ui| {
-            ui.set_width(400.0);
-            ui.label(
-                egui::RichText::new(lang.data_heavy_title(&entry.data_size_label()))
-                    .size(FONT_LARGE)
-                    .strong()
-                    .color(STAR_GOLD),
-            );
+        option_card(ui, 220.0, |ui| {
+            ui.label(egui::RichText::new(lang.data_heavy_vita_title()).size(FONT_BODY).strong().color(pal().text));
+            ui.add_space(6.0);
+            ui.add(egui::Label::new(egui::RichText::new(lang.data_heavy_vita_body()).size(FONT_SMALL).color(pal().text_dim)).wrap());
+            ui.add_space(12.0);
+            if prompt_chip(ui, Glyph::Triangle, &lang.data_heavy_download_here(), false) {
+                commands.push(AppCommand::InstallCurrent);
+            }
+        });
+        ui.add_space(12.0);
+        option_card(ui, 360.0, |ui| {
+            ui.label(egui::RichText::new(lang.data_heavy_pc_title()).size(FONT_BODY).strong().color(pal().warning));
+            ui.add_space(6.0);
+            let qr_size = 96.0;
+            ui.horizontal_top(|ui| {
+                paint_qr(ui, &url, qr_size);
+                ui.add_space(10.0);
+                ui.allocate_ui_with_layout(
+                    egui::vec2(360.0 - qr_size - 10.0, 0.0),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        for step in lang.data_heavy_pc_steps(path) {
+                            ui.add(egui::Label::new(egui::RichText::new(step).size(FONT_SMALL).color(pal().text_dim)).wrap());
+                        }
+                    },
+                );
+            });
+            ui.add_space(6.0);
+            ui.add(egui::Label::new(egui::RichText::new(&url).size(FONT_MICRO).color(pal().text_faint)).truncate());
             ui.add_space(8.0);
-            ui.label(egui::RichText::new(lang.data_heavy_body(path)).size(FONT_SMALL).color(TEXT_DIM));
-            ui.add_space(8.0);
-            // Wrap: a long URL has no spaces and would be clipped at the frame edge.
-            ui.add(egui::Label::new(egui::RichText::new(&url).size(FONT_SMALL).strong().color(TEXT_WHITE)).wrap());
+            if prompt_chip(ui, Glyph::Cross, &lang.data_heavy_pc_done(), true) {
+                commands.push(AppCommand::InstallAppOnly);
+            }
         });
     });
-    ui.add_space(14.0);
-    ui.horizontal(|ui| {
-        if pill_button(ui, &lang.data_heavy_app_only(), true) {
-            commands.push(AppCommand::InstallAppOnly);
-        }
-        ui.add_space(10.0);
-        if pill_button(ui, &lang.data_heavy_download_here(), false) {
-            commands.push(AppCommand::InstallCurrent);
-        }
-        ui.add_space(10.0);
-        if pill_button(ui, lang.cancel_btn(), false) {
-            commands.push(AppCommand::CancelDataPrompt);
-        }
-    });
+    ui.add_space(12.0);
+    if prompt_chip(ui, Glyph::Circle, lang.cancel_btn(), false) {
+        commands.push(AppCommand::CancelDataPrompt);
+    }
 }
+
+fn option_card(ui: &mut egui::Ui, width: f32, add: impl FnOnce(&mut egui::Ui)) {
+    egui::Frame::NONE
+        .fill(pal().bg_deep)
+        .stroke(egui::Stroke::new(1.0_f32, pal().separator))
+        .corner_radius(RADIUS_MD)
+        .inner_margin(egui::vec2(12.0, 10.0))
+        .show(ui, |ui| {
+            ui.allocate_ui_with_layout(
+                egui::vec2(width, 0.0),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    ui.set_min_width(width);
+                    ui.set_max_width(width);
+                    add(ui);
+                },
+            );
+        });
+}
+
+/// Native name for common codes; the font has no CJK glyphs, so those stay as codes.
+fn language_name(code: &str) -> String {
+    match code.split('-').next().unwrap_or(code) {
+        "en" => "English".to_owned(),
+        "es" => "Español".to_owned(),
+        "fr" => "Français".to_owned(),
+        "it" => "Italiano".to_owned(),
+        "pt" => "Português".to_owned(),
+        "de" => "Deutsch".to_owned(),
+        _ => code.to_uppercase(),
+    }
+}
+
 /// Draws `text` as a QR code (black modules on a white quiet zone) in a `side` px square.
 fn paint_qr(ui: &mut egui::Ui, text: &str, side: f32) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(side, side), egui::Sense::hover());

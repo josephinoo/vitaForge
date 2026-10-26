@@ -69,6 +69,16 @@ fn force_min_size(url: &str, wanted: &str) -> String {
     format!("{}{wanted}{}", &url[..value_start], &url[value_end..])
 }
 #[derive(Debug, Deserialize)]
+struct RawDataLanguage {
+    language: String,
+    url: String,
+    #[serde(default)]
+    extract_path: Option<String>,
+    #[serde(default)]
+    size: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
 struct RawApp {
     id: i64,
     #[serde(default)]
@@ -126,6 +136,9 @@ struct RawApp {
     data_extract_path: Option<String>,
     #[serde(default)]
     data_size: Option<String>,
+    /// Server sends `null` when a game has no extra languages.
+    #[serde(default)]
+    game_data_languages: Option<Vec<RawDataLanguage>>,
     #[serde(default)]
     plugin_install_path: Option<String>,
     #[serde(default)]
@@ -311,6 +324,18 @@ impl RawApp {
                 .as_deref()
                 .and_then(|s| s.parse::<u64>().ok())
                 .unwrap_or(0),
+            game_data_languages: self
+                .game_data_languages
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|l| !l.url.trim().is_empty() && !l.language.trim().is_empty())
+                .map(|l| crate::data::GameDataLanguage {
+                    language: l.language,
+                    url: l.url,
+                    extract_path: l.extract_path.and_then(non_empty),
+                    size_bytes: l.size.unwrap_or(0),
+                })
+                .collect(),
             plugin_install_path: self.plugin_install_path.and_then(non_empty),
             plugin_config_section: self.plugin_config_section.and_then(non_empty),
             plugin_config_line: self.plugin_config_line.and_then(non_empty),
@@ -618,6 +643,26 @@ pub async fn fetch_discover_rails(source: Option<&str>) -> (Vec<String>, Vec<Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn parse(json: &str) -> AppEntry {
+        serde_json::from_str::<RawApp>(json).unwrap().into_app_entry().unwrap()
+    }
+    #[test]
+    fn game_data_languages_null_or_list() {
+        let base = r#""id":1,"title_id":"SMSVITA01","name":"X","download_url":"https://h/a.vpk","data_url":"https://h/en.zip","data_size":"10","data_extract_path":"ux0:data/""#;
+        let none = parse(&format!("{{{base},\"game_data_languages\":null}}"));
+        assert!(none.game_data_languages.is_empty());
+        let entry = parse(&format!(
+            "{{{base},\"game_data_languages\":[{{\"language\":\"es\",\"url\":\"https://h/es.zip\",\"size\":20}}]}}"
+        ));
+        assert_eq!(entry.game_data_languages.len(), 1);
+        let default = crate::data::with_data_language(&entry, 0);
+        assert_eq!(default.data_url.as_deref(), Some("https://h/en.zip"));
+        let es = crate::data::with_data_language(&entry, 1);
+        assert_eq!(es.data_url.as_deref(), Some("https://h/es.zip"));
+        assert_eq!(es.data_size_bytes, 20);
+        assert_eq!(es.data_extract_path.as_deref(), Some("ux0:data/"));
+        assert_eq!(crate::data::with_data_language(&entry, 9).data_url, default.data_url);
+    }
     #[test]
     fn rewrites_whatever_format_the_server_suggested() {
         assert_eq!(
@@ -786,6 +831,7 @@ mod tests {
             data_url: None,
             data_extract_path: None,
             data_size_bytes: 0,
+            game_data_languages: Vec::new(),
             plugin_install_path: None,
             plugin_config_section: None,
             plugin_config_line: None,

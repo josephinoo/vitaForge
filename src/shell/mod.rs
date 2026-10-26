@@ -24,7 +24,7 @@ use crate::app::App;
 use crate::app::ui::build_ui;
 use crate::input::{
     AppCommand, Pointer, TextTarget, held_stick_direction, map_controller_button_event,
-    map_keyboard_event, open_first_controller, register_vita_controller_mapping,
+    map_keyboard_event, open_first_controller, register_vita_controller_mapping, right_stick_axes,
 };
 use anyhow::Result;
 use std::time::{Duration, Instant};
@@ -57,6 +57,8 @@ pub fn run(mut app: App) -> Result<()> {
     let mut held_direction = None;
     let mut held_since = Instant::now();
     let mut last_repeat_at = Instant::now();
+    let mut last_right_step = Instant::now();
+    let mut last_right_jump = Instant::now();
     let mut last_state_kind = std::mem::discriminant(&app.state);
     let mut transition_started_at = Instant::now();
     const SCREEN_FADE_SECS: f32 = 0.15;
@@ -138,6 +140,21 @@ pub fn run(mut app: App) -> Result<()> {
         let fade_alpha = fade_t * fade_t * (3.0 - 2.0 * fade_t);
         surface.set_frame_alpha(0.82 + 0.18 * fade_alpha);
         if ime.is_none() {
+            let (rx, ry) = right_stick_axes(controller.as_ref());
+            if ry != 0.0 {
+                if matches!(app.state, crate::app::AppState::Detail { .. }) {
+                    direct_commands.push(AppCommand::AnalogScroll(ry * 14.0));
+                } else if last_right_step.elapsed() >= Duration::from_millis(160) {
+                    let step = if ry > 0.0 { 10 } else { -10 };
+                    direct_commands.push(AppCommand::PageStep(step));
+                    last_right_step = Instant::now();
+                }
+            }
+            if rx != 0.0 && last_right_jump.elapsed() >= Duration::from_millis(220) {
+                direct_commands.push(AppCommand::LetterJump(rx > 0.0));
+                last_right_jump = Instant::now();
+            }
+
             match held_stick_direction(controller.as_ref()) {
                 Some(direction) if held_direction == Some(direction) => {
                     if held_since.elapsed() >= STICK_REPEAT_DELAY

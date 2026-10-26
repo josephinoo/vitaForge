@@ -79,6 +79,18 @@ fn unchecked(requirements: &str) -> Vec<ReqItem> {
 
 /// Requirement lines for the detail page. Disk checks run on a blocking worker;
 /// until they land every line reads `Unknown`, so the paint path never touches I/O.
+pub fn cached_missing_dependency(app_id: &str, apps: &[crate::data::AppEntry]) -> Option<Dependency> {
+    let cache = cache().lock().ok()?;
+    let items = cache.done.get(app_id)?;
+    items.iter().find_map(|item| {
+        if item.status == ReqStatus::Missing {
+            dependency(apps, &item.text)
+        } else {
+            None
+        }
+    })
+}
+
 pub fn items(ctx: &egui::Context, app_id: &str, titleid: &str, requirements: &str) -> Arc<Vec<ReqItem>> {
     {
         let mut cache = cache().lock().unwrap();
@@ -224,6 +236,11 @@ mod tests {
         assert_eq!(plain_file_name("kubridge.skprx in ur0:tai"), Some("kubridge.skprx".into()));
         assert_eq!(plain_file_name("Game Data Files: PC in ux0:data"), None);
         assert_eq!(url_file("https://x/y/KuBridge.skprx?dl=1"), "kubridge.skprx");
+    }
+
+    #[test]
+    fn cached_missing_dependency_empty_when_not_cached() {
+        assert_eq!(cached_missing_dependency("nonexistent_app", &[]), None);
     }
 
     #[test]

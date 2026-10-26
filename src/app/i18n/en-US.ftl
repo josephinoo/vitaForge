@@ -146,9 +146,7 @@ status-installed = { $count } installed
 status-updates = { $count } updates
 library-empty = No installed apps yet
 updates-empty = Everything is up to date
-data-prompt-title = Extra game data needed
 data-prompt-body = This app needs an extra data download before it will run.
-data-prompt-accept = DOWNLOAD
 about-app = About this app
 also-needs = Also needs
 ready-to-play = Ready to play
@@ -172,13 +170,22 @@ notify-updates-failed = { $count } update(s) failed
 notify-updates-mixed = { $done } updated, { $failed } failed
 notify-restart-manual = vitaForge updated. Close and reopen it to use the new version.
 data-heavy-title = Heavy download ({ $size })
-data-heavy-body = Over the Vita's Wi-Fi this can take an hour or more. Faster from a PC:
-    1. Scan the QR or open the link below on your PC.
-    2. Download the game data (.zip) from that page.
-    3. Connect the Vita to the PC (VitaShell: USB or FTP).
-    4. Extract the zip into { $path } keeping its folders as they are.
-    5. Back here, press INSTALL APP ONLY.
-data-heavy-app-only = INSTALL APP ONLY
+data-choice-title = What do you want to install?
+data-choice-with-data = APP + GAME DATA
+data-choice-app-only = APP ONLY (VPK)
+data-choice-app-only-hint = Choose app only if the game data is already on your Vita.
+data-language-title = Which language do you want the game in?
+data-language-default = Original
+data-language-continue = CONTINUE
+data-heavy-choose = Choose how to install the game data:
+data-heavy-vita-title = On the Vita
+data-heavy-vita-body = Easiest, but over Wi-Fi it can take an hour or more. Keep the Vita charging.
+data-heavy-pc-title = From your PC (faster)
+data-heavy-pc-step1 = 1. Scan the QR and download the .zip
+data-heavy-pc-step2 = 2. Connect the Vita (VitaShell: USB or FTP)
+data-heavy-pc-step3 = 3. Extract the zip into { $path }
+data-heavy-pc-step4 = 4. Come back and press the button below
+data-heavy-pc-done = I COPIED THE DATA
 data-heavy-download-here = DOWNLOAD ON VITA
 
 settings-credits = Credits
@@ -218,3 +225,35 @@ notify-installed = { $title } installed
 notify-install-failed = { $title } failed to install: { $reason }
 notify-self-update = vitaForge update available: v{ $tag }
 no-image = No Image
+
+# Settings page and themes
+settings-appearance = Appearance
+settings-about = About
+settings-theme = Theme
+settings-theme-hint = Colors of the whole app
+settings-theme-preview = Previewing: confirm to keep it
+settings-language-hint = Interface and store text
+settings-notifications-hint = Show a notice when a download finishes
+settings-cache = Cache
+settings-clear-icons-hint = Artwork downloads again as you browse
+settings-clear-catalog-hint = Fetches the app list again
+settings-purge-hint = Deletes every cached file
+theme-midnight = Midnight
+theme-obsidian = Obsidian
+theme-aurora = Aurora
+theme-sunset = Sunset
+theme-high-contrast = High contrast
+theme-vita-classic = Vita Classic
+theme-graphite = Graphite
+theme-forest = Forest
+theme-nebula = Nebula
+theme-sakura = Sakura
+theme-mocha = Mocha
+theme-tokyo-night = Tokyo Night
+theme-catppuccin = Catppuccin
+theme-nord = Nord
+theme-gruvbox = Gruvbox
+theme-dracula = Dracula
+theme-rose-pine = Rosé Pine
+theme-everforest = Everforest
+theme-kanagawa = Kanagawa

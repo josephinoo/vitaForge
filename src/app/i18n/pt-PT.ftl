@@ -108,13 +108,22 @@ notify-updates-failed = { $count } atualização(ões) falhada(s)
 notify-updates-mixed = { $done } atualizadas, { $failed } falhadas
 notify-restart-manual = vitaForge atualizado. Fecha e abre de novo para usar a nova versão.
 data-heavy-title = Transferência pesada ({ $size })
-data-heavy-body = Pelo Wi-Fi da Vita pode demorar uma hora ou mais. Mais rápido pelo PC:
-    1. Lê o QR ou abre o link abaixo no PC.
-    2. Transfere os dados do jogo (.zip) dessa página.
-    3. Liga a Vita ao PC (VitaShell: USB ou FTP).
-    4. Extrai o zip para { $path } sem mudar as pastas.
-    5. Volta aqui e carrega em INSTALAR SÓ A APP.
-data-heavy-app-only = INSTALAR SÓ A APP
+data-choice-title = O que queres instalar?
+data-choice-with-data = APP + DADOS DO JOGO
+data-choice-app-only = SÓ A APP (VPK)
+data-choice-app-only-hint = Escolhe só a app se os dados do jogo já estão na tua Vita.
+data-language-title = Em que idioma queres o jogo?
+data-language-default = Original
+data-language-continue = CONTINUAR
+data-heavy-choose = Escolhe como instalar os dados do jogo:
+data-heavy-vita-title = Na Vita
+data-heavy-vita-body = O mais fácil, mas por Wi-Fi pode demorar uma hora ou mais. Deixa a Vita a carregar.
+data-heavy-pc-title = A partir do PC (mais rápido)
+data-heavy-pc-step1 = 1. Lê o QR e transfere o .zip
+data-heavy-pc-step2 = 2. Liga a Vita (VitaShell: USB ou FTP)
+data-heavy-pc-step3 = 3. Extrai o zip para { $path }
+data-heavy-pc-step4 = 4. Volta aqui e carrega no botão abaixo
+data-heavy-pc-done = JÁ COPIEI OS DADOS
 data-heavy-download-here = TRANSFERIR NA VITA
 
 settings-credits = Créditos
@@ -149,9 +158,7 @@ category-utility = Utilitário
 changelog-label = Novidades
 comments-label = Comentários
 community-label = Comunidade
-data-prompt-accept = TRANSFERIR
 data-prompt-body = Esta aplicação precisa de dados adicionais antes de poder ser executada.
-data-prompt-title = São necessários dados de jogo adicionais
 description-label = Descrição
 download-btn = TRANSFERIR
 downloads-label = Transferências
@@ -213,3 +220,35 @@ notify-installed = { $title } instalado
 notify-install-failed = Não foi possível instalar { $title }: { $reason }
 notify-self-update = Atualização do vitaForge disponível: v{ $tag }
 no-image = Sem imagem
+
+# Settings page and themes
+settings-appearance = Aparência
+settings-about = Sobre
+settings-theme = Tema
+settings-theme-hint = Cores de toda a app
+settings-theme-preview = Pré-visualização: confirme para manter
+settings-language-hint = Texto da interface e da loja
+settings-notifications-hint = Avisar quando um download terminar
+settings-cache = Cache
+settings-clear-icons-hint = As imagens voltam a ser transferidas ao navegar
+settings-clear-catalog-hint = Volta a transferir a lista de apps
+settings-purge-hint = Apaga todos os ficheiros em cache
+theme-midnight = Meia-noite
+theme-obsidian = Obsidiana
+theme-aurora = Aurora
+theme-sunset = Pôr do sol
+theme-high-contrast = Alto contraste
+theme-vita-classic = Vita clássico
+theme-graphite = Grafite
+theme-forest = Floresta
+theme-nebula = Nebulosa
+theme-sakura = Sakura
+theme-mocha = Moca
+theme-tokyo-night = Tokyo Night
+theme-catppuccin = Catppuccin
+theme-nord = Nord
+theme-gruvbox = Gruvbox
+theme-dracula = Dracula
+theme-rose-pine = Rosé Pine
+theme-everforest = Everforest
+theme-kanagawa = Kanagawa

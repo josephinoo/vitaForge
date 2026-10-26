@@ -13,10 +13,29 @@ pub enum InputCommand {
     CategoryPrev,
     CategoryNext,
 }
+/// Steps of the game data prompt, in order; later ones are skipped when not needed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DataStep {
+    /// App only (VPK) or app + game data.
+    #[default]
+    Choice,
+    /// Pick among `game_data_languages` (only when the game has any).
+    Language,
+    /// Heavy data only: download on the Vita or copy from a PC.
+    Method,
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextTarget {
     Search,
     Comment,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DetailFocus {
+    #[default]
+    Primary,
+    Author,
+    Screenshots,
+    Requirements,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum StoreTab {
@@ -109,10 +128,19 @@ pub enum AppCommand {
     CancelInstall,
     CancelDataPrompt,
     InstallAppOnly,
+    /// Game data choice in the data prompt: 0 = default, i = extra language i - 1.
+    SelectDataLanguage(usize),
+    /// Choice step: the user wants the game data too.
+    WantGameData,
+    /// Leaves the language step and continues with the chosen data.
+    ConfirmDataLanguage,
     OpenSettings,
     CloseSettings,
-    OpenCredits,
-    SettingsTab(usize),
+    /// Settings rail: jump to section i.
+    SettingsSection(usize),
+    /// Settings content: focus and activate row i of the current section.
+    SettingsRow(usize),
+    SetTheme(crate::app::ui::theme::ThemeId),
     SetLanguage(crate::app::i18n::Language),
     ToggleInstallNotifications,
     ClearIconCache,
@@ -132,6 +160,10 @@ pub enum AppCommand {
     InstallDependency { id: String, dir: String, file: String },
     UpdateAll,
     ScreenshotStep(i32),
+    SetDetailFocus(DetailFocus),
+    AnalogScroll(f32),
+    PageStep(i32),
+    LetterJump(bool),
     SecondaryAction,
     TertiaryAction,
 }
@@ -180,6 +212,17 @@ pub fn map_controller_button_event(event: &Event) -> Option<AppCommand> {
     Some(command.into())
 }
 const STICK_DEADZONE: f32 = 0.6;
+pub fn right_stick_axes(controller: Option<&GameController>) -> (f32, f32) {
+    let Some(controller) = controller else {
+        return (0.0, 0.0);
+    };
+    let x = controller.axis(Axis::RightX) as f32 / i16::MAX as f32;
+    let y = controller.axis(Axis::RightY) as f32 / i16::MAX as f32;
+    (
+        if x.abs() >= STICK_DEADZONE { x } else { 0.0 },
+        if y.abs() >= STICK_DEADZONE { y } else { 0.0 },
+    )
+}
 pub fn held_stick_direction(controller: Option<&GameController>) -> Option<InputCommand> {
     let controller = controller?;
     let x = controller.axis(Axis::LeftX) as f32 / i16::MAX as f32;
@@ -376,6 +419,16 @@ mod tests {
         pointer.map_event(event, SCREEN, 1.0, &mut out);
         out
     }
+    #[test]
+    fn detail_focus_defaults_to_primary() {
+        assert_eq!(super::DetailFocus::default(), super::DetailFocus::Primary);
+    }
+
+    #[test]
+    fn right_stick_axes_zero_when_none() {
+        assert_eq!(super::right_stick_axes(None), (0.0, 0.0));
+    }
+
     #[test]
     fn a_press_moves_before_it_presses() {
         let mut pointer = Pointer::for_touch_device(7);
