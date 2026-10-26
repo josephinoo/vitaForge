@@ -614,8 +614,7 @@ pub enum AppState {
     },
     Settings {
         previous: Box<CatalogState>,
-        selected: usize,
-        credits: bool,
+        nav: ui::settings::SettingsNav,
     },
 }
 enum CatalogSource {
@@ -704,6 +703,7 @@ impl App {
         });
 
         let settings = data::settings::load();
+        ui::theme::set_theme(settings.theme);
         // So catalog outdated scans compare semver against this build, not missing SFO APP_VER.
         crate::install::installed::stamp_running_self();
         Ok(Self {
@@ -987,6 +987,55 @@ impl App {
         }
         Ok(())
     }
+    /// ✕ inside Settings: enter the rows, open a choice list, or run the row.
+    fn settings_confirm(&mut self) -> Result<()> {
+        use ui::settings::{Row, SubPage};
+        use ui::theme::ThemeId;
+        let AppState::Settings { nav, .. } = &mut self.state else { return Ok(()) };
+        if let Some(sub) = nav.sub {
+            let index = nav.sub_index;
+            return match sub {
+                SubPage::Language => self.handle_command(AppCommand::SetLanguage(Language::ALL[index])),
+                SubPage::Theme => self.handle_command(AppCommand::SetTheme(ThemeId::ALL[index])),
+            };
+        }
+        if nav.rail {
+            nav.rail = nav.rows().is_empty();
+            return Ok(());
+        }
+        let command = match nav.current_row() {
+            Some(Row::Language) => {
+                nav.sub = Some(SubPage::Language);
+                nav.sub_index = Language::ALL.iter().position(|&l| l == self.lang).unwrap_or(0);
+                return Ok(());
+            }
+            Some(Row::Theme) => {
+                let theme = ui::theme::active_theme();
+                nav.theme_before = theme;
+                nav.sub = Some(SubPage::Theme);
+                nav.sub_index = ThemeId::ALL.iter().position(|&t| t == theme).unwrap_or(0);
+                return Ok(());
+            }
+            Some(Row::Notifications) => AppCommand::ToggleInstallNotifications,
+            Some(Row::ClearIcons) => AppCommand::ClearIconCache,
+            Some(Row::ClearCatalog) => AppCommand::ClearCatalogCache,
+            Some(Row::PurgeAll) => AppCommand::PurgeAllCache,
+            None => return Ok(()),
+        };
+        self.handle_command(command)
+    }
+
+    fn leave_settings(&mut self) {
+        self.purge_armed = false;
+        if let AppState::Settings { previous, nav } = &mut self.state {
+            close_settings_sub(nav);
+            let previous = std::mem::replace(previous.as_mut(), CatalogState::empty());
+            self.state = AppState::Catalog(previous);
+            self.needs_installed_rescan = true;
+            self.audio.play(crate::audio::Sfx::MenuFlyOut);
+        }
+    }
+
     pub fn handle_command(&mut self, command: AppCommand) -> Result<()> {
         match command {
             AppCommand::Input(InputCommand::Back) => {
@@ -1368,34 +1417,40 @@ impl App {
                 };
                 if let Some(index) = target {
                     self.open_app(index);
-                } else if let AppState::Settings { selected, credits, .. } = &self.state {
-                    if *credits { return Ok(()); }
-                    return match *selected {
-                        index if index < Language::ALL.len() => self.handle_command(AppCommand::SetLanguage(Language::ALL[index])),
-                        5 => self.handle_command(AppCommand::ClearIconCache),
-                        6 => self.handle_command(AppCommand::ClearCatalogCache),
-                        7 => self.handle_command(AppCommand::PurgeAllCache),
-                        8 => self.handle_command(AppCommand::ToggleInstallNotifications),
-                        9 => self.handle_command(AppCommand::OpenCredits),
-                        _ => Ok(()),
-                    };
+                } else if matches!(self.state, AppState::Settings { .. }) {
+                    return self.settings_confirm();
                 }
             }
             AppCommand::Input(step @ (InputCommand::CategoryPrev | InputCommand::CategoryNext))
-                if matches!(self.state, AppState::Settings { credits: false, .. }) =>
+                if matches!(self.state, AppState::Settings { .. }) =>
             {
-                let AppState::Settings { selected, .. } = &self.state else { unreachable!() };
-                let tabs = ui::settings::SETTINGS_TABS.len();
-                let tab = ui::settings::settings_tab(*selected);
-                let tab = if step == InputCommand::CategoryPrev { (tab + tabs - 1) % tabs } else { (tab + 1) % tabs };
-                return self.handle_command(AppCommand::SettingsTab(tab));
+                let AppState::Settings { nav, .. } = &self.state else { unreachable!() };
+                let count = ui::settings::SECTIONS.len();
+                let section = if step == InputCommand::CategoryPrev { nav.section + count - 1 } else { nav.section + 1 };
+                return self.handle_command(AppCommand::SettingsSection(section % count));
             }
-            AppCommand::SettingsTab(tab) => {
+            AppCommand::SettingsSection(section) => {
                 self.purge_armed = false;
-                if let AppState::Settings { selected, .. } = &mut self.state {
-                    if ui::settings::settings_tab(*selected) != tab {
-                        *selected = ui::settings::SETTINGS_TABS[tab][0];
-                    }
+                self.cache_notice = None;
+                if let AppState::Settings { nav, .. } = &mut self.state {
+                    close_settings_sub(nav);
+                    nav.go_section(section);
+                    self.audio.play(crate::audio::Sfx::Navigate);
+                }
+            }
+            AppCommand::SettingsRow(row) => {
+                if let AppState::Settings { nav, .. } = &mut self.state {
+                    nav.rail = false;
+                    nav.row = row;
+                }
+                return self.settings_confirm();
+            }
+            AppCommand::SetTheme(theme) => {
+                ui::theme::set_theme(theme);
+                data::settings::set_theme(theme);
+                if let AppState::Settings { nav, .. } = &mut self.state {
+                    nav.theme_before = theme;
+                    nav.sub = None;
                 }
             }
             AppCommand::Input(InputCommand::CategoryPrev) => {
@@ -1512,36 +1567,41 @@ impl App {
                             _ => {}
                         }
                     }
-                    AppState::Settings { selected, credits, .. } => {
-                        if *credits { return Ok(()); }
+                    AppState::Settings { nav, .. } => {
                         self.purge_armed = false;
                         self.cache_notice = None;
-                        let languages = Language::ALL.len();
-                        match direction {
-                            // The language chips sit on one line: left/right walks them.
-                            InputCommand::MoveLeft if *selected < languages => *selected = selected.saturating_sub(1),
-                            InputCommand::MoveRight if *selected < languages => *selected = (*selected + 1).min(languages - 1),
-                            InputCommand::MoveUp | InputCommand::MoveDown => {
-                                // The chip line counts as one row (id 0); landing on it focuses the active language.
-                                let rows: Vec<usize> = ui::settings::SETTINGS_TABS[ui::settings::settings_tab(*selected)]
-                                    .iter()
-                                    .copied()
-                                    .filter(|&row| row == 0 || row >= languages)
-                                    .collect();
-                                let current = if *selected < languages { 0 } else { *selected };
-                                let pos = rows.iter().position(|&row| row == current).unwrap_or(0);
-                                let pos = if direction == InputCommand::MoveUp {
-                                    pos.saturating_sub(1)
-                                } else {
-                                    (pos + 1).min(rows.len() - 1)
-                                };
-                                *selected = match rows[pos] {
-                                    0 if *selected < languages => *selected,
-                                    0 => Language::ALL.iter().position(|&l| l == self.lang).unwrap_or(0),
-                                    row => row,
-                                };
+                        let before = (nav.section, nav.row, nav.rail, nav.sub_index);
+                        if nav.sub.is_some() {
+                            let last = nav.sub_len().saturating_sub(1);
+                            match direction {
+                                InputCommand::MoveUp => nav.sub_index = nav.sub_index.saturating_sub(1),
+                                InputCommand::MoveDown => nav.sub_index = (nav.sub_index + 1).min(last),
+                                _ => {}
                             }
-                            _ => {}
+                            // Live preview: the whole app recolors as the cursor moves.
+                            if nav.sub == Some(ui::settings::SubPage::Theme) {
+                                ui::theme::set_theme(ui::theme::ThemeId::ALL[nav.sub_index]);
+                            }
+                        } else if nav.rail {
+                            match direction {
+                                InputCommand::MoveUp if nav.section > 0 => nav.go_section(nav.section - 1),
+                                InputCommand::MoveDown if nav.section + 1 < ui::settings::SECTIONS.len() => {
+                                    nav.go_section(nav.section + 1)
+                                }
+                                InputCommand::MoveRight if !nav.rows().is_empty() => nav.rail = false,
+                                _ => {}
+                            }
+                        } else {
+                            let last = nav.rows().len().saturating_sub(1);
+                            match direction {
+                                InputCommand::MoveUp => nav.row = nav.row.saturating_sub(1),
+                                InputCommand::MoveDown => nav.row = (nav.row + 1).min(last),
+                                InputCommand::MoveLeft => nav.rail = true,
+                                _ => {}
+                            }
+                        }
+                        if before != (nav.section, nav.row, nav.rail, nav.sub_index) {
+                            self.audio.play(crate::audio::Sfx::Navigate);
                         }
                     }
                     _ => {}
@@ -1775,42 +1835,38 @@ impl App {
                 let previous = match std::mem::replace(&mut self.state, AppState::Loading) {
                     AppState::Catalog(catalog) => Box::new(catalog),
                     AppState::Detail { previous, .. } => previous,
-                    other @ (AppState::Loading | AppState::Settings { .. }) => {
+                    // Start toggles: pressing it inside Settings leaves.
+                    other @ AppState::Settings { .. } => {
+                        self.state = other;
+                        self.leave_settings();
+                        return Ok(());
+                    }
+                    other @ AppState::Loading => {
                         self.state = other;
                         return Ok(());
                     }
                 };
-                let selected = Language::ALL.iter().position(|&language| language == self.lang).unwrap_or(0);
                 self.refresh_cache_stats();
                 self.cache_notice = None;
-                self.state = AppState::Settings { previous, selected, credits: false };
+                self.state = AppState::Settings { previous, nav: ui::settings::SettingsNav::new() };
                 self.audio.play(crate::audio::Sfx::MenuFlyIn);
             }
-            AppCommand::OpenCredits => {
-                if let AppState::Settings { credits, .. } = &mut self.state {
-                    *credits = true;
-                }
-            }
             AppCommand::CloseSettings => {
+                // ○ backs out one level: an open choice list first, then Settings itself.
                 self.purge_armed = false;
-                if let AppState::Settings { credits, .. } = &mut self.state {
-                    if *credits {
-                        *credits = false;
+                if let AppState::Settings { nav, .. } = &mut self.state {
+                    if nav.sub.is_some() {
+                        close_settings_sub(nav);
                         return Ok(());
                     }
                 }
-                if let AppState::Settings { previous, .. } = &mut self.state {
-                    let previous = std::mem::replace(previous.as_mut(), CatalogState::empty());
-                    self.state = AppState::Catalog(previous);
-                    self.needs_installed_rescan = true;
-                    self.audio.play(crate::audio::Sfx::MenuFlyOut);
-                }
+                self.leave_settings();
             }
             AppCommand::SetLanguage(lang) => {
                 self.lang = lang;
                 data::settings::set_language(lang);
-                if let AppState::Settings { selected, .. } = &mut self.state {
-                    *selected = Language::ALL.iter().position(|&language| language == lang).unwrap_or(0);
+                if let AppState::Settings { nav, .. } = &mut self.state {
+                    nav.sub = None;
                 }
             }
             AppCommand::ToggleInstallNotifications => {
@@ -2415,4 +2471,12 @@ mod data_language_tests {
         assert_eq!(preferred_data_language(&app, Language::Spanish), 2);
         assert_eq!(preferred_data_language(&app, Language::French), 0);
     }
+}
+
+/// Closes an open choice list; an unconfirmed theme preview snaps back.
+fn close_settings_sub(nav: &mut ui::settings::SettingsNav) {
+    if nav.sub == Some(ui::settings::SubPage::Theme) {
+        ui::theme::set_theme(nav.theme_before);
+    }
+    nav.sub = None;
 }

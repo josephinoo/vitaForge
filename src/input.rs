@@ -128,8 +128,11 @@ pub enum AppCommand {
     ConfirmDataLanguage,
     OpenSettings,
     CloseSettings,
-    OpenCredits,
-    SettingsTab(usize),
+    /// Settings rail: jump to section i.
+    SettingsSection(usize),
+    /// Settings content: focus and activate row i of the current section.
+    SettingsRow(usize),
+    SetTheme(crate::app::ui::theme::ThemeId),
     SetLanguage(crate::app::i18n::Language),
     ToggleInstallNotifications,
     ClearIconCache,

@@ -73,7 +73,7 @@ pub(crate) fn self_update_pill(ui: &mut egui::Ui, lang: Language, tag: &str) -> 
         format!("v{tag}")
     };
     let label = format!("{} {}", lang.update(), tag);
-    let galley = ui.fonts(|f| f.layout_no_wrap(label, font(FONT_SMALL), TEXT_WHITE));
+    let galley = ui.fonts(|f| f.layout_no_wrap(label, font(FONT_SMALL), pal().text));
     let pad_x = 14.0;
     let pad_y = 8.0;
     let icon_w = 12.0;
@@ -84,7 +84,7 @@ pub(crate) fn self_update_pill(ui: &mut egui::Ui, lang: Language, tag: &str) -> 
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
     let hover = response.hovered();
     let fill = if hover {
-        TEXT_WHITE.gamma_multiply(0.12)
+        pal().text.gamma_multiply(0.12)
     } else {
         egui::Color32::TRANSPARENT
     };
@@ -92,7 +92,7 @@ pub(crate) fn self_update_pill(ui: &mut egui::Ui, lang: Language, tag: &str) -> 
     ui.painter().rect_stroke(
         rect,
         rect.height() / 2.0,
-        egui::Stroke::new(1.5_f32, TEXT_WHITE),
+        egui::Stroke::new(1.5_f32, pal().text),
         egui::StrokeKind::Inside,
     );
     let icon_c = egui::pos2(rect.left() + pad_x + icon_w * 0.5, rect.center().y);
@@ -103,7 +103,7 @@ pub(crate) fn self_update_pill(ui: &mut egui::Ui, lang: Language, tag: &str) -> 
     ];
     ui.painter().add(egui::Shape::convex_polygon(
         tri.to_vec(),
-        TEXT_WHITE,
+        pal().text,
         egui::Stroke::NONE,
     ));
     ui.painter().galley(
@@ -112,7 +112,7 @@ pub(crate) fn self_update_pill(ui: &mut egui::Ui, lang: Language, tag: &str) -> 
             rect.center().y - galley.size().y * 0.5,
         ),
         galley,
-        TEXT_WHITE,
+        pal().text,
     );
     response.clicked()
 }
@@ -123,36 +123,36 @@ pub(crate) fn search_chip(ui: &mut egui::Ui, label: &str) -> bool {
 
 pub(crate) fn search_chip_sized(ui: &mut egui::Ui, label: &str, fill_width: Option<f32>) -> bool {
     use crate::app::ui::chrome_icons::{self, ChromeIcon};
-    let galley = ui.fonts(|f| f.layout_no_wrap(label.to_owned(), font(FONT_SMALL), TEXT_DIM));
+    let galley = ui.fonts(|f| f.layout_no_wrap(label.to_owned(), font(FONT_SMALL), pal().text_dim));
     let icon = chrome_icons::SEARCH_ICON;
     let natural = galley.size().x + 16.0 + icon + 10.0;
     let width = fill_width.unwrap_or(natural).max(natural);
     let size = egui::vec2(width, 30.0);
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
     let fill = if response.hovered() {
-        BG_CARD_HOVER
+        pal().bg_card_hover
     } else {
-        BG_CARD
+        pal().bg_card
     };
     ui.painter().rect_filled(rect, rect.height() / 2.0, fill);
     ui.painter().rect_stroke(
         rect,
         rect.height() / 2.0,
-        egui::Stroke::new(1.0_f32, SEPARATOR),
+        egui::Stroke::new(1.0_f32, pal().separator),
         egui::StrokeKind::Inside,
     );
     let icon_rect = egui::Rect::from_center_size(
         egui::pos2(rect.left() + 10.0 + icon * 0.5, rect.center().y),
         egui::vec2(icon, icon),
     );
-    chrome_icons::paint(ui, ChromeIcon::Search, icon_rect, TEXT_DIM);
+    chrome_icons::paint(ui, ChromeIcon::Search, icon_rect, pal().text_dim);
     ui.painter().galley(
         egui::pos2(
             rect.left() + 10.0 + icon + 6.0,
             rect.center().y - galley.size().y / 2.0,
         ),
         galley,
-        TEXT_DIM,
+        pal().text_dim,
     );
     response.clicked()
 }
@@ -168,11 +168,11 @@ pub(crate) fn search_field(
         egui::Sense::click(),
     );
     let hover_t = if response.hovered() { 1.0_f32 } else { 0.0_f32 };
-    let border = if active { ACCENT_CYAN } else { SEPARATOR };
+    let border = if active { pal().accent_soft } else { pal().separator };
     ui.painter().rect_filled(
         rect,
         RADIUS_SM,
-        BG_CARD.lerp_to_gamma(BG_CARD_HOVER, hover_t),
+        pal().bg_card.lerp_to_gamma(pal().bg_card_hover, hover_t),
     );
     ui.painter().rect_stroke(
         rect,
@@ -194,9 +194,9 @@ pub(crate) fn search_field(
         rect.right() - 10.0
     };
     let (text, color) = if has_query {
-        (query, TEXT_WHITE)
+        (query, pal().text)
     } else {
-        (placeholder, TEXT_FAINT)
+        (placeholder, pal().text_faint)
     };
     ui.painter()
         .with_clip_rect(egui::Rect::from_min_max(
@@ -217,11 +217,11 @@ pub(crate) fn search_field(
         ui.painter().circle_filled(
             clear_rect.center(),
             SEARCH_CLEAR_SIZE / 2.0,
-            SEPARATOR.lerp_to_gamma(BG_CARD_HOVER, clear_hover),
+            pal().separator.lerp_to_gamma(pal().bg_card_hover, clear_hover),
         );
         let arm = SEARCH_CLEAR_SIZE * 0.22;
         let center = clear_rect.center();
-        let stroke = egui::Stroke::new(1.5_f32, TEXT_WHITE);
+        let stroke = egui::Stroke::new(1.5_f32, pal().text);
         ui.painter().line_segment(
             [center - egui::vec2(arm, arm), center + egui::vec2(arm, arm)],
             stroke,
@@ -253,7 +253,7 @@ pub(crate) fn genre_dropdown(
     if label.chars().count() > 16 {
         label = format!("{}…", label.chars().take(15).collect::<String>());
     }
-    let galley = ui.fonts(|f| f.layout_no_wrap(label, font(FONT_SMALL), ACCENT_CYAN));
+    let galley = ui.fonts(|f| f.layout_no_wrap(label, font(FONT_SMALL), pal().accent_soft));
     let size = egui::vec2((galley.size().x + 34.0).clamp(112.0, 156.0), 26.0);
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
     let hover_t = if response.hovered() { 1.0_f32 } else { 0.0_f32 };
@@ -261,7 +261,7 @@ pub(crate) fn genre_dropdown(
     ui.painter().rect_filled(
         rect,
         rect.height() / 2.0,
-        BG_CARD.lerp_to_gamma(BG_CARD_HOVER, hover_t),
+        pal().bg_card.lerp_to_gamma(pal().bg_card_hover, hover_t),
     );
     ui.painter().rect_stroke(
         rect,
@@ -269,9 +269,9 @@ pub(crate) fn genre_dropdown(
         egui::Stroke::new(
             1.0_f32,
             if open || genre_filter.is_some() {
-                ACCENT_CYAN
+                pal().accent_soft
             } else {
-                SEPARATOR
+                pal().separator
             },
         ),
         egui::StrokeKind::Inside,
@@ -279,7 +279,7 @@ pub(crate) fn genre_dropdown(
     ui.painter().galley(
         egui::pos2(rect.left() + 12.0, rect.center().y - galley.size().y / 2.0),
         galley,
-        ACCENT_CYAN,
+        pal().accent_soft,
     );
     chevron(
         ui.painter(),
@@ -325,7 +325,7 @@ pub(crate) fn sort_dropdown(
 ) -> Option<SortOrder> {
     let popup_id = ui.make_persistent_id("sort_dropdown");
     let label = lang.sort_label(sort_order);
-    let galley = ui.fonts(|f| f.layout_no_wrap(label.to_owned(), font(FONT_SMALL), TEXT_WHITE));
+    let galley = ui.fonts(|f| f.layout_no_wrap(label.to_owned(), font(FONT_SMALL), pal().text));
     let size = egui::vec2((galley.size().x + 40.0).max(110.0), 26.0);
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
     let hover_t = if response.hovered() { 1.0_f32 } else { 0.0_f32 };
@@ -333,24 +333,24 @@ pub(crate) fn sort_dropdown(
     ui.painter().rect_filled(
         rect,
         rect.height() / 2.0,
-        BG_CARD.lerp_to_gamma(BG_CARD_HOVER, hover_t),
+        pal().bg_card.lerp_to_gamma(pal().bg_card_hover, hover_t),
     );
     ui.painter().rect_stroke(
         rect,
         rect.height() / 2.0,
-        egui::Stroke::new(1.0_f32, if open { ACCENT_CYAN } else { SEPARATOR }),
+        egui::Stroke::new(1.0_f32, if open { pal().accent_soft } else { pal().separator }),
         egui::StrokeKind::Inside,
     );
     ui.painter().galley(
         egui::pos2(rect.left() + 12.0, rect.center().y - galley.size().y / 2.0),
         galley,
-        TEXT_WHITE,
+        pal().text,
     );
     sort_direction_triangle(
         ui.painter(),
         egui::pos2(rect.right() - 22.0, rect.center().y),
         sort_direction,
-        TEXT_DIM,
+        pal().text_dim,
     );
     chevron(
         ui.painter(),
@@ -385,12 +385,12 @@ pub(crate) fn dropdown_row(ui: &mut egui::Ui, label: &str, active: bool) -> bool
     let hover_t = if response.hovered() { 1.0_f32 } else { 0.0_f32 };
     if active {
         ui.painter()
-            .rect_filled(rect, RADIUS_XS, ACCENT_STEAM.gamma_multiply(0.22));
+            .rect_filled(rect, RADIUS_XS, pal().accent.gamma_multiply(0.22));
     } else if hover_t > 0.0 {
         ui.painter()
-            .rect_filled(rect, RADIUS_XS, BG_CARD_HOVER.gamma_multiply(hover_t));
+            .rect_filled(rect, RADIUS_XS, pal().bg_card_hover.gamma_multiply(hover_t));
     }
-    let text_color = if active { ACCENT_CYAN } else { TEXT_WHITE };
+    let text_color = if active { pal().accent_soft } else { pal().text };
     let mut job = egui::text::LayoutJob::simple(
         label.to_owned(),
         font(FONT_BODY),
@@ -410,24 +410,24 @@ pub(crate) fn dropdown_row(ui: &mut egui::Ui, label: &str, active: bool) -> bool
 }
 
 pub(crate) fn pill_button(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
-    let text_color = if active { BG_DEEP } else { TEXT_WHITE };
+    let text_color = if active { pal().bg_deep } else { pal().text };
     let galley = ui.fonts(|f| f.layout_no_wrap(label.to_owned(), font(FONT_SMALL), text_color));
     let size = egui::vec2(galley.size().x + 22.0, 28.0);
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
     let hover_t = if response.hovered() { 1.0_f32 } else { 0.0_f32 };
     if active {
         ui.painter()
-            .rect_filled(rect, rect.height() / 2.0, TEXT_WHITE);
+            .rect_filled(rect, rect.height() / 2.0, pal().text);
     } else {
         ui.painter().rect_filled(
             rect,
             rect.height() / 2.0,
-            BG_CARD.lerp_to_gamma(BG_CARD_HOVER, hover_t),
+            pal().bg_card.lerp_to_gamma(pal().bg_card_hover, hover_t),
         );
         ui.painter().rect_stroke(
             rect,
             rect.height() / 2.0,
-            egui::Stroke::new(1.0_f32, SEPARATOR),
+            egui::Stroke::new(1.0_f32, pal().separator),
             egui::StrokeKind::Inside,
         );
     }
@@ -443,7 +443,7 @@ pub(crate) fn top_nav_button(
     active: bool,
 ) -> bool {
     use crate::app::ui::chrome_icons;
-    let color = if active { TEXT_WHITE } else { TEXT_DIM };
+    let color = if active { pal().text } else { pal().text_dim };
     let galley = ui.fonts(|f| f.layout_no_wrap(label.to_owned(), font(FONT_MICRO), color));
     let height = TAB_PILL_HEIGHT;
     let icon_pad = chrome_icons::NAV_ICON + 7.0;
@@ -456,10 +456,10 @@ pub(crate) fn top_nav_button(
         .ctx()
         .animate_bool_with_time(ui.id().with(("nav", label)), active, 0.14);
     if active_t > 0.01 {
-        let fill = BLUE_PLAY.gamma_multiply(0.62 + 0.38 * active_t);
+        let fill = pal().primary.gamma_multiply(0.62 + 0.38 * active_t);
         ui.painter().rect_filled(rect, radius, fill);
     } else if response.hovered() {
-        ui.painter().rect_filled(rect, radius, BG_CARD_HOVER);
+        ui.painter().rect_filled(rect, radius, pal().bg_card_hover);
     }
     let icon_rect = egui::Rect::from_center_size(
         egui::pos2(
@@ -492,17 +492,17 @@ pub(crate) fn back_button(ui: &mut egui::Ui, label: &str) -> bool {
     ui.painter().rect_filled(
         rect,
         RADIUS_SM,
-        BG_CARD.lerp_to_gamma(BG_CARD_HOVER, hover_t),
+        pal().bg_card.lerp_to_gamma(pal().bg_card_hover, hover_t),
     );
     ui.painter().rect_stroke(
         rect,
         RADIUS_SM,
-        egui::Stroke::new(1.0_f32, SEPARATOR),
+        egui::Stroke::new(1.0_f32, pal().separator),
         egui::StrokeKind::Inside,
     );
     let chevron_x = rect.left() + 20.0;
     let mid_y = rect.center().y;
-    let stroke = egui::Stroke::new(2.0_f32, ACCENT_CYAN);
+    let stroke = egui::Stroke::new(2.0_f32, pal().accent_soft);
     ui.painter().line_segment(
         [
             egui::pos2(chevron_x + 4.0, mid_y - 6.0),
@@ -522,7 +522,7 @@ pub(crate) fn back_button(ui: &mut egui::Ui, label: &str) -> bool {
         egui::Align2::LEFT_CENTER,
         label,
         font(FONT_BODY),
-        TEXT_WHITE,
+        pal().text,
     );
     response.clicked()
 }
@@ -549,7 +549,7 @@ pub(crate) fn sort_direction_triangle(
 }
 
 pub(crate) fn chevron(painter: &egui::Painter, center: egui::Pos2, open: bool) {
-    let stroke = egui::Stroke::new(1.6_f32, TEXT_DIM);
+    let stroke = egui::Stroke::new(1.6_f32, pal().text_dim);
     let (side_y, mid_y) = if open { (2.0, -2.0) } else { (-2.0, 2.0) };
     let left = center + egui::vec2(-4.0, side_y);
     let mid = center + egui::vec2(0.0, mid_y);
@@ -561,8 +561,8 @@ pub(crate) fn chevron(painter: &egui::Painter, center: egui::Pos2, open: bool) {
 pub(crate) fn install_marker(painter: &egui::Painter, rect: egui::Rect, state: InstallState) {
     let color = match state {
         InstallState::Absent => return,
-        InstallState::Installed => GREEN_PLAY,
-        InstallState::Outdated => STAR_GOLD,
+        InstallState::Installed => pal().success,
+        InstallState::Outdated => pal().warning,
     };
     let size = 14.0;
     let marker = egui::Rect::from_min_size(
@@ -571,7 +571,7 @@ pub(crate) fn install_marker(painter: &egui::Painter, rect: egui::Rect, state: I
     );
     let center = marker.center();
     painter.rect_filled(marker, RADIUS_XS, color);
-    let stroke = egui::Stroke::new(2.0_f32, TEXT_WHITE);
+    let stroke = egui::Stroke::new(2.0_f32, pal().text);
     match state {
         InstallState::Installed => {
             painter.line_segment(
@@ -622,7 +622,7 @@ pub(crate) fn category_badge(ui: &mut egui::Ui, category: Category) {
         f.layout_no_wrap(
             category.label_upper().to_owned(),
             font(FONT_MICRO),
-            TEXT_WHITE,
+            pal().text,
         )
     });
     let size = egui::vec2(galley.size().x + 10.0, 14.0);
@@ -630,25 +630,25 @@ pub(crate) fn category_badge(ui: &mut egui::Ui, category: Category) {
     ui.painter()
         .rect_filled(rect, RADIUS_XS, color.gamma_multiply(0.3));
     ui.painter()
-        .galley(rect.center() - galley.size() / 2.0, galley, TEXT_WHITE);
+        .galley(rect.center() - galley.size() / 2.0, galley, pal().text);
 }
 
 pub(crate) fn game_data_badge(ui: &mut egui::Ui, label: &str) {
     let galley = ui.fonts(|f| {
-        f.layout_no_wrap(label.to_owned(), font(FONT_MICRO), STAR_GOLD)
+        f.layout_no_wrap(label.to_owned(), font(FONT_MICRO), pal().warning)
     });
     let size = egui::vec2(galley.size().x + 12.0, 14.0);
     let rect = ui.allocate_exact_size(size, egui::Sense::hover()).0;
     ui.painter()
-        .rect_filled(rect, RADIUS_XS, STAR_GOLD.gamma_multiply(0.22));
+        .rect_filled(rect, RADIUS_XS, pal().warning.gamma_multiply(0.22));
     ui.painter().rect_stroke(
         rect,
         RADIUS_XS,
-        egui::Stroke::new(1.0_f32, STAR_GOLD.gamma_multiply(0.55)),
+        egui::Stroke::new(1.0_f32, pal().warning.gamma_multiply(0.55)),
         egui::StrokeKind::Inside,
     );
     ui.painter()
-        .galley(rect.center() - galley.size() / 2.0, galley, STAR_GOLD);
+        .galley(rect.center() - galley.size() / 2.0, galley, pal().warning);
 }
 
 pub(crate) fn genre_badge(ui: &mut egui::Ui, lang: Language, genre: &str) {
@@ -656,15 +656,15 @@ pub(crate) fn genre_badge(ui: &mut egui::Ui, lang: Language, genre: &str) {
         f.layout_no_wrap(
             lang.genre_label(genre).to_uppercase(),
             font(FONT_MICRO),
-            TEXT_WHITE,
+            pal().text,
         )
     });
     let size = egui::vec2(galley.size().x + 10.0, 14.0);
     let rect = ui.allocate_exact_size(size, egui::Sense::hover()).0;
     ui.painter()
-        .rect_filled(rect, RADIUS_XS, ACCENT_CYAN.gamma_multiply(0.22));
+        .rect_filled(rect, RADIUS_XS, pal().accent_soft.gamma_multiply(0.22));
     ui.painter()
-        .galley(rect.center() - galley.size() / 2.0, galley, TEXT_WHITE);
+        .galley(rect.center() - galley.size() / 2.0, galley, pal().text);
 }
 
 pub(crate) fn rating_stars(ui: &mut egui::Ui, rating: f32) {
@@ -672,19 +672,19 @@ pub(crate) fn rating_stars(ui: &mut egui::Ui, rating: f32) {
     const EMPTY: [&str; 6] = ["★★★★★", "★★★★", "★★★", "★★", "★", ""];
     let filled = ((rating + 0.5).floor().max(0.0) as usize).min(5);
     let font = font(FONT_SMALL);
-    let gold = ui.fonts(|f| f.layout_no_wrap(FILLED[filled].to_owned(), font.clone(), STAR_GOLD));
-    let faint = ui.fonts(|f| f.layout_no_wrap(EMPTY[filled].to_owned(), font, TEXT_FAINT));
+    let gold = ui.fonts(|f| f.layout_no_wrap(FILLED[filled].to_owned(), font.clone(), STAR));
+    let faint = ui.fonts(|f| f.layout_no_wrap(EMPTY[filled].to_owned(), font, pal().text_faint));
     let size = egui::vec2(
         gold.size().x + faint.size().x,
         gold.size().y.max(faint.size().y),
     );
     let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
     let gold_width = gold.size().x;
-    ui.painter().galley(rect.left_top(), gold, STAR_GOLD);
+    ui.painter().galley(rect.left_top(), gold, STAR);
     ui.painter().galley(
         rect.left_top() + egui::vec2(gold_width, 0.0),
         faint,
-        TEXT_FAINT,
+        pal().text_faint,
     );
 }
 
@@ -694,7 +694,7 @@ pub(crate) fn tappable_stars(ui: &mut egui::Ui, current: Option<u8>) -> Option<u
         ui.spacing_mut().item_spacing.x = 2.0;
         for star in 1..=5u8 {
             let filled = current.is_some_and(|c| star <= c);
-            let color = if filled { STAR_GOLD } else { TEXT_FAINT };
+            let color = if filled { pal().warning } else { pal().text_faint };
             let response = ui.add(
                 egui::Button::new(egui::RichText::new("★").size(FONT_LARGE).color(color))
                     .frame(false),
@@ -711,7 +711,7 @@ pub(crate) fn like_button(ui: &mut egui::Ui, liked: bool, likes_count: u32) -> b
     let color = if liked {
         egui::Color32::from_rgb(0xf4, 0x5d, 0x5d)
     } else {
-        TEXT_DIM
+        pal().text_dim
     };
     let glyph = if liked { "♥" } else { "♡" };
     let response = ui.add(
@@ -727,17 +727,17 @@ pub(crate) fn like_button(ui: &mut egui::Ui, liked: bool, likes_count: u32) -> b
 
 pub(crate) fn platform_badge(ui: &mut egui::Ui, platform: Platform) {
     let galley =
-        ui.fonts(|f| f.layout_no_wrap(platform.label().to_owned(), font(FONT_MICRO), ACCENT_CYAN));
+        ui.fonts(|f| f.layout_no_wrap(platform.label().to_owned(), font(FONT_MICRO), pal().accent_soft));
     let size = egui::vec2(galley.size().x + 10.0, 14.0);
     let rect = ui.allocate_exact_size(size, egui::Sense::hover()).0;
     ui.painter()
-        .rect_filled(rect, RADIUS_XS, ACCENT_CYAN.gamma_multiply(0.22));
+        .rect_filled(rect, RADIUS_XS, pal().accent_soft.gamma_multiply(0.22));
     ui.painter()
-        .galley(rect.center() - galley.size() / 2.0, galley, ACCENT_CYAN);
+        .galley(rect.center() - galley.size() / 2.0, galley, pal().accent_soft);
 }
 
 pub(crate) fn region_badge(ui: &mut egui::Ui, region: &str) {
-    let galley = ui.fonts(|f| f.layout_no_wrap(region.to_owned(), font(FONT_MICRO), TEXT_WHITE));
+    let galley = ui.fonts(|f| f.layout_no_wrap(region.to_owned(), font(FONT_MICRO), pal().text));
     let size = egui::vec2(galley.size().x + 10.0, 14.0);
     let rect = ui.allocate_exact_size(size, egui::Sense::hover()).0;
     ui.painter().rect_filled(
@@ -746,7 +746,7 @@ pub(crate) fn region_badge(ui: &mut egui::Ui, region: &str) {
         egui::Color32::from_rgb(0xea, 0x58, 0x0c).gamma_multiply(0.8),
     );
     ui.painter()
-        .galley(rect.center() - galley.size() / 2.0, galley, TEXT_WHITE);
+        .galley(rect.center() - galley.size() / 2.0, galley, pal().text);
 }
 
 pub(crate) fn warning_glyph(
@@ -777,7 +777,7 @@ pub(crate) fn warning_pill(ui: &mut egui::Ui, label: &str) {
     const PADDING: f32 = 7.0;
     let text_width = (ui.available_width() - ICON_BOX - PADDING * 3.0).max(60.0);
     let mut job =
-        egui::text::LayoutJob::simple(label.to_owned(), font(FONT_MICRO), STAR_GOLD, text_width);
+        egui::text::LayoutJob::simple(label.to_owned(), font(FONT_MICRO), pal().warning, text_width);
     job.wrap.max_rows = 4;
     job.wrap.overflow_character = Some('…');
     let galley = ui.fonts(|f| f.layout_job(job));
@@ -787,7 +787,7 @@ pub(crate) fn warning_pill(ui: &mut egui::Ui, label: &str) {
     );
     let rect = ui.allocate_exact_size(size, egui::Sense::hover()).0;
     ui.painter()
-        .rect_filled(rect, RADIUS_XS, STAR_GOLD.gamma_multiply(0.2));
+        .rect_filled(rect, RADIUS_XS, pal().warning.gamma_multiply(0.2));
     warning_glyph(
         ui.painter(),
         egui::pos2(
@@ -795,7 +795,7 @@ pub(crate) fn warning_pill(ui: &mut egui::Ui, label: &str) {
             rect.top() + ICON_BOX / 2.0 + 1.0,
         ),
         5.0,
-        STAR_GOLD,
+        pal().warning,
     );
     ui.painter().galley(
         egui::pos2(
@@ -803,15 +803,15 @@ pub(crate) fn warning_pill(ui: &mut egui::Ui, label: &str) {
             rect.top() + PADDING / 2.0,
         ),
         galley,
-        STAR_GOLD,
+        pal().warning,
     );
 }
 
 pub(crate) fn install_pill(ui: &mut egui::Ui, lang: Language, state: InstallState) {
     let (label, color) = match state {
         InstallState::Absent => return,
-        InstallState::Installed => (lang.installed(), GREEN_PLAY),
-        InstallState::Outdated => (lang.update_available(), STAR_GOLD),
+        InstallState::Installed => (lang.installed(), pal().success),
+        InstallState::Outdated => (lang.update_available(), pal().warning),
     };
     let galley = ui.fonts(|f| f.layout_no_wrap(label.to_owned(), font(FONT_MICRO), color));
     let size = egui::vec2(galley.size().x + 14.0, 16.0);
@@ -824,13 +824,13 @@ pub(crate) fn install_pill(ui: &mut egui::Ui, lang: Language, state: InstallStat
 
 pub(crate) fn info_row(ui: &mut egui::Ui, label: &str, value: &str) {
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(label).color(TEXT_DIM).size(FONT_BODY));
+        ui.label(egui::RichText::new(label).color(pal().text_dim).size(FONT_BODY));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.label(
                 egui::RichText::new(value)
                     .size(FONT_BODY)
                     .strong()
-                    .color(TEXT_WHITE),
+                    .color(pal().text),
             );
         });
     });
@@ -838,7 +838,35 @@ pub(crate) fn info_row(ui: &mut egui::Ui, label: &str, value: &str) {
     ui.painter().hline(
         ui.max_rect().x_range(),
         ui.cursor().min.y,
-        egui::Stroke::new(1.0_f32, SEPARATOR),
+        egui::Stroke::new(1.0_f32, pal().separator),
     );
     ui.add_space(6.0);
+}
+
+/// Selectable line: radio + name, optional trailing value. `checked` is the
+/// saved choice (solid radio), `focused` the d-pad cursor (ring); a modal that
+/// applies on move passes the same flag for both.
+pub(crate) fn radio_row(ui: &mut egui::Ui, name: &str, trailing: Option<&str>, checked: bool, focused: bool) -> bool {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 38.0), egui::Sense::click());
+    let painter = ui.painter();
+    let lift = if focused { 0.12 } else if response.hovered() { 0.09 } else { 0.06 };
+    painter.rect_filled(rect, RADIUS_SM, pal().text.gamma_multiply(lift));
+    if focused {
+        painter.rect_stroke(rect, RADIUS_SM, egui::Stroke::new(2.0_f32, pal().focus), egui::StrokeKind::Inside);
+        response.scroll_to_me(None);
+    }
+    let mid = rect.center().y;
+    let dot = egui::pos2(rect.left() + 20.0, mid);
+    if checked {
+        painter.circle_filled(dot, 7.0, pal().primary);
+        painter.circle_filled(dot, 2.5, egui::Color32::WHITE);
+    } else {
+        painter.circle_stroke(dot, 6.5, egui::Stroke::new(1.5_f32, pal().text_faint));
+    }
+    let color = if focused || checked { pal().text } else { pal().text_dim };
+    painter.text(egui::pos2(rect.left() + 36.0, mid), egui::Align2::LEFT_CENTER, name, font(FONT_BODY), color);
+    if let Some(trailing) = trailing {
+        painter.text(egui::pos2(rect.right() - 14.0, mid), egui::Align2::RIGHT_CENTER, trailing, font(FONT_SMALL), pal().text_dim);
+    }
+    response.clicked()
 }

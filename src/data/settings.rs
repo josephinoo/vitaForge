@@ -13,6 +13,8 @@ pub struct Settings {
     pub language: Option<crate::app::i18n::Language>,
     #[serde(default = "default_install_notifications")]
     pub install_notifications: bool,
+    #[serde(default)]
+    pub theme: crate::app::ui::theme::ThemeId,
 }
 
 const fn default_install_notifications() -> bool { true }
@@ -24,6 +26,7 @@ impl Default for Settings {
             sort_direction: SortDirection::default(),
             language: None,
             install_notifications: true,
+            theme: Default::default(),
         }
     }
 }
@@ -31,6 +34,12 @@ impl Default for Settings {
 pub fn set_language(language: crate::app::i18n::Language) {
     let mut settings = load();
     settings.language = Some(language);
+    save(&settings);
+}
+
+pub fn set_theme(theme: crate::app::ui::theme::ThemeId) {
+    let mut settings = load();
+    settings.theme = theme;
     save(&settings);
 }
 

@@ -38,7 +38,8 @@ pub(crate) fn status_note(installed: &InstalledIndex, icons: &IconCache) -> Stat
     }
 }
 
-fn status_note_widget(ui: &mut egui::Ui, lang: Language, note: StatusNote) -> Option<StoreTab> {
+/// `reserve` is the width the button hints need; a chip that would eat into it is skipped.
+fn status_note_widget(ui: &mut egui::Ui, lang: Language, note: StatusNote, reserve: f32) -> Option<StoreTab> {
     let mut clicked = None;
     match note {
         StatusNote::RateLimited(message) => {
@@ -47,7 +48,8 @@ fn status_note_widget(ui: &mut egui::Ui, lang: Language, note: StatusNote) -> Op
                 "status_chip_rate_limited",
                 &message,
                 ChromeIcon::Alert,
-                STAR_GOLD,
+                pal().warning,
+                reserve,
             );
         }
         StatusNote::Overview {
@@ -62,7 +64,8 @@ fn status_note_widget(ui: &mut egui::Ui, lang: Language, note: StatusNote) -> Op
                     "status_chip_updates",
                     &label,
                     ChromeIcon::UpdateAvailable,
-                    STAR_GOLD,
+                    pal().warning,
+                    reserve,
                 ) {
                     clicked = Some(StoreTab::Updates);
                 }
@@ -73,7 +76,8 @@ fn status_note_widget(ui: &mut egui::Ui, lang: Language, note: StatusNote) -> Op
                 "status_chip_installed",
                 &installed_label,
                 ChromeIcon::Installed,
-                GREEN_PLAY,
+                pal().success,
+                reserve,
             ) {
                 clicked = Some(StoreTab::Library);
             }
@@ -83,7 +87,8 @@ fn status_note_widget(ui: &mut egui::Ui, lang: Language, note: StatusNote) -> Op
                     "status_chip_storage",
                     &format!("{used:.1}/{total:.1} GB"),
                     ChromeIcon::Storage,
-                    TEXT_DIM,
+                    pal().text_dim,
+                    reserve,
                 );
             }
         }
@@ -97,10 +102,14 @@ fn status_chip_inline(
     text: &str,
     icon: ChromeIcon,
     color: egui::Color32,
+    reserve: f32,
 ) -> bool {
     let galley = ui.fonts(|fonts| fonts.layout_no_wrap(text.to_owned(), font(FONT_MICRO), color));
     // 10 pad + 12 icon + 6 gap + text + 10 pad.
     let size = egui::vec2(galley.size().x + 38.0, 22.0);
+    if size.x > ui.available_width() - reserve {
+        return false;
+    }
     let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
     let response = ui.interact(rect, ui.id().with(id), egui::Sense::click());
     ui.painter()
@@ -139,7 +148,7 @@ pub(crate) fn button_hints(
     const GLYPH: f32 = 14.0;
     egui::TopBottomPanel::bottom("hints")
         .exact_height(HINT_BAR_HEIGHT)
-        .frame(egui::Frame::NONE.fill(BG_HEADER))
+        .frame(egui::Frame::NONE.fill(pal().bg_header))
         .show(ctx, |ui| {
             let panel = ui.max_rect();
             let row = egui::Rect::from_min_max(
@@ -153,7 +162,7 @@ pub(crate) fn button_hints(
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                     ui.set_min_height(row.height());
                     if let Some(note) = note
-                        && let Some(tab) = status_note_widget(ui, lang, note)
+                        && let Some(tab) = status_note_widget(ui, lang, note, hints_width(ui, hints) + 12.0)
                     {
                         commands.push(AppCommand::SetStoreTab(tab));
                     }
@@ -167,7 +176,7 @@ pub(crate) fn button_hints(
                                 ui.add_space(8.0);
                             }
                             let galley = ui.fonts(|f| {
-                                f.layout_no_wrap((*label).to_owned(), font(FONT_MICRO), TEXT_DIM)
+                                f.layout_no_wrap((*label).to_owned(), font(FONT_MICRO), pal().text_dim)
                             });
                             let (text_rect, _) = ui.allocate_exact_size(
                                 egui::vec2(galley.size().x, GLYPH),
@@ -179,7 +188,7 @@ pub(crate) fn button_hints(
                                     text_rect.center().y - galley.size().y * 0.5,
                                 ),
                                 galley,
-                                TEXT_DIM,
+                                pal().text_dim,
                             );
                             match glyph {
                                 Glyph::Shoulders | Glyph::Start => {
@@ -188,13 +197,13 @@ pub(crate) fn button_hints(
                                         egui::vec2(if *glyph == Glyph::Start { 40.0 } else { 32.0 }, GLYPH),
                                         egui::Sense::hover(),
                                     );
-                                    ui.painter().rect_filled(rect, RADIUS_XS, BG_CARD);
+                                    ui.painter().rect_filled(rect, RADIUS_XS, pal().bg_card);
                                     ui.painter().text(
                                         rect.center(),
                                         egui::Align2::CENTER_CENTER,
                                         text,
                                         font(FONT_MICRO),
-                                        TEXT_DIM,
+                                        pal().text_dim,
                                     );
                                 }
                                 _ => {
@@ -222,4 +231,22 @@ pub(crate) fn button_hints(
             });
         });
     commands
+}
+
+/// Width the right-hand hints take; mirrors the layout in `button_hints`.
+fn hints_width(ui: &egui::Ui, hints: &[(Glyph, &str)]) -> f32 {
+    const GAP: f32 = 5.0;
+    hints
+        .iter()
+        .enumerate()
+        .map(|(i, (glyph, label))| {
+            let text = ui.fonts(|f| f.layout_no_wrap((*label).to_owned(), font(FONT_MICRO), pal().text_dim).size().x);
+            let icon = match glyph {
+                Glyph::Start => 40.0,
+                Glyph::Shoulders => 32.0,
+                _ => 14.0,
+            };
+            text + icon + 2.0 * GAP + if i == 2 || i == 4 { 8.0 } else { 0.0 }
+        })
+        .sum()
 }

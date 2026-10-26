@@ -34,7 +34,7 @@ pub(crate) fn draw_cover(
         if let Some(texture) = icons.get(ui.ctx(), url) {
             let texture_size = texture.size_vec2();
             ui.painter().add(
-                egui::epaint::RectShape::filled(rect, CARD_RADIUS, TEXT_WHITE)
+                egui::epaint::RectShape::filled(rect, CARD_RADIUS, pal().text)
                     .with_texture(texture.id(), cover_fit_uv(texture_size, rect)),
             );
             return;
@@ -65,7 +65,7 @@ fn paint_cover_placeholder(
         // Material adaptive-icon vibe: saturated plate + inset squircle (not Vita LiveArea wash).
         let plate = egui::Color32::from_rgb(0x00, 0x96, 0x88); // teal-700
         let plate_hi = egui::Color32::from_rgb(0x26, 0xa6, 0x9a);
-        ui.painter().rect_filled(rect, CARD_RADIUS + 2.0, plate.lerp_to_gamma(BG_DEEP, 0.18));
+        ui.painter().rect_filled(rect, CARD_RADIUS + 2.0, plate.lerp_to_gamma(pal().bg_deep, 0.18));
         let inset = rect.shrink((rect.width().min(rect.height()) * 0.11).clamp(8.0, 16.0));
         let squircle_r = inset.width().min(inset.height()) * 0.28;
         ui.painter().rect_filled(inset, squircle_r, plate_hi);
@@ -83,7 +83,7 @@ fn paint_cover_placeholder(
         ui.painter().rect_filled(
             rect,
             CARD_RADIUS,
-            accent.gamma_multiply(0.22).lerp_to_gamma(BG_CARD, 0.55),
+            accent.gamma_multiply(0.22).lerp_to_gamma(pal().bg_card, 0.55),
         );
         let wash = egui::Rect::from_center_size(
             rect.center() - egui::vec2(0.0, rect.height() * 0.06),
@@ -107,11 +107,11 @@ fn paint_cover_placeholder(
         egui::vec2(icon_side, icon_side),
     );
     let tint = if loading {
-        TEXT_WHITE.gamma_multiply(0.55)
+        pal().text.gamma_multiply(0.55)
     } else if is_plugin {
-        TEXT_WHITE
+        pal().text
     } else {
-        TEXT_WHITE.gamma_multiply(0.88)
+        pal().text.gamma_multiply(0.88)
     };
     chrome_icons::paint(ui, icon, icon_rect, tint);
 
@@ -135,7 +135,7 @@ fn paint_cover_placeholder(
         egui::Align2::CENTER_TOP,
         letter,
         font((rect.width().min(rect.height()) * if is_plugin { 0.16 } else { 0.18 }).clamp(11.0, 18.0)),
-        TEXT_WHITE.gamma_multiply(if loading {
+        pal().text.gamma_multiply(if loading {
             0.55
         } else if is_plugin {
             0.90
@@ -164,14 +164,14 @@ pub(crate) fn tile_label_below(ui: &mut egui::Ui, rect: egui::Rect, name: &str, 
         return;
     }
     let mut job =
-        egui::text::LayoutJob::simple(name.to_owned(), font(FONT_SMALL), TEXT_WHITE, rect.width());
+        egui::text::LayoutJob::simple(name.to_owned(), font(FONT_SMALL), pal().text, rect.width());
     job.wrap.max_rows = 2;
     job.wrap.break_anywhere = false;
     job.wrap.overflow_character = Some('…');
     let galley = ui.fonts(|f| f.layout_job(job));
     if focused && galley.elided {
         // A long title on the focused tile scrolls past instead of ending in "…".
-        let line = ui.fonts(|f| f.layout_no_wrap(name.to_owned(), font(FONT_SMALL), TEXT_WHITE));
+        let line = ui.fonts(|f| f.layout_no_wrap(name.to_owned(), font(FONT_SMALL), pal().text));
         let gap = 28.0;
         let span = line.size().x + gap;
         let time = ui.input(|i| i.time) as f32;
@@ -181,14 +181,14 @@ pub(crate) fn tile_label_below(ui: &mut egui::Ui, rect: egui::Rect, name: &str, 
         painter.galley(
             egui::pos2(rect.left() - travel, y),
             line.clone(),
-            TEXT_WHITE,
+            pal().text,
         );
-        painter.galley(egui::pos2(rect.left() - travel + span, y), line, TEXT_WHITE);
+        painter.galley(egui::pos2(rect.left() - travel + span, y), line, pal().text);
         ui.ctx().request_repaint();
         return;
     }
     let pos = egui::pos2(rect.left(), rect.top());
-    ui.painter().galley(pos, galley, TEXT_WHITE);
+    ui.painter().galley(pos, galley, pal().text);
 }
 
 pub(crate) fn tile_platform_badge(
@@ -208,7 +208,7 @@ pub(crate) fn tile_platform_badge(
             Platform::Plugin => "PLUG",
         },
     };
-    let galley = ui.fonts(|f| f.layout_no_wrap(text.to_owned(), font(FONT_MICRO), TEXT_WHITE));
+    let galley = ui.fonts(|f| f.layout_no_wrap(text.to_owned(), font(FONT_MICRO), pal().text));
     let size = egui::vec2(galley.size().x + 10.0, 14.0);
     let badge = egui::Rect::from_min_size(
         egui::pos2(rect.left() + 5.0, rect.bottom() - size.y - 5.0),
@@ -220,7 +220,7 @@ pub(crate) fn tile_platform_badge(
         egui::Color32::from_rgba_unmultiplied(0x4a, 0x4a, 0x52, 200),
     );
     ui.painter()
-        .galley(badge.center() - galley.size() / 2.0, galley, TEXT_WHITE);
+        .galley(badge.center() - galley.size() / 2.0, galley, pal().text);
     if entry.data_url.is_some() || entry.data_size_bytes > 0 {
         let data_badge = egui::Rect::from_min_size(
             egui::pos2(badge.right() + 3.0, badge.top()),
@@ -229,13 +229,13 @@ pub(crate) fn tile_platform_badge(
         ui.painter().rect_filled(
             data_badge,
             RADIUS_XS,
-            egui::Color32::from_rgba_unmultiplied(0x38, 0x90, 0xff, 220),
+            pal().accent.gamma_multiply(0.86),
         );
         crate::app::ui::chrome_icons::paint(
             ui,
             crate::app::ui::chrome_icons::ChromeIcon::GameData,
             data_badge.shrink(2.0),
-            TEXT_WHITE,
+            pal().text,
         );
     }
 }
@@ -274,7 +274,7 @@ pub(crate) fn cover_card(
         rect.right_bottom(),
     );
     if focus_t > 0.01 {
-        let glow = SELECT_GLOW.gamma_multiply(focus_t);
+        let glow = pal().focus_glow.gamma_multiply(focus_t);
         ui.painter().rect_stroke(
             image_rect.expand(2.0 * focus_t),
             CARD_RADIUS + 2.0 * focus_t,
@@ -287,7 +287,7 @@ pub(crate) fn cover_card(
     install_marker(ui.painter(), image_rect, installed.state(entry));
     tile_label_below(ui, label_rect, &entry.name, focus_t > 0.5);
     if focus_t > 0.01 {
-        let stroke = ACCENT_CYAN.gamma_multiply(0.35 + 0.65 * focus_t);
+        let stroke = pal().accent_soft.gamma_multiply(0.35 + 0.65 * focus_t);
         ui.painter().rect_stroke(
             image_rect,
             CARD_RADIUS,
@@ -308,11 +308,11 @@ pub(crate) fn featured_card(
 ) -> bool {
     let (rect, response) =
         ui.allocate_exact_size(egui::vec2(ui.available_width(), 56.0), egui::Sense::click());
-    ui.painter().rect_filled(rect, CARD_RADIUS, BG_CARD);
+    ui.painter().rect_filled(rect, CARD_RADIUS, pal().bg_card);
     ui.painter().rect_stroke(
         rect,
         CARD_RADIUS,
-        egui::Stroke::new(1.0_f32, SEPARATOR),
+        egui::Stroke::new(1.0_f32, pal().separator),
         egui::StrokeKind::Inside,
     );
     let art = egui::Rect::from_min_max(
@@ -325,21 +325,21 @@ pub(crate) fn featured_card(
         egui::Align2::LEFT_TOP,
         label,
         font(FONT_MICRO),
-        ACCENT_CYAN,
+        pal().accent_soft,
     );
     ui.painter().text(
         rect.left_top() + egui::vec2(110.0, 8.0),
         egui::Align2::LEFT_TOP,
         &entry.name,
         font(FONT_TITLE),
-        TEXT_WHITE,
+        pal().text,
     );
     ui.painter().text(
         rect.left_top() + egui::vec2(110.0, 30.0),
         egui::Align2::LEFT_TOP,
         format!("{} · {}", entry.platform.label(), entry.author),
         font(FONT_SMALL),
-        TEXT_DIM,
+        pal().text_dim,
     );
     response.clicked()
 }

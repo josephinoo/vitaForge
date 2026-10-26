@@ -23,7 +23,7 @@ use self::footer::{button_hints, status_note};
 use self::grid::{catalog_grid, featured_card};
 use self::header::catalog_header;
 use self::loading::loading_screen;
-use self::settings::settings_modal;
+use self::settings::{settings_page, SettingsView};
 use self::sidebar::catalog_sidebar;
 use self::theme::*;
 use self::widgets::*;
@@ -35,6 +35,7 @@ pub(crate) enum UpdateAllUi {
 }
 
 pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
+    theme::sync_visuals(ctx);
     let self_update = app.self_update.as_ref();
     let self_update_progress = app
         .install
@@ -101,19 +102,21 @@ pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
                     .map(|job| (job.app_id.as_str(), &job.progress)),
             )
         }
-        AppState::Settings { selected, previous, credits } => {
+        AppState::Settings { nav, previous } => {
+            // The catalog still draws the footer hints; the page covers the rest.
             let mut commands = catalog_view(ctx, app, previous, self_update, self_update_progress);
-            commands.extend(settings_modal(
+            commands.extend(settings_page(
                 ctx,
-                app.lang,
-                *selected,
-                previous.apps.len(),
-                &app.cache_stats,
-                app.cache_notice.as_deref(),
-                app.install_notifications,
-                app.purge_armed,
-                *credits,
-                appear,
+                SettingsView {
+                    lang: app.lang,
+                    nav,
+                    catalog_count: previous.apps.len(),
+                    stats: &app.cache_stats,
+                    cache_notice: app.cache_notice.as_deref(),
+                    install_notifications: app.install_notifications,
+                    purge_armed: app.purge_armed,
+                    appear,
+                },
             ));
             commands
         }
@@ -315,13 +318,13 @@ fn catalog_screen(
                             StoreTab::Updates => lang.updates_empty(),
                             _ => lang.no_results(),
                         };
-                        ui.label(egui::RichText::new(empty).size(FONT_LARGE).color(TEXT_DIM));
+                        ui.label(egui::RichText::new(empty).size(FONT_LARGE).color(pal().text_dim));
                         if !matches!(tab, StoreTab::Library | StoreTab::Updates) {
                             ui.add_space(4.0);
                             ui.label(
                                 egui::RichText::new(lang.no_results_sub())
                                     .size(FONT_BODY)
-                                    .color(TEXT_FAINT),
+                                    .color(pal().text_faint),
                             );
                         }
                     } else {

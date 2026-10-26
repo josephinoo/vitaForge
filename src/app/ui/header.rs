@@ -62,7 +62,7 @@ pub(crate) fn catalog_header(
                     egui::RichText::new(format!("{} {label}", lang.update()))
                         .size(FONT_SMALL)
                         .strong()
-                        .color(STAR_GOLD),
+                        .color(pal().warning),
                 );
             }
 
@@ -72,7 +72,7 @@ pub(crate) fn catalog_header(
                     egui::RichText::new(progress.label_for(lang))
                         .size(FONT_SMALL)
                         .strong()
-                        .color(STAR_GOLD),
+                        .color(pal().warning),
                 );
             } else if let Some(info) = self_update {
                 ui.add_space(6.0);

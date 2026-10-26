@@ -26,6 +26,17 @@ pub enum ChromeIcon {
     Installed,
     Storage,
     Alert,
+    Settings,
+    Sliders,
+    Palette,
+    Info,
+    Languages,
+    Bell,
+    Image,
+    Database,
+    Trash,
+    ChevronRight,
+    Check,
 }
 
 impl ChromeIcon {
@@ -85,6 +96,17 @@ impl ChromeIcon {
             Self::Installed => '\u{e266}',
             Self::Storage => '\u{e0f0}',
             Self::Alert => '\u{e193}',
+            Self::Settings => '\u{e158}',
+            Self::Sliders => '\u{e29a}',
+            Self::Palette => '\u{e1dd}',
+            Self::Info => '\u{e0fe}',
+            Self::Languages => '\u{e103}',
+            Self::Bell => '\u{e05d}',
+            Self::Image => '\u{e0f9}',
+            Self::Database => '\u{e0b1}',
+            Self::Trash => '\u{e18e}',
+            Self::ChevronRight => '\u{e073}',
+            Self::Check => '\u{e070}',
         }
     }
 }
