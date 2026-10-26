@@ -234,7 +234,7 @@ pub(crate) fn detail_screen(
     }
 
     if let Some(job) = install {
-        install_progress_modal(ctx, lang, entry, job, cancellable, cancel_armed, &mut commands);
+        install_progress_modal(ctx, lang, &entry.name, job, cancellable, cancel_armed, &mut commands);
     }
 
     egui::CentralPanel::default()
@@ -252,6 +252,7 @@ pub(crate) fn detail_screen(
                 .id_salt(&entry.id)
                 .auto_shrink([false, false])
                 .max_height(scroll_h)
+                .vertical_scroll_offset(scroll_delta)
                 .show(ui, |ui| {
                     ui.set_max_width(viewport_w);
                     ui.multiply_opacity(enter_t);
@@ -437,9 +438,6 @@ pub(crate) fn detail_screen(
                         }
                     }
                     ui.add_space(20.0);
-                    if scroll_delta != 0.0 {
-                        ui.scroll_with_delta(egui::vec2(0.0, -scroll_delta));
-                    }
                 });
             fade_into_footer(ui, scroll_output.inner_rect);
         });
@@ -500,10 +498,10 @@ fn paint_modal_scrim(ctx: &egui::Context) {
 
 /// Installation owns its own surface.  Keeping progress here prevents the
 /// primary action from jumping between an action button and a progress bar.
-fn install_progress_modal(
+pub(crate) fn install_progress_modal(
     ctx: &egui::Context,
     lang: Language,
-    entry: &crate::data::AppEntry,
+    title: &str,
     job: &crate::install::Progress,
     cancellable: bool,
     cancel_armed: bool,
@@ -526,7 +524,7 @@ fn install_progress_modal(
                     ui.set_width(400.0);
                     ui.vertical_centered(|ui| {
                         ui.label(
-                            egui::RichText::new(entry.name.as_str())
+                            egui::RichText::new(title)
                                 .size(FONT_LARGE)
                                 .strong()
                                 .color(pal().text),
@@ -1542,7 +1540,7 @@ fn action_chip(ui: &mut egui::Ui, glyph: Glyph, label: &str) -> bool {
 }
 
 /// Chip showing which pad button triggers it; `primary` is the solid blue action.
-fn prompt_chip(ui: &mut egui::Ui, glyph: Glyph, label: &str, primary: bool) -> bool {
+pub(crate) fn prompt_chip(ui: &mut egui::Ui, glyph: Glyph, label: &str, primary: bool) -> bool {
     let galley = ui.fonts(|f| f.layout_no_wrap(label.to_owned(), font(FONT_SMALL), pal().text));
     let icon = 16.0;
     // 14 left + icon + 6 gap + text + 14 right, so the content sits centred.

@@ -1,9 +1,7 @@
 use crate::app::i18n::Language;
 use crate::app::ui::chrome_icons::ChromeIcon;
 use crate::app::ui::theme::*;
-use crate::app::ui::widgets::{
-    search_chip_sized, search_field, self_update_pill, top_nav_button,
-};
+use crate::app::ui::widgets::{search_chip_sized, search_field, top_nav_button};
 use crate::input::{AppCommand, ContentTypeGroup, StoreTab};
 
 pub(crate) fn catalog_header(
@@ -13,8 +11,6 @@ pub(crate) fn catalog_header(
     content_type_group: ContentTypeGroup,
     search_query: &str,
     search_active: bool,
-    self_update: Option<&crate::app::SelfUpdateInfo>,
-    self_update_progress: Option<&crate::install::Progress>,
     update_all: &crate::app::ui::UpdateAllUi,
     commands: &mut Vec<AppCommand>,
 ) {
@@ -64,21 +60,6 @@ pub(crate) fn catalog_header(
                         .strong()
                         .color(pal().warning),
                 );
-            }
-
-            if let Some(progress) = self_update_progress {
-                ui.add_space(6.0);
-                ui.label(
-                    egui::RichText::new(progress.label_for(lang))
-                        .size(FONT_SMALL)
-                        .strong()
-                        .color(pal().warning),
-                );
-            } else if let Some(info) = self_update {
-                ui.add_space(6.0);
-                if self_update_pill(ui, lang, &info.tag) {
-                    commands.push(AppCommand::SelfUpdate);
-                }
             }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

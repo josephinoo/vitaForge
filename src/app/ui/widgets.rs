@@ -66,55 +66,87 @@ pub(crate) struct SearchFieldResponse {
     pub cleared: bool,
 }
 
-pub(crate) fn self_update_pill(ui: &mut egui::Ui, lang: Language, tag: &str) -> bool {
+pub(crate) fn self_update_pill(ui: &mut egui::Ui, _lang: Language, tag: &str) -> bool {
     let tag = if tag.starts_with('v') || tag.starts_with('V') {
         tag.to_owned()
     } else {
         format!("v{tag}")
     };
-    let label = format!("{} {}", lang.update(), tag);
-    let galley = ui.fonts(|f| f.layout_no_wrap(label, font(FONT_SMALL), pal().text));
-    let pad_x = 14.0;
-    let pad_y = 8.0;
+    let galley = ui.fonts(|f| f.layout_no_wrap(tag, font(FONT_SMALL), pal().text));
+    let pad_x = 10.0;
     let icon_w = 12.0;
     let size = egui::vec2(
-        galley.size().x + pad_x * 2.0 + icon_w + 6.0,
-        galley.size().y + pad_y * 2.0,
+        galley.size().x + pad_x * 2.0 + icon_w + 5.0,
+        TAB_PILL_HEIGHT,
     );
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
     let hover = response.hovered();
     let fill = if hover {
-        pal().text.gamma_multiply(0.12)
+        pal().accent.gamma_multiply(0.25)
     } else {
-        egui::Color32::TRANSPARENT
+        pal().accent.gamma_multiply(0.14)
     };
     ui.painter().rect_filled(rect, rect.height() / 2.0, fill);
     ui.painter().rect_stroke(
         rect,
         rect.height() / 2.0,
-        egui::Stroke::new(1.5_f32, pal().text),
+        egui::Stroke::new(1.2_f32, pal().accent),
         egui::StrokeKind::Inside,
     );
     let icon_c = egui::pos2(rect.left() + pad_x + icon_w * 0.5, rect.center().y);
     let tri = [
-        egui::pos2(icon_c.x - 5.0, icon_c.y - 3.0),
-        egui::pos2(icon_c.x + 5.0, icon_c.y - 3.0),
-        egui::pos2(icon_c.x, icon_c.y + 5.0),
+        egui::pos2(icon_c.x - 4.5, icon_c.y - 3.0),
+        egui::pos2(icon_c.x + 4.5, icon_c.y - 3.0),
+        egui::pos2(icon_c.x, icon_c.y + 4.5),
     ];
     ui.painter().add(egui::Shape::convex_polygon(
         tri.to_vec(),
-        pal().text,
+        pal().accent,
         egui::Stroke::NONE,
     ));
     ui.painter().galley(
         egui::pos2(
-            rect.left() + pad_x + icon_w + 6.0,
+            rect.left() + pad_x + icon_w + 5.0,
             rect.center().y - galley.size().y * 0.5,
         ),
         galley,
         pal().text,
     );
     response.clicked()
+}
+
+pub(crate) fn self_update_progress_pill(ui: &mut egui::Ui, progress: &crate::install::Progress) {
+    let size = egui::vec2(76.0, TAB_PILL_HEIGHT);
+    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+    ui.painter().rect_filled(rect, rect.height() / 2.0, pal().warning.gamma_multiply(0.15));
+    ui.painter().rect_stroke(
+        rect,
+        rect.height() / 2.0,
+        egui::Stroke::new(1.0_f32, pal().warning.gamma_multiply(0.6)),
+        egui::StrokeKind::Inside,
+    );
+    let center = egui::pos2(rect.left() + 18.0, rect.center().y);
+    let radius = 6.5;
+    let n_dots = 6;
+    let time = ui.input(|i| i.time);
+    let angle = time * 5.0;
+    for i in 0..n_dots {
+        let dot_angle = angle + (i as f64 * std::f64::consts::TAU / n_dots as f64);
+        let pos = center + egui::vec2(dot_angle.cos() as f32, dot_angle.sin() as f32) * radius;
+        let alpha = (i as f32 / n_dots as f32).powf(1.5);
+        ui.painter().circle_filled(pos, 1.8, pal().warning.gamma_multiply(0.2 + 0.8 * alpha));
+    }
+    let pct_str = progress
+        .fraction()
+        .map(|f| format!("{:.0}%", f * 100.0))
+        .unwrap_or_else(|| "…".to_owned());
+    let galley = ui.fonts(|f| f.layout_no_wrap(pct_str, font(FONT_MICRO), pal().warning));
+    ui.painter().galley(
+        egui::pos2(rect.left() + 32.0, rect.center().y - galley.size().y * 0.5),
+        galley,
+        pal().warning,
+    );
+    ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
 }
 
 pub(crate) fn search_chip(ui: &mut egui::Ui, label: &str) -> bool {
@@ -867,7 +899,7 @@ pub(crate) fn radio_row(ui: &mut egui::Ui, name: &str, trailing: Option<&str>, c
     painter.rect_filled(rect, RADIUS_SM, pal().text.gamma_multiply(lift));
     if focused {
         painter.rect_stroke(rect, RADIUS_SM, egui::Stroke::new(2.0_f32, pal().focus), egui::StrokeKind::Inside);
-        response.scroll_to_me(None);
+        scroll_radio_on_focus_change(ui, &response);
     }
     let mid = rect.center().y;
     let dot = egui::pos2(rect.left() + 20.0, mid);
@@ -883,4 +915,16 @@ pub(crate) fn radio_row(ui: &mut egui::Ui, name: &str, trailing: Option<&str>, c
         painter.text(egui::pos2(rect.right() - 14.0, mid), egui::Align2::RIGHT_CENTER, trailing, font(FONT_SMALL), pal().text_dim);
     }
     response.clicked()
+}
+
+fn scroll_radio_on_focus_change(ui: &egui::Ui, response: &egui::Response) {
+    let key = egui::Id::new("radio_last_focus");
+    let changed = ui.ctx().data_mut(|d| {
+        let changed = d.get_temp::<egui::Id>(key) != Some(response.id);
+        d.insert_temp(key, response.id);
+        changed
+    });
+    if changed {
+        response.scroll_to_me(None);
+    }
 }

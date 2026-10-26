@@ -48,7 +48,7 @@ pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
         matches!(app.state, AppState::Settings { .. }),
         if matches!(app.state, AppState::Settings { .. }) { 0.15 } else { 0.0 },
     );
-    let commands = match &app.state {
+    let mut commands = match &app.state {
         AppState::Loading => loading_screen(
             ctx,
             app.lang,
@@ -127,7 +127,85 @@ pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
     if app.icons.rate_limited_for().is_some() {
         ctx.request_repaint_after(std::time::Duration::from_secs(1));
     }
+    if app.self_update_prompt && let Some(info) = &app.self_update {
+        self_update_modal(ctx, app.lang, &info.tag, &mut commands);
+    } else if let Some(job) = app.install.as_ref().filter(|job| job.app_id == SELF_UPDATE_ID) {
+        crate::app::ui::detail::install_progress_modal(
+            ctx,
+            app.lang,
+            &job.title,
+            &job.progress,
+            job.progress.is_cancellable(),
+            app.cancel_armed(),
+            &mut commands,
+        );
+    }
     commands
+}
+
+fn self_update_modal(
+    ctx: &egui::Context,
+    lang: Language,
+    tag: &str,
+    commands: &mut Vec<AppCommand>,
+) {
+    let tag = if tag.starts_with('v') || tag.starts_with('V') {
+        tag.to_owned()
+    } else {
+        format!("v{tag}")
+    };
+    egui::Area::new(egui::Id::new("self_update_modal_scrim"))
+        .fixed_pos(egui::Pos2::ZERO)
+        .order(egui::Order::Foreground)
+        .show(ctx, |ui| {
+            let screen = ui.ctx().screen_rect();
+            let (bg, _) = ui.allocate_exact_size(screen.size(), egui::Sense::click());
+            ui.painter()
+                .rect_filled(bg, 0.0, egui::Color32::from_black_alpha(200));
+        });
+    egui::Area::new(egui::Id::new("self_update_modal"))
+        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+        .order(egui::Order::Foreground)
+        .show(ctx, |ui| {
+            egui::Frame::window(&ctx.style())
+                .fill(theme::pal().bg_card)
+                .stroke(egui::Stroke::new(1.5_f32, theme::pal().accent))
+                .corner_radius(theme::RADIUS_LG)
+                .inner_margin(egui::vec2(28.0, 20.0))
+                .show(ui, |ui| {
+                    ui.set_width(360.0);
+                    ui.vertical_centered(|ui| {
+                        ui.label(
+                            egui::RichText::new("VitaForge")
+                                .size(theme::FONT_LARGE)
+                                .strong()
+                                .color(theme::pal().text),
+                        );
+                        ui.add_space(8.0);
+                        let title = format!("{} {tag}", lang.update_available());
+                        ui.label(
+                            egui::RichText::new(title)
+                                .size(theme::FONT_BODY)
+                                .strong()
+                                .color(theme::pal().text),
+                        );
+                        ui.add_space(20.0);
+                        ui.horizontal(|ui| {
+                            let pad = (ui.available_width() - 240.0) / 2.0;
+                            if pad > 0.0 {
+                                ui.add_space(pad);
+                            }
+                            if crate::app::ui::detail::prompt_chip(ui, Glyph::Cross, lang.update(), true) {
+                                commands.push(AppCommand::SelfUpdate);
+                            }
+                            ui.add_space(14.0);
+                            if crate::app::ui::detail::prompt_chip(ui, Glyph::Circle, lang.cancel_btn(), false) {
+                                commands.push(AppCommand::DismissSelfUpdate);
+                            }
+                        });
+                    });
+                });
+        });
 }
 
 fn catalog_view(
@@ -179,6 +257,7 @@ fn catalog_view(
         self_update_progress,
         &update_all,
         matches!(app.state, crate::app::AppState::Settings { .. }),
+        app.self_update_prompt,
     )
 }
 
@@ -211,14 +290,19 @@ fn catalog_screen(
     self_update_progress: Option<&crate::install::Progress>,
     update_all: &UpdateAllUi,
     settings_open: bool,
+    self_update_prompt: bool,
 ) -> Vec<AppCommand> {
     let mut commands = Vec::new();
     let update_all_hint = match update_all {
         UpdateAllUi::Available(count) if tab == StoreTab::Updates => lang.update_all(*count),
         _ => String::new(),
     };
-    // The settings modal sits on top of the catalog, so its buttons replace the catalog's.
-    let hints = if settings_open {
+    let hints = if self_update_prompt {
+        vec![
+            (Glyph::Cross, lang.update()),
+            (Glyph::Circle, lang.btn_back()),
+        ]
+    } else if settings_open {
         vec![
             (Glyph::Cross, lang.btn_choose()),
             (Glyph::Circle, lang.btn_back()),
@@ -259,8 +343,6 @@ fn catalog_screen(
                 content_type_group,
                 search_query,
                 search_active,
-                self_update,
-                self_update_progress,
                 update_all,
                 &mut commands,
             );

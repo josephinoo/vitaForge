@@ -156,6 +156,7 @@ pub enum AppCommand {
     UninstallCurrent,
     ConfirmUninstall,
     CancelUninstall,
+    DismissSelfUpdate,
     ReportError,
     InstallDependency { id: String, dir: String, file: String },
     UpdateAll,

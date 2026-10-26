@@ -704,6 +704,7 @@ pub struct App {
     pub lang: Language,
     pub install: Option<InstallJob>,
     pub self_update: Option<SelfUpdateInfo>,
+    pub self_update_prompt: bool,
     needs_installed_rescan: bool,
     load_rx: Option<oneshot::Receiver<CatalogSource>>,
     load_started_at: std::time::Instant,
@@ -780,6 +781,7 @@ impl App {
             lang: settings.language.unwrap_or_else(Language::detect),
             install: None,
             self_update: None,
+            self_update_prompt: false,
             needs_installed_rescan: true,
             load_rx: Some(rx),
             load_started_at: std::time::Instant::now(),
@@ -959,6 +961,8 @@ impl App {
                 crate::install::notify::self_update_available(self.lang, &info.tag);
             }
             self.self_update = Some(info);
+            self.self_update_prompt = true;
+            self.audio.play(crate::audio::Sfx::ShowModal);
             ctx.request_repaint();
         }
         if let Some(rx) = &mut self.social_rx
@@ -1092,6 +1096,84 @@ impl App {
         self.handle_command(command)
     }
 
+    fn run_self_update(&mut self) -> Result<()> {
+        self.self_update_prompt = false;
+        let busy = self.install.as_ref().is_some_and(|job| !job.progress.is_finished());
+        if let Some(info) = self.self_update.clone()
+            && !busy
+        {
+            let mut entry = AppEntry {
+                id: SELF_UPDATE_ID.to_owned(),
+                titleid: "VITAFORGE".to_owned(),
+                titleid_lower: String::new(),
+                content_id: None,
+                name: format!("VitaForge {}", info.tag),
+                original_name: None,
+                name_lower: String::new(),
+                author: "josephinoo".to_owned(),
+                author_lower: String::new(),
+                description: format!("Self-update for VitaForge {}", info.tag),
+                long_description: String::new(),
+                requirements: String::new(),
+                changelog: String::new(),
+                release_page: Some("https://github.com/josephinoo/vitaForge/releases".to_owned()),
+                category: Category::Utility,
+                genres: Vec::new(),
+                platform: crate::data::Platform::Vita,
+                kind: String::new(),
+                icon_url: None,
+                cover_url: None,
+                background_url: None,
+                screenshot_urls: Vec::new(),
+                download_url: info.vpk_url.clone(),
+                source: None,
+                version: info.tag.clone(),
+                region: None,
+                zrif: None,
+                source_catalog: "vitadb".to_owned(),
+                source_labels: Vec::new(),
+                hash: String::new(),
+                hash2: String::new(),
+                data_url: None,
+                data_extract_path: None,
+                data_size_bytes: 0,
+                game_data_languages: Vec::new(),
+                plugin_install_path: None,
+                plugin_config_section: None,
+                plugin_config_line: None,
+                size_bytes: 0,
+                downloads: 0,
+                rating: 5.0,
+                updated_at: String::new(),
+                ratings_count: 0,
+                likes_count: 0,
+                comments_count: 0,
+                user_liked: false,
+                user_rating: None,
+                overview: Vec::new(),
+            };
+            entry.rebuild_derived();
+            let app_id = entry.id.clone();
+            let app_id_title = entry.titleid.clone();
+            let title = entry.name.clone();
+            let (rx, cancel) = crate::install::start(entry);
+            let progress = rx.borrow().clone();
+            self.install = Some(InstallJob {
+                app_id,
+                app_id_title,
+                title: title.clone(),
+                progress,
+                rx,
+                cancel,
+            });
+            self.audio.play(crate::audio::Sfx::Launch);
+            if self.install_notifications {
+                crate::install::notify::install_started(self.lang, &title);
+            }
+        }
+        Ok(())
+    }
+
     fn leave_settings(&mut self) {
         self.purge_armed = false;
         if let AppState::Settings { previous, nav } = &mut self.state {
@@ -1104,8 +1186,25 @@ impl App {
     }
 
     pub fn handle_command(&mut self, command: AppCommand) -> Result<()> {
+        if self.self_update_prompt {
+            match command {
+                AppCommand::Input(InputCommand::Confirm) | AppCommand::SelfUpdate => {
+                    self.self_update_prompt = false;
+                    return self.run_self_update();
+                }
+                AppCommand::Input(InputCommand::Back) | AppCommand::DismissSelfUpdate => {
+                    self.self_update_prompt = false;
+                    self.audio.play(crate::audio::Sfx::HideModal);
+                    return Ok(());
+                }
+                _ => return Ok(()),
+            }
+        }
         match command {
             AppCommand::Input(InputCommand::Back) => {
+                if self.self_update_prompt {
+                    return self.handle_command(AppCommand::DismissSelfUpdate);
+                }
                 if matches!(self.state, AppState::Settings { .. }) {
                     return self.handle_command(AppCommand::CloseSettings);
                 }
@@ -1322,6 +1421,12 @@ impl App {
                     self.audio.play(crate::audio::Sfx::HideModal);
                 }
             }
+            AppCommand::DismissSelfUpdate => {
+                if self.self_update_prompt {
+                    self.self_update_prompt = false;
+                    self.audio.play(crate::audio::Sfx::HideModal);
+                }
+            }
             AppCommand::ConfirmUninstall => {
                 if let AppState::Detail { app, uninstall_prompt, .. } = &mut self.state
                     && *uninstall_prompt
@@ -1475,6 +1580,10 @@ impl App {
                 return self.handle_command(AppCommand::ScreenshotStep(step));
             }
             AppCommand::Input(InputCommand::Confirm) => {
+                if self.self_update_prompt {
+                    self.self_update_prompt = false;
+                    return self.handle_command(AppCommand::SelfUpdate);
+                }
                 if let AppState::Detail { data_prompt: true, data_step, .. } = &self.state {
                     return self.handle_command(match data_step {
                         DataStep::Choice => AppCommand::WantGameData,
@@ -1720,7 +1829,8 @@ impl App {
                                         *detail_focus = DetailFocus::Author;
                                         self.audio.play(crate::audio::Sfx::Navigate);
                                     } else {
-                                        *scroll_delta = (*scroll_delta - 60.0).max(0.0);
+                                    *scroll_delta = (*scroll_delta - 60.0).max(0.0);
+                                    self.audio.play(crate::audio::Sfx::Navigate);
                                     }
                                 }
                                 DetailFocus::Requirements => {
@@ -1738,6 +1848,7 @@ impl App {
                                 }
                                 DetailFocus::Primary => {
                                     *scroll_delta += 60.0;
+                                    self.audio.play(crate::audio::Sfx::Navigate);
                                 }
                                 DetailFocus::Screenshots => {
                                     *detail_focus = DetailFocus::Requirements;
@@ -1930,79 +2041,7 @@ impl App {
             }
             AppCommand::DismissInstall => self.install = None,
             AppCommand::SelfUpdate => {
-                let busy = self.install.as_ref().is_some_and(|job| !job.progress.is_finished());
-                if let Some(info) = self.self_update.clone()
-                    && !busy
-                {
-                    let mut entry = AppEntry {
-                        id: SELF_UPDATE_ID.to_owned(),
-                        titleid: "VITAFORGE".to_owned(),
-                        titleid_lower: String::new(),
-                        content_id: None,
-                        name: format!("VitaForge {}", info.tag),
-                        original_name: None,
-                        name_lower: String::new(),
-                        author: "josephinoo".to_owned(),
-                        author_lower: String::new(),
-                        description: format!("Self-update for VitaForge {}", info.tag),
-                        long_description: String::new(),
-                        requirements: String::new(),
-                        changelog: String::new(),
-                        release_page: Some("https://github.com/josephinoo/vitaForge/releases".to_owned()),
-                        category: Category::Utility,
-                        genres: Vec::new(),
-                        platform: crate::data::Platform::Vita,
-                        kind: String::new(),
-                        icon_url: None,
-                        cover_url: None,
-                        background_url: None,
-                        screenshot_urls: Vec::new(),
-                        download_url: info.vpk_url.clone(),
-                        source: None,
-                        version: info.tag.clone(),
-                        region: None,
-                        zrif: None,
-                        source_catalog: "vitadb".to_owned(),
-                        source_labels: Vec::new(),
-                        hash: String::new(),
-                        hash2: String::new(),
-                        data_url: None,
-                        data_extract_path: None,
-                        data_size_bytes: 0,
-                        game_data_languages: Vec::new(),
-                        plugin_install_path: None,
-                        plugin_config_section: None,
-                        plugin_config_line: None,
-                        size_bytes: 0,
-                        downloads: 0,
-                        rating: 5.0,
-                        updated_at: String::new(),
-                        ratings_count: 0,
-                        likes_count: 0,
-                        comments_count: 0,
-                        user_liked: false,
-                        user_rating: None,
-                        overview: Vec::new(),
-                    };
-                    entry.rebuild_derived();
-                    let app_id = entry.id.clone();
-                    let app_id_title = entry.titleid.clone();
-                    let title = entry.name.clone();
-                    let (rx, cancel) = crate::install::start(entry);
-                    let progress = rx.borrow().clone();
-                    self.install = Some(InstallJob {
-                        app_id,
-                        app_id_title,
-                        title: title.clone(),
-                        progress,
-                        rx,
-                        cancel,
-                    });
-                    self.audio.play(crate::audio::Sfx::Launch);
-                    if self.install_notifications {
-                        crate::install::notify::install_started(self.lang, &title);
-                    }
-                }
+                return self.run_self_update();
             }
             AppCommand::CancelInstall => {
                 if self.update_active {
@@ -2325,7 +2364,7 @@ impl App {
                 catalog.scroll_reset = false;
                 catalog.scroll_category_into_view = false;
             }
-            AppState::Detail { scroll_delta, .. } => *scroll_delta = 0.0,
+            AppState::Detail { .. } => {}
             _ => {}
         }
     }
