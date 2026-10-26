@@ -420,8 +420,8 @@ impl IconCache {
             ctx.forget_image(&texture_name(&url, max_side));
             let _ = self
                 .ready_count
-                .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| Some(n.saturating_sub(1)));
-            let _ = self.resident_bytes.try_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| Some(n.saturating_sub(1)));
+            let _ = self.resident_bytes.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
                 Some(n.saturating_sub(byte_size))
             });
         }

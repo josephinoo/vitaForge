@@ -11,6 +11,7 @@ pub mod pkg;
 mod promoter;
 pub mod requirements;
 mod sfo;
+pub mod tai;
 use crate::data::AppEntry;
 use anyhow::{Context, Result, bail};
 use std::collections::VecDeque;
@@ -844,35 +845,18 @@ fn validated_tai_path(path: &str) -> Result<PathBuf> {
 }
 
 fn update_tai_config(plan: &PluginInstallPlan) -> Result<bool> {
-    let existing = match std::fs::read_to_string(&plan.config_path) {
-        Ok(text) => text,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(error) => return Err(error).context("couldn't read taiHEN config.txt"),
-    };
-    let mut updated = existing.clone();
+    let mut config = tai::TaiConfig::load_or_default(plan.config_path.clone())?;
+    let mut any_added = false;
     for (section, line) in &plan.lines {
-        if let Some(next) = updated_tai_config(&updated, section, line)? {
-            updated = next;
+        if config.add_or_update_plugin(section, line, true) {
+            any_added = true;
         }
     }
-    if updated == existing {
+    if !any_added {
         return Ok(false);
     }
-    if plan.config_path.exists() {
-        let backup = PathBuf::from(format!(
-            "{}{}",
-            plan.config_path.display(),
-            TAI_CONFIG_BACKUP_SUFFIX
-        ));
-        if !backup.exists() {
-            std::fs::copy(&plan.config_path, &backup)
-                .context("couldn't back up taiHEN config.txt")?;
-        }
-    }
-    let temporary = PathBuf::from(format!("{}.vitaforge.tmp", plan.config_path.display()));
-    std::fs::write(&temporary, updated).context("couldn't write updated taiHEN config")?;
-    std::fs::rename(&temporary, &plan.config_path).context("couldn't replace taiHEN config.txt")?;
-    Ok(true)
+    let outcome = config.commit_transaction()?;
+    Ok(outcome.changed)
 }
 
 fn updated_tai_config(existing: &str, section: &str, line: &str) -> Result<Option<String>> {

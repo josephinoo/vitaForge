@@ -1374,6 +1374,7 @@ fn requirements_block(
                     if installed {
                         let dot = match item.status {
                             ReqStatus::Found => pal().success,
+                            ReqStatus::Disabled | ReqStatus::Unconfigured => pal().warning,
                             ReqStatus::Missing => pal().warning,
                             ReqStatus::Unknown => pal().text.gamma_multiply(0.25),
                         };
@@ -1386,28 +1387,56 @@ fn requirements_block(
                             .size(FONT_BODY)
                             .color(pal().text),
                     );
-                    if installed
-                        && item.status == ReqStatus::Missing
-                        && let Some(dep) =
-                            crate::install::requirements::dependency(apps, &item.text)
-                    {
-                        ui.add_space(6.0);
-                        match dep_job {
-                            Some((running_id, progress)) if running_id == dep.id => {
-                                ui.label(
-                                    egui::RichText::new(progress.label_for(lang))
-                                        .size(FONT_SMALL)
-                                        .color(pal().warning),
-                                );
-                            }
-                            _ => {
-                                if pill_button(ui, lang.get_btn(), false) {
-                                    commands.push(AppCommand::InstallDependency {
-                                        id: dep.id.clone(),
-                                        dir: dep.dir.clone(),
-                                        file: dep.file.clone(),
-                                    });
+                    if installed {
+                        if item.status == ReqStatus::Missing
+                            && let Some(dep) =
+                                crate::install::requirements::dependency(apps, &item.text)
+                        {
+                            ui.add_space(6.0);
+                            match dep_job {
+                                Some((running_id, progress)) if running_id == dep.id => {
+                                    ui.label(
+                                        egui::RichText::new(progress.label_for(lang))
+                                            .size(FONT_SMALL)
+                                            .color(pal().warning),
+                                    );
                                 }
+                                _ => {
+                                    if pill_button(ui, lang.get_btn(), false) {
+                                        commands.push(AppCommand::InstallDependency {
+                                            id: dep.id.clone(),
+                                            dir: dep.dir.clone(),
+                                            file: dep.file.clone(),
+                                        });
+                                    }
+                                }
+                            }
+                        } else if item.status == ReqStatus::Disabled
+                            && let Some(dep) =
+                                crate::install::requirements::dependency(apps, &item.text)
+                        {
+                            ui.add_space(6.0);
+                            if pill_button(ui, lang.activate_label(), false) {
+                                commands.push(AppCommand::TogglePlugin {
+                                    path: format!("{}/{}", dep.dir.trim_end_matches('/'), dep.file),
+                                    enabled: true,
+                                });
+                            }
+                        } else if item.status == ReqStatus::Unconfigured
+                            && let Some(dep) =
+                                crate::install::requirements::dependency(apps, &item.text)
+                        {
+                            ui.add_space(6.0);
+                            if pill_button(ui, lang.configure_label(), false) {
+                                let section = if dep.file.to_lowercase().ends_with(".skprx") {
+                                    "*KERNEL".to_string()
+                                } else {
+                                    "*main".to_string()
+                                };
+                                commands.push(AppCommand::ActivatePlugin {
+                                    path: format!("{}/{}", dep.dir.trim_end_matches('/'), dep.file),
+                                    section: Some(section),
+                                });
                             }
                         }
                     }

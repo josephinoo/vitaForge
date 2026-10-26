@@ -10,6 +10,7 @@ pub enum Section {
     General,
     Appearance,
     Storage,
+    Plugins,
     About,
 }
 
@@ -31,10 +32,11 @@ pub enum SubPage {
 }
 
 /// Sections in rail order with the focusable rows each one holds.
-pub const SECTIONS: [(Section, &[Row]); 4] = [
+pub const SECTIONS: [(Section, &[Row]); 5] = [
     (Section::General, &[Row::Language, Row::Notifications]),
     (Section::Appearance, &[Row::Theme]),
     (Section::Storage, &[Row::ClearIcons, Row::ClearCatalog, Row::PurgeAll]),
+    (Section::Plugins, &[]),
     (Section::About, &[]),
 ];
 
@@ -88,6 +90,7 @@ fn section_label(section: Section, lang: Language) -> &'static str {
         Section::General => lang.settings_general(),
         Section::Appearance => lang.settings_appearance(),
         Section::Storage => lang.settings_storage(),
+        Section::Plugins => lang.plugins_manager_label(),
         Section::About => lang.settings_about(),
     }
 }
@@ -97,6 +100,7 @@ fn section_icon(section: Section) -> ChromeIcon {
         Section::General => ChromeIcon::Sliders,
         Section::Appearance => ChromeIcon::Palette,
         Section::Storage => ChromeIcon::Storage,
+        Section::Plugins => ChromeIcon::Plugins,
         Section::About => ChromeIcon::Info,
     }
 }
@@ -284,6 +288,10 @@ fn content(ui: &mut egui::Ui, view: &SettingsView, commands: &mut Vec<AppCommand
     }
     if section == Section::About {
         about_card(ui, lang, view.catalog_count);
+        return;
+    }
+    if section == Section::Plugins {
+        super::plugins::render_plugins_manager(ui, lang, commands);
         return;
     }
     for (index, row) in nav.rows().iter().enumerate() {

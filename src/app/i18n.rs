@@ -484,6 +484,33 @@ impl Language {
     pub fn get_btn(self) -> &'static str {
         self.strings(|s| s.get_btn)
     }
+    pub fn activate_label(self) -> &'static str {
+        match self {
+            Language::Spanish => "Activar",
+            Language::French => "Activer",
+            Language::Italian => "Attiva",
+            Language::Portuguese => "Ativar",
+            _ => "Enable",
+        }
+    }
+    pub fn configure_label(self) -> &'static str {
+        match self {
+            Language::Spanish => "Configurar",
+            Language::French => "Configurer",
+            Language::Italian => "Configura",
+            Language::Portuguese => "Configurar",
+            _ => "Configure",
+        }
+    }
+    pub fn plugins_manager_label(self) -> &'static str {
+        match self {
+            Language::Spanish => "Manejador de Plugins",
+            Language::French => "Gestionnaire de Plugins",
+            Language::Italian => "Gestore Plugin",
+            Language::Portuguese => "Gerenciador de Plugins",
+            _ => "Plugin Manager",
+        }
+    }
     pub fn uninstall_title(self, name: &str) -> String {
         let mut args = FluentArgs::new();
         args.set("name", FluentValue::from(name));

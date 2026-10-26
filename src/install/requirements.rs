@@ -5,6 +5,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReqStatus {
     Found,
+    Disabled,
+    Unconfigured,
     Missing,
     Unknown,
 }
@@ -56,7 +58,28 @@ pub fn check_line(line: &str, titleid: &str) -> ReqStatus {
     } else {
         vita_fs::list_dir(&dir).is_ok_and(|names| !names.is_empty())
     };
-    if found { ReqStatus::Found } else { ReqStatus::Missing }
+    if !found {
+        return ReqStatus::Missing;
+    }
+    let is_tai = dir.starts_with("ur0:tai") || dir.starts_with("ux0:tai");
+    let is_plugin = item.ends_with(".skprx") || item.ends_with(".suprx");
+    if is_tai && is_plugin {
+        if let Ok(config) = super::tai::TaiConfig::load_active() {
+            if let Some((_sec, tai_item)) = config.find_plugin(&item) {
+                match tai_item {
+                    super::tai::TaiItem::Plugin { enabled: true, .. } => ReqStatus::Found,
+                    super::tai::TaiItem::Plugin { enabled: false, .. } => ReqStatus::Disabled,
+                    _ => ReqStatus::Found,
+                }
+            } else {
+                ReqStatus::Unconfigured
+            }
+        } else {
+            ReqStatus::Found
+        }
+    } else {
+        ReqStatus::Found
+    }
 }
 
 #[derive(Default)]
@@ -179,7 +202,11 @@ pub fn verdict(items: &[ReqItem], installed: bool) -> Verdict {
     if !installed {
         return Verdict::Plain;
     }
-    if items.iter().any(|item| item.status == ReqStatus::Missing) {
+    if items.iter().any(|item| {
+        item.status == ReqStatus::Missing
+            || item.status == ReqStatus::Disabled
+            || item.status == ReqStatus::Unconfigured
+    }) {
         Verdict::NeedsFiles
     } else if items.iter().any(|item| item.status == ReqStatus::Found) {
         Verdict::Ready

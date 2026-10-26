@@ -1306,6 +1306,49 @@ impl App {
                     self.start_install(entry);
                 }
             }
+            AppCommand::ActivatePlugin { path, section } => {
+                if let Ok(mut config) = crate::install::tai::TaiConfig::load_active() {
+                    let sec = section.unwrap_or_else(|| {
+                        if path.to_lowercase().ends_with(".skprx") {
+                            "*KERNEL".to_string()
+                        } else {
+                            "*main".to_string()
+                        }
+                    });
+                    config.add_or_update_plugin(&sec, &path, true);
+                    let _ = config.commit_transaction();
+                    crate::install::requirements::invalidate_all();
+                }
+            }
+            AppCommand::TogglePlugin { path, enabled } => {
+                if let Ok(mut config) = crate::install::tai::TaiConfig::load_active() {
+                    config.set_plugin_enabled(&path, enabled);
+                    let _ = config.commit_transaction();
+                    crate::install::requirements::invalidate_all();
+                }
+            }
+            AppCommand::RemovePlugin { path } => {
+                if let Ok(mut config) = crate::install::tai::TaiConfig::load_active() {
+                    config.remove_plugin(&path);
+                    let _ = config.commit_transaction();
+                    crate::install::requirements::invalidate_all();
+                }
+            }
+            AppCommand::ConsolidateTaiConfig => {
+                let _ = crate::install::tai::TaiConfig::consolidate_ux0_into_ur0();
+                crate::install::requirements::invalidate_all();
+            }
+            AppCommand::AutoSortKernel => {
+                if let Ok(mut config) = crate::install::tai::TaiConfig::load_active() {
+                    if config.auto_sort_kernel() {
+                        let _ = config.commit_transaction();
+                        crate::install::requirements::invalidate_all();
+                    }
+                }
+            }
+            AppCommand::SafeReboot => {
+                let _ = crate::install::tai::safe_reboot();
+            }
             AppCommand::UpdateAll => {
                 if self.update_active || self.install_busy() {
                     return Ok(());

@@ -4,6 +4,7 @@ pub mod footer;
 pub mod grid;
 pub mod header;
 pub mod loading;
+pub mod plugins;
 pub mod settings;
 pub mod sidebar;
 pub mod theme;
