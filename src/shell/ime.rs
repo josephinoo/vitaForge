@@ -2,6 +2,8 @@
 pub enum ImePurpose {
     Search,
     Comment,
+    Report,
+    ProfileName,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

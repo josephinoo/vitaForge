@@ -15,6 +15,7 @@ const SCAN_LOG: &str = "ux0:data/vitaforge/scan.log";
 pub(super) const HASH_LEN: usize = 32;
 const RESCAN_INTERVAL: Duration = Duration::from_secs(60);
 const INSTALLED_CACHE_FILE: &str = "ux0:data/vitaforge/installed_cache.json";
+const PLUGIN_KEY_PREFIX: &str = "PLUGIN-";
 const HASH_CHUNK: usize = 64 * 1024;
 const HASH_BATCH: usize = 8;
 const HASH_GAP: Duration = Duration::from_millis(15);
@@ -29,6 +30,9 @@ struct Wanted {
 }
 impl Wanted {
     fn from_entry(entry: &AppEntry) -> Option<Self> {
+        if entry.platform == Platform::Plugin {
+            return None;
+        }
         let psp = matches!(
             entry.platform,
             Platform::Psp | Platform::NpsPsp | Platform::NpsPsx
@@ -62,6 +66,10 @@ impl Wanted {
     }
 }
 pub fn index_key(entry: &AppEntry) -> String {
+    if entry.platform == Platform::Plugin {
+        // Plugins have no app folder; their state comes from the plugin registry.
+        return format!("{PLUGIN_KEY_PREFIX}{}", entry.id.trim());
+    }
     if matches!(
         entry.platform,
         Platform::Psp | Platform::NpsPsp | Platform::NpsPsx
@@ -230,13 +238,12 @@ impl InstalledIndex {
         let stamped_key = key.clone();
         tokio::task::spawn_blocking(move || {
             let roots: &[&str] = if psp { PSP_ROOTS } else { APP_ROOTS };
-            let app_ver = read_version_file(&stamped_key).or_else(|| {
-                roots.iter().find_map(|root| {
-                    super::sfo::read_app_ver(&PathBuf::from(format!(
-                        "{root}/{folder}/sce_sys/param.sfo"
-                    )))
-                })
+            let sfo_ver = roots.iter().find_map(|root| {
+                super::sfo::read_app_ver(&PathBuf::from(format!(
+                    "{root}/{folder}/sce_sys/param.sfo"
+                )))
             });
+            let app_ver = resolve_version(read_version_file(&stamped_key), sfo_ver);
             index.version_cache.lock().unwrap().insert(key, app_ver);
             ctx.request_repaint();
         });
@@ -302,7 +309,9 @@ impl InstalledIndex {
         let snapshot = {
             let mut states = self.states.lock().unwrap();
             if authoritative {
-                *states = found;
+                // The folder scan knows nothing about plugins: keep what the registry said.
+                states.retain(|key, _| key.starts_with(PLUGIN_KEY_PREFIX));
+                states.extend(found);
             } else {
                 states.extend(found);
             }
@@ -321,6 +330,14 @@ impl InstalledIndex {
         save_installed_cache(&states);
         self.version_cache.lock().unwrap().remove(key);
         clear_pending_install(key);
+    }
+    /// Replaces every plugin's state with the registry's view of it.
+    pub fn set_plugin_states(&self, plugins: impl IntoIterator<Item = (String, InstallState)>) {
+        let mut states = self.states.lock().unwrap();
+        states.retain(|key, _| !key.starts_with(PLUGIN_KEY_PREFIX));
+        states.extend(plugins.into_iter().map(|(id, state)| (format!("{PLUGIN_KEY_PREFIX}{id}"), state)));
+        *self.counts.lock().unwrap() = count_states(&states);
+        save_installed_cache(&states);
     }
     pub fn mark_installed(&self, key: &str) {
         if key.is_empty() {
@@ -529,19 +546,17 @@ fn scan(
         let Some(app_dir) = found.get(key) else {
             continue;
         };
-        let stamped_version = read_version_file(key);
-        let sfo_version = if stamped_version.is_none() {
-            let psp = entries.first().is_some_and(|e| e.psp);
-            let sfo_name = if psp {
-                "PARAM.SFO"
-            } else {
-                "sce_sys/param.sfo"
-            };
-            super::sfo::read_app_ver(&app_dir.join(sfo_name))
+        let psp = entries.first().is_some_and(|e| e.psp);
+        let sfo_name = if psp {
+            "PARAM.SFO"
         } else {
-            None
+            "sce_sys/param.sfo"
         };
-        let effective_version = stamped_version.as_deref().or(sfo_version.as_deref());
+        let resolved_version = resolve_version(
+            read_version_file(key),
+            super::sfo::read_app_ver(&app_dir.join(sfo_name)),
+        );
+        let effective_version = resolved_version.as_deref();
         let already_current = effective_version.is_some_and(|installed| {
             entries
                 .iter()
@@ -603,6 +618,20 @@ fn scan(
         publish(batch, false);
     }
     write_log(&log);
+}
+/// The install-time stamp wins unless param.sfo is newer in the same format, which means the app
+/// was updated outside VitaForge. Differing segment counts ("01.04" vs "0.1.4") are never compared.
+pub fn resolve_version(stamp: Option<String>, sfo: Option<String>) -> Option<String> {
+    let segments = |v: &str| v.split(|c: char| !c.is_ascii_digit()).filter(|s| !s.is_empty()).count();
+    match (stamp, sfo) {
+        (Some(stamp), Some(sfo))
+            if segments(&stamp) == segments(&sfo) && version_is_older(&stamp, &sfo) =>
+        {
+            Some(sfo)
+        }
+        (stamp @ Some(_), _) => stamp,
+        (None, sfo) => sfo,
+    }
 }
 pub fn version_is_older(installed: &str, catalog: &str) -> bool {
     fn parts(v: &str) -> Option<Vec<u64>> {
@@ -906,9 +935,20 @@ pub(super) fn md5_file(path: &Path) -> Option<String> {
 mod tests {
     use super::{
         HASH_CACHE_DIR, InstallState, compare, count_states, format_ymd, hash_file_path,
-        hash_state, md5_file, read_hash_file, version_is_older,
+        hash_state, md5_file, read_hash_file, resolve_version, version_is_older,
     };
     use std::collections::HashMap;
+    #[test]
+    fn resolve_version_prefers_newer_sfo_in_same_format() {
+        let pick = |stamp: &str, sfo: &str| resolve_version(Some(stamp.into()), Some(sfo.into()));
+        assert_eq!(pick("0.55", "00.57").as_deref(), Some("00.57"));
+        assert!(!version_is_older("00.57", "0.55"));
+        assert_eq!(pick("0.57", "00.55").as_deref(), Some("0.57"));
+        // different segment counts are never compared
+        assert_eq!(pick("0.1.4", "01.05").as_deref(), Some("0.1.4"));
+        assert_eq!(resolve_version(None, Some("01.00".into())).as_deref(), Some("01.00"));
+        assert_eq!(resolve_version(Some("0.1".into()), None).as_deref(), Some("0.1"));
+    }
     #[test]
     fn count_states_counts_outdated_as_installed_too() {
         let states = HashMap::from([

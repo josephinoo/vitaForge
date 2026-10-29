@@ -30,6 +30,8 @@ fn purpose_title(purpose: ImePurpose) -> &'static str {
     match purpose {
         ImePurpose::Search => "Search",
         ImePurpose::Comment => "Comment",
+        ImePurpose::Report => "Report",
+        ImePurpose::ProfileName => "Profile name",
     }
 }
 
@@ -37,6 +39,8 @@ fn purpose_max_len(purpose: ImePurpose) -> usize {
     match purpose {
         ImePurpose::Search => 64,
         ImePurpose::Comment => 256,
+        ImePurpose::Report => 256,
+        ImePurpose::ProfileName => 32,
     }
 }
 
@@ -69,7 +73,8 @@ pub fn open(
 
     let enter_label = match purpose {
         ImePurpose::Search => SCE_IME_ENTER_LABEL_SEARCH,
-        ImePurpose::Comment => SCE_IME_ENTER_LABEL_SEND,
+        ImePurpose::Comment | ImePurpose::Report => SCE_IME_ENTER_LABEL_SEND,
+        ImePurpose::ProfileName => SCE_IME_ENTER_LABEL_SEND,
     };
 
     let result = unsafe {

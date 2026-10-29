@@ -1,14 +1,17 @@
 use crate::app::i18n::Language;
 use crate::app::ui::chrome_icons::{self, ChromeIcon};
 use crate::app::ui::theme::*;
-use crate::app::ui::widgets::radio_row;
+use crate::app::ui::widgets::{button_texture, radio_row, Glyph};
 use crate::data::cache_manager::{format_bytes, CacheStats};
 use crate::input::AppCommand;
+use crate::install::tai::Snapshot;
+use crate::install::tai::config::LineStyle;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Section {
     General,
     Appearance,
+    Plugins,
     Storage,
     About,
 }
@@ -21,6 +24,13 @@ pub enum Row {
     ClearIcons,
     ClearCatalog,
     PurgeAll,
+    PluginManager,
+    ConfigViewer,
+    ConfigBackups,
+    Profiles,
+    SafeMode,
+    MigrateConfig,
+    Reboot,
 }
 
 /// A choice list that replaces the section's rows until confirmed or backed out of.
@@ -28,12 +38,23 @@ pub enum Row {
 pub enum SubPage {
     Language,
     Theme,
+    /// Every config.txt plugin line, grouped by section.
+    Plugins,
+    /// config.txt as text, read-only.
+    Config,
+    Backups,
+    /// Saved plugin setups: save the current one, apply or delete another.
+    Profiles,
 }
 
 /// Sections in rail order with the focusable rows each one holds.
-pub const SECTIONS: [(Section, &[Row]); 4] = [
+pub const SECTIONS: [(Section, &[Row]); 5] = [
     (Section::General, &[Row::Language, Row::Notifications]),
     (Section::Appearance, &[Row::Theme]),
+    (
+        Section::Plugins,
+        &[Row::PluginManager, Row::ConfigViewer, Row::ConfigBackups, Row::Profiles, Row::SafeMode, Row::MigrateConfig, Row::Reboot],
+    ),
     (Section::Storage, &[Row::ClearIcons, Row::ClearCatalog, Row::PurgeAll]),
     (Section::About, &[]),
 ];
@@ -49,11 +70,24 @@ pub struct SettingsNav {
     pub sub_index: usize,
     /// Saved theme, restored when a theme preview is backed out of.
     pub theme_before: ThemeId,
+    /// Length of the open plugin list, config view or backup list.
+    pub list_len: usize,
+    /// □ in the plugin list: ↑/↓ carry the focused line instead of moving focus.
+    pub moving: bool,
 }
 
 impl SettingsNav {
     pub fn new() -> Self {
-        Self { section: 0, row: 0, rail: false, sub: None, sub_index: 0, theme_before: active_theme() }
+        Self {
+            section: 0,
+            row: 0,
+            rail: false,
+            sub: None,
+            sub_index: 0,
+            theme_before: active_theme(),
+            list_len: 0,
+            moving: false,
+        }
     }
 
     pub fn rows(&self) -> &'static [Row] {
@@ -78,6 +112,7 @@ impl SettingsNav {
         match self.sub {
             Some(SubPage::Language) => Language::ALL.len(),
             Some(SubPage::Theme) => ThemeId::ALL.len(),
+            Some(SubPage::Plugins | SubPage::Config | SubPage::Backups | SubPage::Profiles) => self.list_len,
             None => 0,
         }
     }
@@ -87,6 +122,7 @@ fn section_label(section: Section, lang: Language) -> &'static str {
     match section {
         Section::General => lang.settings_general(),
         Section::Appearance => lang.settings_appearance(),
+        Section::Plugins => lang.settings_plugins(),
         Section::Storage => lang.settings_storage(),
         Section::About => lang.settings_about(),
     }
@@ -96,6 +132,7 @@ fn section_icon(section: Section) -> ChromeIcon {
     match section {
         Section::General => ChromeIcon::Sliders,
         Section::Appearance => ChromeIcon::Palette,
+        Section::Plugins => ChromeIcon::Plugins,
         Section::Storage => ChromeIcon::Storage,
         Section::About => ChromeIcon::Info,
     }
@@ -140,7 +177,20 @@ pub(crate) struct SettingsView<'a> {
     pub cache_notice: Option<&'a str>,
     pub install_notifications: bool,
     pub purge_armed: bool,
+    pub plugins: PluginsView<'a>,
     pub appear: f32,
+}
+
+/// What Settings › Plugins shows; `tai` is `None` until config.txt was read.
+pub(crate) struct PluginsView<'a> {
+    pub tai: Option<&'a Snapshot>,
+    /// Catalog ids with a newer version than the installed one.
+    pub outdated: &'a [String],
+    pub pending_reboot: bool,
+    pub reboot_armed: bool,
+    /// △ in the plugin list or ✕ in the backups waits for a second press.
+    pub armed: bool,
+    pub notice: Option<&'a str>,
 }
 
 const RAIL_WIDTH: f32 = 196.0;
@@ -150,16 +200,11 @@ const ROW_HEIGHT: f32 = 56.0;
 /// open choice list) on the right. The footer hints stay visible below it.
 pub(crate) fn settings_page(ctx: &egui::Context, view: SettingsView) -> Vec<AppCommand> {
     let mut commands = Vec::new();
-    let screen = ctx.screen_rect();
-    // The footer panel can end up taller than HINT_BAR_HEIGHT; stop at its real top edge.
-    let footer_top = egui::containers::panel::PanelState::load(ctx, egui::Id::new("hints"))
-        .map_or(screen.max.y - HINT_BAR_HEIGHT, |panel| panel.rect.top());
-    let page = egui::Rect::from_min_max(screen.min, egui::pos2(screen.max.x, footer_top));
-    egui::Area::new(egui::Id::new("settings_page"))
-        .order(egui::Order::Foreground)
-        .fixed_pos(page.min)
+    // A CentralPanel is whatever the footer panel leaves free, so nothing can reach under it.
+    egui::CentralPanel::default()
+        .frame(egui::Frame::NONE)
         .show(ctx, |ui| {
-            ui.set_clip_rect(page);
+            let page = ui.max_rect();
             ui.multiply_opacity(view.appear);
             // Swallow clicks so they never reach the catalog underneath.
             let _ = ui.interact(page, ui.id().with("blocker"), egui::Sense::click());
@@ -180,21 +225,66 @@ pub(crate) fn settings_page(ctx: &egui::Context, view: SettingsView) -> Vec<AppC
                         ui.available_size(),
                         egui::Layout::top_down(egui::Align::Min),
                         |ui| {
-                            egui::ScrollArea::vertical()
+                            // Back on the first row: the title and hint above it scroll into view too.
+                            let focus_key = egui::Id::new("settings_scroll_focus");
+                            let focus = (view.nav.section, view.nav.sub, view.nav.sub_index, view.nav.row);
+                            let went_to_first = ctx.data_mut(|d| {
+                                let previous = d.get_temp::<(usize, Option<SubPage>, usize, usize)>(focus_key);
+                                d.insert_temp(focus_key, focus);
+                                let first = if focus.1.is_some() { focus.2 == 0 } else { focus.3 == 0 };
+                                previous.is_some_and(|p| p != focus) && first
+                            });
+                            let pending = ctx.data_mut(|d| d.remove_temp::<f32>(egui::Id::new("settings_pending_offset")));
+                            ctx.data_mut(|d| d.insert_temp::<Option<egui::Rect>>(egui::Id::new("settings_focus_rect"), None));
+                            let mut area = egui::ScrollArea::vertical()
                                 .max_height(page.bottom() - ui.cursor().top() - 10.0)
                                 .id_salt(("settings_content", view.nav.section, view.nav.sub))
-                                .auto_shrink([false, false])
-                                .show(ui, |ui| {
+                                .auto_shrink([false, false]);
+                            if went_to_first {
+                                ctx.data_mut(|d| d.remove_temp::<bool>(egui::Id::new("settings_follow")));
+                                area = area.vertical_scroll_offset(0.0);
+                            } else if let Some(offset) = pending {
+                                area = area.vertical_scroll_offset(offset);
+                            }
+                            let output = area.show(ui, |ui| {
                                     ui.set_width(ui.available_width() - SCROLLBAR_RESERVE);
                                     content(ui, &view, &mut commands);
                                     ui.add_space(14.0);
                                 });
+                            follow_focus(ctx, &output);
                         },
                     );
                 });
             });
         });
     commands
+}
+
+/// Moves the scroll straight to the focused row (no animation, so holding ↑/↓ never lags behind
+/// and ↑ can't get stuck): the offset is set for the next frame until the row is on screen.
+fn follow_focus<T>(ctx: &egui::Context, output: &egui::containers::scroll_area::ScrollAreaOutput<T>) {
+    let follow = egui::Id::new("settings_follow");
+    if !ctx.data(|d| d.get_temp::<bool>(follow)).unwrap_or(false) {
+        return;
+    }
+    let Some(row) = ctx.data(|d| d.get_temp::<Option<egui::Rect>>(egui::Id::new("settings_focus_rect"))).flatten() else { return };
+    let view = output.inner_rect;
+    let margin = 10.0;
+    let delta = if row.top() < view.top() + margin {
+        row.top() - (view.top() + margin)
+    } else if row.bottom() > view.bottom() - margin {
+        row.bottom() - (view.bottom() - margin)
+    } else {
+        0.0
+    };
+    ctx.data_mut(|d| {
+        if delta.abs() < 0.5 {
+            d.remove_temp::<bool>(follow);
+        } else {
+            d.insert_temp(egui::Id::new("settings_pending_offset"), (output.state.offset.y + delta).max(0.0));
+        }
+    });
+    ctx.request_repaint();
 }
 
 fn header(ui: &mut egui::Ui, lang: Language, commands: &mut Vec<AppCommand>) {
@@ -277,12 +367,32 @@ fn content(ui: &mut egui::Ui, view: &SettingsView, commands: &mut Vec<AppCommand
             ui.add_space(24.0);
             return;
         }
+        Some(SubPage::Plugins) => {
+            plugin_list(ui, view, commands);
+            return;
+        }
+        Some(SubPage::Config) => {
+            config_view(ui, view);
+            return;
+        }
+        Some(SubPage::Backups) => {
+            backup_list(ui, view, commands);
+            return;
+        }
+        Some(SubPage::Profiles) => {
+            profile_list(ui, view, commands);
+            return;
+        }
         None => {}
     }
     let section = SECTIONS[nav.section].0;
     section_title(ui, section_label(section, lang));
     if section == Section::Storage {
         storage_card(ui, lang, view.stats);
+        ui.add_space(4.0);
+    }
+    if section == Section::Plugins {
+        tai_card(ui, lang, &view.plugins);
         ui.add_space(4.0);
     }
     if section == Section::About {
@@ -320,6 +430,69 @@ fn content(ui: &mut egui::Ui, view: &SettingsView, commands: &mut Vec<AppCommand
                     }
                 })
             }
+            Row::PluginManager | Row::ConfigViewer | Row::ConfigBackups | Row::Profiles => {
+                let tai = view.plugins.tai;
+                let (icon, label, hint, count) = match row {
+                    Row::PluginManager => (
+                        ChromeIcon::Plugins,
+                        lang.tr("settings-plugin-manager"),
+                        lang.tr("settings-plugin-manager-hint"),
+                        tai.map(|t| t.plugin_count().to_string()),
+                    ),
+                    Row::ConfigViewer => (
+                        ChromeIcon::Info,
+                        lang.tr("settings-config-viewer"),
+                        lang.tr("settings-config-viewer-hint"),
+                        tai.map(|t| t.path.display().to_string()),
+                    ),
+                    Row::Profiles => (
+                        ChromeIcon::Sliders,
+                        lang.tr("settings-profiles"),
+                        lang.tr("settings-profiles-hint"),
+                        tai.map(|t| t.profiles.len().to_string()),
+                    ),
+                    _ => (
+                        ChromeIcon::Database,
+                        lang.tr("settings-config-backups"),
+                        lang.tr("settings-config-backups-hint"),
+                        tai.map(|t| t.backups.len().to_string()),
+                    ),
+                };
+                setting_row(ui, icon, &label, &hint, focused, false, |ui| {
+                    chevron(ui);
+                    if let Some(count) = count {
+                        value(ui, &count);
+                    }
+                })
+            }
+            Row::SafeMode => {
+                let on = view.plugins.tai.is_some_and(Snapshot::safe_mode);
+                setting_row(ui, ChromeIcon::Alert, &lang.tr("settings-safe-mode"), &lang.tr("settings-safe-mode-hint"), focused, false, |ui| {
+                    toggle(ui, on);
+                })
+            }
+            Row::MigrateConfig => {
+                let both = view.plugins.tai.is_some_and(|t| t.both_exist);
+                setting_row(ui, ChromeIcon::Storage, &lang.tr("settings-migrate-config"), &lang.tr("settings-migrate-config-hint"), focused, false, |ui| {
+                    if both {
+                        pill(ui, &lang.tr("tai-both-configs-short"), pal().warning, Some(ChromeIcon::Alert));
+                    } else {
+                        value(ui, &lang.tr("tai-migrate-not-needed"));
+                    }
+                })
+            }
+            Row::Reboot => {
+                let plugins = &view.plugins;
+                setting_row(ui, ChromeIcon::Recent, &lang.tr("settings-reboot"), &lang.tr("settings-reboot-hint"), focused, true, |ui| {
+                    if plugins.reboot_armed {
+                        pill(ui, &lang.tr("settings-reboot-confirm"), pal().danger, None);
+                    } else if let Some(notice) = plugins.notice.filter(|_| focused) {
+                        pill(ui, notice, pal().success, Some(ChromeIcon::Check));
+                    } else if plugins.pending_reboot {
+                        pill(ui, &lang.tr("tai-pending-reboot-short"), pal().warning, None);
+                    }
+                })
+            }
         };
         if clicked {
             commands.push(AppCommand::SettingsRow(index));
@@ -336,9 +509,59 @@ fn section_title(ui: &mut egui::Ui, title: &str) {
 fn sub_title(ui: &mut egui::Ui, title: &str, hint: Option<&str>) {
     section_title(ui, title);
     if let Some(hint) = hint {
-        ui.label(egui::RichText::new(hint).size(FONT_SMALL).color(pal().text_faint));
+        glyph_text(ui, hint, FONT_SMALL, pal().text_faint, false);
         ui.add_space(2.0);
     }
+}
+
+/// The PlayStation button the translations spell as ✕ ○ △ □ (the UI font has no such glyphs).
+fn button_glyph(c: char) -> Option<Glyph> {
+    match c {
+        '✕' => Some(Glyph::Cross),
+        '○' => Some(Glyph::Circle),
+        '△' => Some(Glyph::Triangle),
+        '□' => Some(Glyph::Square),
+        _ => None,
+    }
+}
+
+/// One line of text where ✕ ○ △ □ are drawn with the bundled button icons.
+fn glyph_text(ui: &mut egui::Ui, text: &str, size: f32, color: egui::Color32, strong: bool) {
+    // Translations name the buttons as [cross] [circle] [triangle] [square], never as symbols.
+    let text = text.replace("[cross]", "✕").replace("[circle]", "○").replace("[triangle]", "△").replace("[square]", "□");
+    let text = text.as_str();
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 3.0;
+        let mut run = String::new();
+        let flush = |ui: &mut egui::Ui, run: &mut String| {
+            if !run.is_empty() {
+                let mut label = egui::RichText::new(std::mem::take(run)).size(size).color(color);
+                if strong {
+                    label = label.strong();
+                }
+                ui.label(label);
+            }
+        };
+        for c in text.chars() {
+            match button_glyph(c) {
+                Some(glyph) => {
+                    flush(ui, &mut run);
+                    let side = size + 2.0;
+                    let (rect, _) = ui.allocate_exact_size(egui::Vec2::splat(side), egui::Sense::hover());
+                    if let Some(texture) = button_texture(ui.ctx(), glyph) {
+                        ui.painter().image(
+                            texture.id(),
+                            rect,
+                            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                            egui::Color32::WHITE,
+                        );
+                    }
+                }
+                None => run.push(c),
+            }
+        }
+        flush(ui, &mut run);
+    });
 }
 
 /// Icon, title and one-line hint on the left; `control` lays out right-to-left.
@@ -357,33 +580,45 @@ fn setting_row(
     if focused {
         ui.painter().rect_stroke(rect, RADIUS_MD, egui::Stroke::new(2.0_f32, pal().focus), egui::StrokeKind::Inside);
         scroll_on_focus_change(ui, &response);
+        #[cfg(test)]
+        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("test_focus_rect"), (rect, ui.clip_rect())));
     }
     let title_color = if destructive { pal().danger } else { pal().text };
     let icon_color = if destructive { pal().danger } else if focused { pal().text } else { pal().text_dim };
     let icon_rect = egui::Rect::from_center_size(egui::pos2(rect.left() + 26.0, rect.center().y), egui::Vec2::splat(18.0));
     chrome_icons::paint(ui, icon, icon_rect, icon_color);
     let text_x = rect.left() + 50.0;
-    ui.painter().text(egui::pos2(text_x, rect.center().y - 9.0), egui::Align2::LEFT_CENTER, title, font(FONT_BODY), title_color);
-    ui.painter().text(egui::pos2(text_x, rect.center().y + 10.0), egui::Align2::LEFT_CENTER, hint, font(FONT_MICRO), pal().text_faint);
     let control_rect = egui::Rect::from_min_max(egui::pos2(rect.center().x, rect.top()), egui::pos2(rect.right() - 14.0, rect.bottom()));
     // A child ui draws inside the row without taking space in the list layout.
-    control(&mut ui.new_child(
+    let mut control_ui = ui.new_child(
         egui::UiBuilder::new().max_rect(control_rect).layout(egui::Layout::right_to_left(egui::Align::Center)),
-    ));
+    );
+    control(&mut control_ui);
+    // The hint stops short of whatever the control drew, ending in "…" when it doesn't fit.
+    let used = control_ui.min_rect();
+    let hint_right = if used.width() > 0.0 { used.left() - 12.0 } else { rect.right() - 14.0 };
+    let mut title_job = egui::text::LayoutJob::simple_singleline(title.to_owned(), font(FONT_BODY), title_color);
+    title_job.wrap = egui::text::TextWrapping { max_width: (hint_right - text_x).max(0.0), max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
+    let title_galley = ui.painter().layout_job(title_job);
+    ui.painter().galley(egui::pos2(text_x, rect.center().y - 9.0 - title_galley.size().y / 2.0), title_galley, title_color);
+    let mut job = egui::text::LayoutJob::simple_singleline(hint.to_owned(), font(FONT_MICRO), pal().text_faint);
+    job.wrap = egui::text::TextWrapping { max_width: (hint_right - text_x).max(0.0), max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
+    let galley = ui.painter().layout_job(job);
+    ui.painter().galley(egui::pos2(text_x, rect.center().y + 10.0 - galley.size().y / 2.0), galley, pal().text_faint);
     response.clicked()
 }
 
-/// Scroll to the focused row only when focus moves, so a manual scroll isn't yanked back every frame.
+/// Remembers where the focused row is and asks `settings_page` to bring it into view, but only
+/// when focus moved, so a manual scroll isn't yanked back every frame.
 fn scroll_on_focus_change(ui: &egui::Ui, response: &egui::Response) {
     let key = egui::Id::new("settings_last_focus");
-    let changed = ui.ctx().data_mut(|d| {
-        let changed = d.get_temp::<egui::Id>(key) != Some(response.id);
+    ui.ctx().data_mut(|d| {
+        d.insert_temp(egui::Id::new("settings_focus_rect"), Some(response.rect));
+        if d.get_temp::<egui::Id>(key) != Some(response.id) {
+            d.insert_temp(egui::Id::new("settings_follow"), true);
+        }
         d.insert_temp(key, response.id);
-        changed
     });
-    if changed {
-        response.scroll_to_me(None);
-    }
 }
 
 fn value(ui: &mut egui::Ui, text: &str) {
@@ -409,7 +644,7 @@ fn pill(ui: &mut egui::Ui, label: &str, color: egui::Color32, icon: Option<Chrom
                     let (rect, _) = ui.allocate_exact_size(egui::Vec2::splat(12.0), egui::Sense::hover());
                     chrome_icons::paint(ui, icon, rect, color);
                 }
-                ui.label(egui::RichText::new(label).size(FONT_MICRO).strong().color(color));
+                glyph_text(ui, label, FONT_MICRO, color, true);
             });
         });
 }
@@ -520,6 +755,255 @@ fn storage_card(ui: &mut egui::Ui, lang: Language, stats: &CacheStats) {
         });
 }
 
+/// Which config.txt is live, how many plugins it loads, and what needs attention.
+fn tai_card(ui: &mut egui::Ui, lang: Language, plugins: &PluginsView) {
+    egui::Frame::new()
+        .fill(pal().text.gamma_multiply(0.06))
+        .corner_radius(RADIUS_MD)
+        .inner_margin(egui::Margin::symmetric(16, 12))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            let Some(tai) = plugins.tai else {
+                ui.label(egui::RichText::new(lang.tr("tai-reading")).size(FONT_SMALL).color(pal().text_dim));
+                return;
+            };
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(lang.tr("tai-active-config")).size(FONT_SMALL).color(pal().text_dim));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let count = tai.plugin_count().to_string();
+                    ui.label(
+                        egui::RichText::new(lang.tr_args("tai-plugins-count", &[("count", &count)]))
+                            .size(FONT_SMALL)
+                            .strong()
+                            .color(pal().text),
+                    );
+                });
+            });
+            ui.label(egui::RichText::new(tai.path.display().to_string()).size(FONT_TITLE).strong().color(pal().text));
+            let mut warn = |text: String, color: egui::Color32| {
+                ui.add_space(4.0);
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    let (rect, _) = ui.allocate_exact_size(egui::Vec2::splat(12.0), egui::Sense::hover());
+                    chrome_icons::paint(ui, ChromeIcon::Alert, rect, color);
+                    ui.label(egui::RichText::new(text).size(FONT_MICRO).color(color));
+                });
+            };
+            warn(lang.tr("tai-beta"), pal().warning);
+            if let Some(error) = &tai.error {
+                warn(error.clone(), pal().danger);
+            }
+            if tai.both_exist {
+                warn(lang.tr("tai-both-configs"), pal().warning);
+            }
+            if tai.safe_mode() {
+                warn(lang.tr("tai-safe-on"), pal().warning);
+            }
+            if plugins.pending_reboot {
+                warn(lang.tr("tai-pending-reboot"), pal().accent);
+            }
+        });
+}
+
+fn list_hint(ui: &mut egui::Ui, text: &str) {
+    glyph_text(ui, text, FONT_SMALL, pal().text_faint, false);
+    ui.add_space(2.0);
+}
+
+/// Plugin lines grouped under their `*SECTION` header. ✕ switches one on or
+/// off, □ picks it up to reorder, △ removes it (twice).
+fn plugin_list(ui: &mut egui::Ui, view: &SettingsView, commands: &mut Vec<AppCommand>) {
+    let lang = view.lang;
+    let nav = view.nav;
+    let plugins = &view.plugins;
+    section_title(ui, &lang.tr("settings-plugin-manager"));
+    let hint = if nav.moving { lang.tr("tai-move-hint") } else { lang.tr("tai-list-hint") };
+    list_hint(ui, &hint);
+    let Some(tai) = plugins.tai else { return };
+    if tai.entries.is_empty() {
+        list_hint(ui, &lang.tr("tai-no-plugins"));
+        return;
+    }
+    let mut section: Option<&str> = None;
+    for (index, entry) in tai.entries.iter().enumerate() {
+        if section != entry.section.as_deref() || index == 0 {
+            section = entry.section.as_deref();
+            ui.add_space(6.0);
+            ui.label(
+                egui::RichText::new(section.unwrap_or("—"))
+                    .size(FONT_SMALL)
+                    .strong()
+                    .monospace()
+                    .color(pal().accent),
+            );
+        }
+        let focused = index == nav.sub_index;
+        let record = tai.registry.owner_of(&entry.path);
+        let title = tai.label(entry);
+        let mut detail = entry.path.clone();
+        if let Some(version) = record.map(|r| r.version.as_str()).filter(|v| !v.is_empty()) {
+            detail = format!("{detail}  ·  {version}");
+        }
+        let icon = if entry.protected { ChromeIcon::Check } else { ChromeIcon::Plugins };
+        let missing = tai.missing.get(index).copied().unwrap_or(false);
+        let outdated = record.is_some_and(|r| plugins.outdated.contains(&r.id));
+        let clicked = setting_row(ui, icon, &title, &detail, focused, false, |ui| {
+            if entry.protected {
+                pill(ui, &lang.tr("tai-protected"), pal().text_faint, None);
+            } else if focused && nav.moving {
+                pill(ui, &lang.tr("tai-moving"), pal().accent, None);
+            } else if focused && plugins.armed {
+                pill(ui, &lang.tr("tai-remove-confirm"), pal().danger, Some(ChromeIcon::Trash));
+            } else {
+                toggle(ui, entry.enabled);
+            }
+            if missing {
+                pill(ui, &lang.tr("tai-missing-file"), pal().danger, Some(ChromeIcon::Alert));
+            }
+            if outdated {
+                pill(ui, &lang.tr("tai-update-available"), pal().warning, Some(ChromeIcon::UpdateAvailable));
+            }
+            if record.is_none() && !entry.protected {
+                value(ui, &lang.tr("tai-manual"));
+            }
+        });
+        if clicked {
+            commands.push(AppCommand::SettingsRow(index));
+        }
+    }
+    if let Some(notice) = plugins.notice {
+        ui.add_space(6.0);
+        list_hint(ui, notice);
+    }
+    ui.add_space(24.0);
+}
+
+/// config.txt exactly as taiHEN reads it, with line numbers.
+fn config_view(ui: &mut egui::Ui, view: &SettingsView) {
+    let lang = view.lang;
+    let Some(tai) = view.plugins.tai else { return };
+    sub_title(ui, &tai.path.display().to_string(), Some(&lang.tr("settings-config-viewer-hint")));
+    // Each line paints its own slice of the dark panel: a Frame's background came out unclipped
+    // at the footer, a row painted with the same painter as its text always clips with it.
+    ui.spacing_mut().item_spacing.y = 0.0;
+    let total = tai.config.raw_lines().count();
+    for (number, (text, style)) in tai.config.raw_lines().enumerate() {
+        let color = match style {
+            LineStyle::Header => pal().accent,
+            LineStyle::Entry => pal().text,
+            LineStyle::Disabled => pal().warning,
+            LineStyle::Comment => pal().text_faint,
+        };
+        let (rect, response) =
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), FONT_SMALL + 8.0), egui::Sense::hover());
+        let r = RADIUS_MD as u8;
+        let rounding = egui::CornerRadius {
+            nw: if number == 0 { r } else { 0 },
+            ne: if number == 0 { r } else { 0 },
+            sw: if number + 1 == total { r } else { 0 },
+            se: if number + 1 == total { r } else { 0 },
+        };
+        ui.painter().rect_filled(rect, rounding, pal().bg_deep);
+        ui.painter().text(
+            egui::pos2(rect.left() + 12.0, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            format!("{:>3}", number + 1),
+            egui::FontId::monospace(FONT_MICRO),
+            pal().text_faint,
+        );
+        // One row per line: a long line ends in "…" instead of running off the screen.
+        let text_x = rect.left() + 46.0;
+        let mut job = egui::text::LayoutJob::simple_singleline(text.to_owned(), egui::FontId::monospace(FONT_SMALL), color);
+        job.wrap = egui::text::TextWrapping {
+            max_width: (rect.right() - 12.0 - text_x).max(0.0),
+            max_rows: 1,
+            break_anywhere: true,
+            overflow_character: Some('…'),
+        };
+        let galley = ui.painter().layout_job(job);
+        ui.painter().galley(egui::pos2(text_x, rect.center().y - galley.size().y / 2.0), galley, color);
+        if number == view.nav.sub_index {
+            ui.painter().rect_stroke(rect.shrink(1.0), RADIUS_XS, egui::Stroke::new(1.0_f32, pal().focus), egui::StrokeKind::Inside);
+            scroll_on_focus_change(ui, &response);
+        }
+    }
+    ui.add_space(24.0);
+}
+
+fn backup_list(ui: &mut egui::Ui, view: &SettingsView, commands: &mut Vec<AppCommand>) {
+    let lang = view.lang;
+    let plugins = &view.plugins;
+    sub_title(ui, &lang.tr("settings-config-backups"), Some(&lang.tr("tai-backups-hint")));
+    let Some(tai) = plugins.tai else { return };
+    if tai.backups.is_empty() {
+        list_hint(ui, &lang.tr("tai-no-backups"));
+        return;
+    }
+    for (index, backup) in tai.backups.iter().enumerate() {
+        let focused = index == view.nav.sub_index;
+        let reason = if backup.reason.is_empty() { "—".to_owned() } else { backup.reason.replace('-', " ") };
+        let clicked = setting_row(ui, ChromeIcon::Database, &backup.label(), &reason, focused, false, |ui| {
+            if focused && plugins.armed {
+                pill(ui, &lang.tr("tai-restore-confirm"), pal().danger, None);
+            } else if let Some(notice) = plugins.notice.filter(|_| focused) {
+                pill(ui, notice, pal().success, Some(ChromeIcon::Check));
+            }
+        });
+        if clicked {
+            commands.push(AppCommand::SettingsRow(index));
+        }
+    }
+    ui.add_space(24.0);
+}
+
+/// Row 0 saves the current setup; the rows below are the saved profiles.
+fn profile_list(ui: &mut egui::Ui, view: &SettingsView, commands: &mut Vec<AppCommand>) {
+    let lang = view.lang;
+    let plugins = &view.plugins;
+    sub_title(ui, &lang.tr("settings-profiles"), Some(&lang.tr("tai-profiles-hint")));
+    let Some(tai) = plugins.tai else { return };
+    let focused = view.nav.sub_index == 0;
+    let clicked = setting_row(ui, ChromeIcon::Check, &lang.tr("tai-profile-save"), &lang.tr("tai-profile-save-hint"), focused, false, |ui| {
+        if let Some(notice) = plugins.notice.filter(|_| focused) {
+            pill(ui, notice, pal().success, Some(ChromeIcon::Check));
+        }
+    });
+    if clicked {
+        commands.push(AppCommand::SettingsRow(0));
+    }
+    if tai.profiles.is_empty() {
+        list_hint(ui, &lang.tr("tai-no-profiles"));
+    }
+    for (i, profile) in tai.profiles.iter().enumerate() {
+        let index = i + 1;
+        let focused = index == view.nav.sub_index;
+        let on = profile.entries.iter().filter(|e| e.enabled).count().to_string();
+        let clicked = setting_row(ui, ChromeIcon::Plugins, &profile.name, &lang.tr_args("tai-profile-count", &[("count", &on)]), focused, false, |ui| {
+            if focused && plugins.armed {
+                pill(ui, &lang.tr("tai-profile-confirm"), pal().danger, None);
+            } else if let Some(notice) = plugins.notice.filter(|_| focused) {
+                pill(ui, notice, pal().success, Some(ChromeIcon::Check));
+            }
+        });
+        if clicked {
+            commands.push(AppCommand::SettingsRow(index));
+        }
+    }
+    for (i, (_, profile)) in tai.importable.iter().enumerate() {
+        let index = tai.profiles.len() + 1 + i;
+        let focused = index == view.nav.sub_index;
+        let clicked = setting_row(ui, ChromeIcon::Storage, &profile.name, &lang.tr("tai-profile-import-hint"), focused, false, |ui| {
+            if let Some(notice) = plugins.notice.filter(|_| focused) {
+                pill(ui, notice, pal().success, Some(ChromeIcon::Check));
+            }
+        });
+        if clicked {
+            commands.push(AppCommand::SettingsRow(index));
+        }
+    }
+    ui.add_space(24.0);
+}
+
 fn about_card(ui: &mut egui::Ui, lang: Language, catalog_count: usize) {
     egui::Frame::new()
         .fill(pal().text.gamma_multiply(0.06))
@@ -557,8 +1041,113 @@ mod tests {
     use super::*;
 
     #[test]
+    fn plugin_pages_render() {
+        let store = crate::install::tai::store::temp_store("settings-render");
+        std::fs::write(&store.ur0, "*KERNEL\nur0:tai/a.skprx\n# ur0:tai/b.skprx\n*main\nur0:tai/henkaku.suprx\n").unwrap();
+        std::fs::write(&store.ux0, "*KERNEL\n").unwrap();
+        let snapshot = Snapshot::read(&store, &[]);
+        let ctx = egui::Context::default();
+        apply_theme(&ctx);
+        let stats = CacheStats::default();
+        let plugins_section = SECTIONS.iter().position(|(s, _)| *s == Section::Plugins).unwrap();
+        for sub in [None, Some(SubPage::Plugins), Some(SubPage::Config), Some(SubPage::Backups), Some(SubPage::Profiles)] {
+            for (moving, armed) in [(false, false), (true, false), (false, true)] {
+                let mut nav = SettingsNav::new();
+                nav.go_section(plugins_section);
+                nav.sub = sub;
+                nav.moving = moving;
+                let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                    settings_page(
+                        ctx,
+                        SettingsView {
+                            lang: Language::Spanish,
+                            nav: &nav,
+                            catalog_count: 0,
+                            stats: &stats,
+                            cache_notice: None,
+                            install_notifications: true,
+                            purge_armed: false,
+                            plugins: PluginsView {
+                                tai: Some(&snapshot),
+                                outdated: &[],
+                                pending_reboot: true,
+                                reboot_armed: armed,
+                                armed,
+                                notice: Some("ok"),
+                            },
+                            appear: 1.0,
+                        },
+                    );
+                });
+            }
+        }
+    }
+
+    /// Walk focus down a long plugin list and back up: the focused row must stay on screen.
+    #[test]
+    fn focus_stays_visible_going_down_and_back_up() {
+        let store = crate::install::tai::store::temp_store("settings-scroll");
+        let mut text = String::from("*KERNEL\n");
+        for i in 0..30 {
+            text.push_str(&format!("ur0:tai/plugin{i}.suprx\n"));
+        }
+        std::fs::write(&store.ur0, text).unwrap();
+        let snapshot = Snapshot::read(&store, &[]);
+        let ctx = egui::Context::default();
+        apply_theme(&ctx);
+        let stats = CacheStats::default();
+        let plugins_section = SECTIONS.iter().position(|(s, _)| *s == Section::Plugins).unwrap();
+        let mut nav = SettingsNav::new();
+        nav.go_section(plugins_section);
+        nav.sub = Some(SubPage::Plugins);
+        let mut clock = 0.0_f64;
+        let steps: Vec<usize> = (0..30).chain((0..29).rev()).collect();
+        for index in steps {
+            nav.sub_index = index;
+            for frame in 0..2 {
+                clock += 0.016;
+                let _ = frame;
+                let input = egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(960.0, 544.0))),
+                    time: Some(clock),
+                    ..Default::default()
+                };
+                let _ = ctx.run(input, |ctx| {
+                    egui::TopBottomPanel::bottom("hints").exact_height(47.0).show(ctx, |_| {});
+                    settings_page(ctx, SettingsView {
+                        lang: Language::English, nav: &nav, catalog_count: 0, stats: &stats,
+                        cache_notice: None, install_notifications: true, purge_armed: false,
+                        plugins: PluginsView { tai: Some(&snapshot), outdated: &[], pending_reboot: false,
+                            reboot_armed: false, armed: false, notice: None },
+                        appear: 1.0,
+                    });
+                });
+            }
+            let (rect, clip): (egui::Rect, egui::Rect) =
+                ctx.data(|d| d.get_temp(egui::Id::new("test_focus_rect"))).expect("focused row drawn");
+            assert!(clip.bottom() <= 544.0 - 47.0 + 0.5, "page reaches under the footer: {clip:?}");
+            assert!(rect.top() >= clip.top() - 1.0 && rect.bottom() <= clip.bottom() + 1.0,
+                "row {index} not visible: row {rect:?} clip {clip:?}");
+        }
+    }
+
+    #[test]
     fn every_row_lives_in_exactly_one_section() {
-        for row in [Row::Language, Row::Notifications, Row::Theme, Row::ClearIcons, Row::ClearCatalog, Row::PurgeAll] {
+        for row in [
+            Row::Language,
+            Row::Notifications,
+            Row::Theme,
+            Row::ClearIcons,
+            Row::ClearCatalog,
+            Row::PurgeAll,
+            Row::PluginManager,
+            Row::ConfigViewer,
+            Row::ConfigBackups,
+            Row::Profiles,
+            Row::SafeMode,
+            Row::MigrateConfig,
+            Row::Reboot,
+        ] {
             let homes = SECTIONS.iter().filter(|(_, rows)| rows.contains(&row)).count();
             assert_eq!(homes, 1, "{row:?}");
         }

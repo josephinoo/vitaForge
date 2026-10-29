@@ -575,6 +575,39 @@ impl<R: std::io::Read + std::io::Seek> std::io::Seek for HashingReader<R> {
     }
 }
 
+fn is_vitadb_link(url: &str) -> bool {
+    url.contains("/vitadb/get_hb_url.php")
+}
+
+/// VitaDB's `get_hb_url.php` only hands out the file to a POST. Ask it once and
+/// return where the file really is, so the normal GET path (resume, parallel
+/// ranges) downloads it. `None` keeps the original URL.
+async fn resolve_vitadb(url: &str) -> Option<String> {
+    if !is_vitadb_link(url) {
+        return None;
+    }
+    let resp = crate::net::client().post(url).header(reqwest::header::CONTENT_LENGTH, "0").send().await.ok()?;
+    if !resp.status().is_success() {
+        crate::install::log_file(&format!("VitaDB link {url} answered {}", resp.status()));
+        return None;
+    }
+    let landed = resp.url().to_string();
+    if landed != url && !is_vitadb_link(&landed) {
+        // Redirected to the file: stop here, the body is fetched again by GET.
+        return Some(landed);
+    }
+    let small_text = resp.headers().get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|t| t.starts_with("text/"))
+        && resp.content_length().is_none_or(|len| len < 4096);
+    if !small_text {
+        return None;
+    }
+    let body = resp.text().await.ok()?;
+    let link = body.trim();
+    (link.starts_with("http://") || link.starts_with("https://")).then(|| link.to_owned())
+}
+
 pub async fn fetch_file(
     url: &str,
     dest: &Path,
@@ -582,6 +615,8 @@ pub async fn fetch_file(
     make: fn(u64, Option<u64>, u32) -> crate::install::Progress,
     cancel: &AtomicBool,
 ) -> Result<()> {
+    let resolved = resolve_vitadb(url).await;
+    let url = resolved.as_deref().unwrap_or(url);
     let Some((node_url, md5)) = fastest_archive_node(url).await else {
         return fetch_file_from(url, dest, tx, make, cancel, true).await;
     };
@@ -815,6 +850,14 @@ pub async fn fetch_to(
         }
     }
     Err(last_err)
+}
+#[cfg(test)]
+mod vitadb_tests {
+    #[test]
+    fn only_vitadb_redirector_links_are_resolved() {
+        assert!(super::is_vitadb_link("https://www.rinnegatamante.eu/vitadb/get_hb_url.php?id=245"));
+        assert!(!super::is_vitadb_link("https://github.com/x/y/releases/download/1/a.vpk"));
+    }
 }
 #[cfg(test)]
 mod tests {

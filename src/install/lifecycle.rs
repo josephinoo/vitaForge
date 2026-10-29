@@ -55,6 +55,21 @@ pub fn restart_self() -> Result<()> {
     anyhow::bail!("restarting is only available on PS Vita")
 }
 
+/// Reboots the console so taiHEN reloads config.txt (kernel plugins only load at boot).
+#[cfg(target_os = "vita")]
+pub fn reboot() -> Result<()> {
+    super::log_file("Rebooting to apply plugin changes");
+    let ret = unsafe { vitasdk_sys::scePowerRequestColdReset() };
+    if ret < 0 {
+        anyhow::bail!("couldn't reboot (0x{ret:08x})");
+    }
+    Ok(())
+}
+#[cfg(not(target_os = "vita"))]
+pub fn reboot() -> Result<()> {
+    anyhow::bail!("rebooting is only available on PS Vita")
+}
+
 /// Removes an installed app and its LiveArea bubble through the system promoter.
 pub async fn uninstall(titleid: &str) -> Result<()> {
     let id = clean_title(titleid)?;

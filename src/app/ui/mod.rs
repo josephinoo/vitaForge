@@ -102,6 +102,8 @@ pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
                     .filter(|job| job.app_id != entry.id)
                     .map(|job| (job.app_id.as_str(), &job.progress)),
                 *detail_focus,
+                app.report_modal,
+                app.report_choice,
             )
         }
         AppState::Settings { nav, previous } => {
@@ -117,6 +119,14 @@ pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
                     cache_notice: app.cache_notice.as_deref(),
                     install_notifications: app.install_notifications,
                     purge_armed: app.purge_armed,
+                    plugins: settings::PluginsView {
+                        tai: app.tai.as_ref(),
+                        outdated: &app.tai_outdated,
+                        pending_reboot: app.pending_reboot,
+                        reboot_armed: app.reboot_armed,
+                        armed: app.tai_armed,
+                        notice: app.tai_notice.as_deref(),
+                    },
                     appear,
                 },
             ));
@@ -331,6 +341,10 @@ fn catalog_screen(
         &hints,
         Some(status_note(installed, icons)),
     ));
+    // Settings fills the space above the footer itself; the catalog body would only sit under it.
+    if settings_open {
+        return commands;
+    }
     egui::CentralPanel::default()
         .frame(egui::Frame::NONE.inner_margin(egui::vec2(SCREEN_MARGIN, 6.0)))
         .show(ctx, |ui| {

@@ -11,6 +11,7 @@ pub mod pkg;
 mod promoter;
 pub mod requirements;
 mod sfo;
+pub mod tai;
 use crate::data::AppEntry;
 use anyhow::{Context, Result, bail};
 use std::collections::VecDeque;
@@ -35,7 +36,6 @@ const DATA_STAGE_DIR: &str = "ux0:data/vitaforge/data_stage";
 const DATA_ROOT: &str = "ux0:data";
 const PSP_GAME_DIR: &str = "ux0:pspemu/PSP/GAME";
 const PLUGIN_DIR: &str = "ux0:data/vitaforge/plugins";
-const TAI_CONFIG_BACKUP_SUFFIX: &str = ".vitaforge.bak";
 #[derive(Clone, Debug, PartialEq)]
 pub enum Progress {
     Resolving,
@@ -498,6 +498,8 @@ pub fn start(entry: AppEntry) -> (watch::Receiver<Progress>, Arc<AtomicBool>) {
                 Progress::Failed(message)
             }
         };
+        // Release before the UI can start a retry, or this unlock undoes the new install's lock.
+        drop(_awake);
         let _ = tx.send(final_state);
     };
     std::thread::Builder::new()
@@ -702,10 +704,41 @@ async fn run_plugin(
     if entry.download_url.is_empty() {
         bail!("no download link for this plugin");
     }
+    if installs_through_app(entry) {
+        // YAMT, iTLS-Enso…: the release is an installer app that sets the plugin up
+        // itself (boot_config.txt, system files). Install the app; config.txt stays ours.
+        let mut app = entry.clone();
+        app.platform = crate::data::Platform::Vita;
+        log_file(&format!("Plugin '{}' ships as an installer app", entry.name));
+        return run_vita(&app, tx, cancel).await;
+    }
     let Some(plan) = plugin_install_plan(entry)? else {
-        bail!(PLUGIN_PENDING_MESSAGE);
+        return save_manual_plugin(entry, tx, cancel).await;
     };
     std::fs::create_dir_all(PLUGIN_DIR).context("couldn't create the plugins folder")?;
+    if let Some(downloads) = separate_downloads(entry, &plan) {
+        // Each module is its own file (AutoPlugin2 style): fetch them one by one.
+        let mut swaps = Vec::new();
+        for (binary, url) in plan.binaries.iter().zip(downloads) {
+            let staged = PathBuf::from(PLUGIN_DIR).join("download.tmp");
+            let _ = std::fs::remove_file(&staged);
+            download(&url, &staged, tx, cancel).await?;
+            check_cancelled(cancel)?;
+            if let Some(parent) = binary.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let swapped = tai::verify::install_module(&staged, binary, None);
+            let _ = std::fs::remove_file(&staged);
+            match swapped {
+                Ok(swap) => swaps.push(swap),
+                Err(err) => {
+                    tai::verify::rollback_all(swaps);
+                    return Err(err);
+                }
+            }
+        }
+        return commit_plugin(entry, &plan, swaps);
+    }
     let downloaded = PathBuf::from(PLUGIN_DIR).join("download.tmp");
     let _ = std::fs::remove_file(&downloaded);
     download(&entry.download_url, &downloaded, tx, cancel).await?;
@@ -713,19 +746,93 @@ async fn run_plugin(
     let result = place_plugin_files(&downloaded, &plan, cancel);
     let _ = std::fs::remove_file(&downloaded);
     let _ = std::fs::remove_dir_all(PathBuf::from(PLUGIN_DIR).join("unpacked"));
-    result?;
-    if update_tai_config(&plan)? {
+    commit_plugin(entry, &plan, result?)
+}
+
+/// Activates the freshly placed modules; if that fails the old ones come back.
+fn commit_plugin(entry: &AppEntry, plan: &PluginInstallPlan, swaps: Vec<tai::verify::Swap>) -> Result<Progress> {
+    match finish_plugin(entry, plan) {
+        Ok(done) => {
+            tai::verify::commit_all(swaps);
+            Ok(done)
+        }
+        Err(err) => {
+            tai::verify::rollback_all(swaps);
+            Err(err)
+        }
+    }
+}
+
+/// The catalog has a download but no taiHEN data: keep the file where the user
+/// can reach it (VitaShell, FTP) and leave config.txt alone.
+async fn save_manual_plugin(entry: &AppEntry, tx: &watch::Sender<Progress>, cancel: &Arc<AtomicBool>) -> Result<Progress> {
+    std::fs::create_dir_all(PLUGIN_DIR).context("couldn't create the plugins folder")?;
+    let staged = PathBuf::from(PLUGIN_DIR).join("download.tmp");
+    let _ = std::fs::remove_file(&staged);
+    download(&entry.download_url, &staged, tx, cancel).await?;
+    check_cancelled(cancel)?;
+    let target = PathBuf::from(PLUGIN_DIR).join(manual_file_name(entry, &staged));
+    let _ = std::fs::remove_file(&target);
+    std::fs::rename(&staged, &target).with_context(|| format!("couldn't save {}", target.display()))?;
+    log_file(&format!("Saved plugin '{}' for manual install at {}", entry.name, target.display()));
+    Ok(Progress::Done)
+}
+
+/// The release's own file name when the URL has one, else `<id>.zip` / `<id>.prx`.
+fn manual_file_name(entry: &AppEntry, downloaded: &Path) -> String {
+    let from_url = entry.download_url.split(['?', '#']).next().unwrap_or("").rsplit('/').next().unwrap_or("");
+    let safe = |name: &str| name.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c)) && name.contains('.') && !name.starts_with('.');
+    if safe(from_url) && !from_url.ends_with(".php") {
+        return from_url.to_owned();
+    }
+    let mut magic = [0u8; 4];
+    let zip = std::fs::File::open(downloaded).and_then(|mut f| std::io::Read::read_exact(&mut f, &mut magic)).is_ok() && magic == *b"PK\x03\x04";
+    let id: String = entry.id.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').collect();
+    format!("{}.{}", if id.is_empty() { "plugin" } else { &id }, if zip { "zip" } else { "prx" })
+}
+
+/// No config.txt data and no installer app: VitaForge only downloads it.
+pub fn manual_only(entry: &AppEntry) -> bool {
+    entry.platform == crate::data::Platform::Plugin
+        && !installs_through_app(entry)
+        && plugin_install_plan(entry).ok().flatten().is_none()
+}
+
+/// The plugin's release is a VPK: its own installer app, not modules for config.txt.
+pub fn installs_through_app(entry: &AppEntry) -> bool {
+    entry.platform == crate::data::Platform::Plugin
+        && entry.download_url.split(['?', '#']).next().is_some_and(|url| url.to_ascii_lowercase().ends_with(".vpk"))
+}
+
+/// The URL of every module, in `plan.binaries` order, when the catalog lists one per module.
+fn separate_downloads(entry: &AppEntry, plan: &PluginInstallPlan) -> Option<Vec<String>> {
+    let downloads = &entry.plugin_meta.as_ref()?.downloads;
+    if downloads.len() < 2 {
+        return None;
+    }
+    plan.binaries
+        .iter()
+        .map(|binary| {
+            let wanted = binary.to_string_lossy();
+            downloads.iter().find(|(line, _)| line.eq_ignore_ascii_case(&wanted)).map(|(_, url)| url.clone())
+        })
+        .collect()
+}
+
+fn finish_plugin(entry: &AppEntry, plan: &PluginInstallPlan) -> Result<Progress> {
+    let store = tai::store::Store::system();
+    if tai::activate(&store, entry, &plan.lines, &plan.binaries)? {
         log_file(&format!(
             "Activated plugin '{}' in {}: {:?}",
             entry.name,
-            plan.config_path.display(),
+            store.active_path().display(),
             plan.lines
         ));
     }
     Ok(Progress::RebootRequired)
 }
 
-fn place_plugin_files(downloaded: &Path, plan: &PluginInstallPlan, cancel: &AtomicBool) -> Result<()> {
+fn place_plugin_files(downloaded: &Path, plan: &PluginInstallPlan, cancel: &AtomicBool) -> Result<Vec<tai::verify::Swap>> {
     let mut magic = [0u8; 4];
     let is_zip = std::fs::File::open(downloaded)
         .and_then(|mut f| std::io::Read::read_exact(&mut f, &mut magic))
@@ -754,19 +861,21 @@ fn place_plugin_files(downloaded: &Path, plan: &PluginInstallPlan, cancel: &Atom
     } else {
         bail!("the download is a single file but this plugin needs {} modules", plan.binaries.len());
     };
+    let mut swaps = Vec::new();
     for (source, binary) in sources.iter().zip(&plan.binaries) {
-        if let Some(parent) = binary.parent() {
-            std::fs::create_dir_all(parent)?;
+        match tai::verify::install_module(source, binary, None) {
+            Ok(swap) => swaps.push(swap),
+            Err(err) => {
+                tai::verify::rollback_all(swaps);
+                return Err(err);
+            }
         }
-        let _ = std::fs::remove_file(binary);
-        std::fs::copy(source, binary).with_context(|| format!("couldn't write {}", binary.display()))?;
     }
-    Ok(())
+    Ok(swaps)
 }
 
 struct PluginInstallPlan {
     binaries: Vec<PathBuf>,
-    config_path: PathBuf,
     lines: Vec<(String, String)>,
 }
 
@@ -793,7 +902,6 @@ fn parse_plugin_plan(path: &str, sections: &str, lines: &str) -> Result<Option<P
     let install_dir = validated_tai_dir(path)?;
     let mut plan = PluginInstallPlan {
         binaries: Vec::new(),
-        config_path: active_tai_config(),
         lines: Vec::new(),
     };
     for (section, line) in sections.into_iter().zip(lines) {
@@ -810,11 +918,6 @@ fn parse_plugin_plan(path: &str, sections: &str, lines: &str) -> Result<Option<P
         plan.lines.push((section.to_owned(), line.to_owned()));
     }
     Ok(Some(plan))
-}
-
-fn active_tai_config() -> PathBuf {
-    let ux0 = PathBuf::from("ux0:tai/config.txt");
-    if ux0.exists() { ux0 } else { PathBuf::from("ur0:tai/config.txt") }
 }
 
 fn validated_tai_dir(path: &str) -> Result<PathBuf> {
@@ -843,87 +946,6 @@ fn validated_tai_path(path: &str) -> Result<PathBuf> {
     Ok(PathBuf::from(path))
 }
 
-fn update_tai_config(plan: &PluginInstallPlan) -> Result<bool> {
-    let existing = match std::fs::read_to_string(&plan.config_path) {
-        Ok(text) => text,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(error) => return Err(error).context("couldn't read taiHEN config.txt"),
-    };
-    let mut updated = existing.clone();
-    for (section, line) in &plan.lines {
-        if let Some(next) = updated_tai_config(&updated, section, line)? {
-            updated = next;
-        }
-    }
-    if updated == existing {
-        return Ok(false);
-    }
-    if plan.config_path.exists() {
-        let backup = PathBuf::from(format!(
-            "{}{}",
-            plan.config_path.display(),
-            TAI_CONFIG_BACKUP_SUFFIX
-        ));
-        if !backup.exists() {
-            std::fs::copy(&plan.config_path, &backup)
-                .context("couldn't back up taiHEN config.txt")?;
-        }
-    }
-    let temporary = PathBuf::from(format!("{}.vitaforge.tmp", plan.config_path.display()));
-    std::fs::write(&temporary, updated).context("couldn't write updated taiHEN config")?;
-    std::fs::rename(&temporary, &plan.config_path).context("couldn't replace taiHEN config.txt")?;
-    Ok(true)
-}
-
-fn updated_tai_config(existing: &str, section: &str, line: &str) -> Result<Option<String>> {
-    let mut current_section = None;
-    for current in existing.lines().map(str::trim) {
-        if current.starts_with('*') {
-            current_section = Some(current);
-        } else if current == line && current_section == Some(section) {
-            return Ok(None);
-        }
-    }
-    let line_ending = if existing.contains("\r\n") {
-        "\r\n"
-    } else {
-        "\n"
-    };
-    let mut offset = 0;
-    let mut insertion = None;
-    let mut in_section = false;
-    for current in existing.split_inclusive('\n') {
-        let trimmed = current.trim();
-        if trimmed == section {
-            in_section = true;
-        } else if in_section && trimmed.starts_with('*') {
-            insertion = Some(offset);
-            break;
-        }
-        offset += current.len();
-    }
-    if in_section && insertion.is_none() {
-        insertion = Some(existing.len());
-    }
-    let mut updated = existing.to_owned();
-    if let Some(offset) = insertion {
-        let prefix = if offset > 0 && !updated[..offset].ends_with('\n') {
-            line_ending
-        } else {
-            ""
-        };
-        updated.insert_str(offset, &format!("{prefix}{line}{line_ending}"));
-    } else {
-        if !updated.is_empty() && !updated.ends_with('\n') {
-            updated.push_str(line_ending);
-        }
-        updated.push_str(section);
-        updated.push_str(line_ending);
-        updated.push_str(line);
-        updated.push_str(line_ending);
-    }
-    Ok(Some(updated))
-}
 /// vitaForge itself: the system promoter refuses to replace an app that is open,
 /// so it cannot go through `run_vita`.
 pub fn is_self(entry: &AppEntry) -> bool {
@@ -1082,17 +1104,37 @@ async fn run_vita(
     std::fs::create_dir_all(WORK_DIR).context("couldn't create the work folder")?;
     let _ = std::fs::remove_dir_all(EXTRACT_DIR);
     let _ = std::fs::remove_dir_all(DATA_STAGE_DIR);
-    if let Some(data_url) = entry.data_url.as_deref() {
-        let data_dest = entry
-            .data_extract_path
-            .as_deref()
-            .map(str::trim)
-            .filter(|p| !p.is_empty())
-            .map(sanitize_data_dest)
-            .transpose()?
-            .unwrap_or_else(|| PathBuf::from(DATA_ROOT));
-        stage_data_and_vpk(data_url, &data_dest, &temp_data_path(entry), &url, tx, cancel).await?;
-        log_file("game data staged, extracting the vpk");
+    let titleid = entry.titleid.trim().to_uppercase();
+    let data_plan = match entry.data_url.as_deref() {
+        Some(data_url) => {
+            let data_dest = entry
+                .data_extract_path
+                .as_deref()
+                .map(str::trim)
+                .filter(|p| !p.is_empty())
+                .map(sanitize_data_dest)
+                .transpose()?
+                .unwrap_or_else(|| PathBuf::from(DATA_ROOT));
+            Some((data_url, data_dest))
+        }
+        None => None,
+    };
+    let defer = data_plan.as_ref().is_some_and(|(_, d)| data_in_app_dir(d, &titleid));
+    // Data kept inside the app dir (saves, ports' assets) must survive an update.
+    for path in app_dirs_to_clear(&titleid, defer) {
+        if installed::vita_fs::exists(&path) || Path::new(&path).exists() {
+            let path_owned = path.clone();
+            let removed =
+                tokio::task::spawn_blocking(move || std::fs::remove_dir_all(&path_owned)).await;
+            if let Ok(Err(err)) = removed {
+                eprintln!("couldn't clear the previous install at {path}: {err}");
+            }
+        }
+    }
+    let mut deferred_md5 = None;
+    if let Some((data_url, data_dest)) = &data_plan {
+        deferred_md5 = stage_data_and_vpk(data_url, data_dest, &temp_data_path(entry), &url, defer, tx, cancel).await?;
+        log_file(if defer { "game data downloaded, extracting after promote" } else { "game data staged, extracting the vpk" });
     } else {
         download(&url, Path::new(TEMP_VPK), tx, cancel).await?;
     }
@@ -1124,20 +1166,6 @@ async fn run_vita(
         Some(Path::new(EXTRACT_DIR)),
     );
     head::write(Path::new(EXTRACT_DIR))?;
-    let titleid = entry.titleid.trim().to_uppercase();
-    if !titleid.is_empty() {
-        for root in &["ux0:app", "ur0:app", "uma0:app"] {
-            let path = format!("{root}/{titleid}");
-            if installed::vita_fs::exists(&path) || Path::new(&path).exists() {
-                let path_owned = path.clone();
-                let removed =
-                    tokio::task::spawn_blocking(move || std::fs::remove_dir_all(&path_owned)).await;
-                if let Ok(Err(err)) = removed {
-                    eprintln!("couldn't clear the previous install at {path}: {err}");
-                }
-            }
-        }
-    }
     let _ = tx.send(Progress::Installing { elapsed_secs: 0 });
     let tx_worker = tx.clone();
     log_file("promoting the package");
@@ -1148,6 +1176,9 @@ async fn run_vita(
     if Path::new(EXTRACT_DIR).exists() {
         let _ = std::fs::remove_dir_all(EXTRACT_DIR);
         bail!("the system didn't accept the package");
+    }
+    if let (Some(md5), Some((_, data_dest))) = (deferred_md5, &data_plan) {
+        extract_after_promote(&temp_data_path(entry), data_dest, md5, tx, cancel).await?;
     }
     Ok(Progress::Done)
 }
@@ -1186,9 +1217,10 @@ async fn stage_data_and_vpk(
     data_dest: &Path,
     dest: &Path,
     vpk_url: &str,
+    defer: bool,
     tx: &watch::Sender<Progress>,
     cancel: &Arc<AtomicBool>,
-) -> Result<()> {
+) -> Result<Option<Option<String>>> {
     if let Some(dir) = dest.parent() {
         std::fs::create_dir_all(dir).with_context(|| format!("couldn't create {}", dir.display()))?;
     }
@@ -1213,13 +1245,39 @@ async fn stage_data_and_vpk(
         if fetched.is_ok() { "ok" } else { "failed" },
     ));
     let md5 = fetched.context("couldn't download the required game data")?;
+    if defer {
+        // Data lands inside the app dir: the promoter must run first, so only the VPK overlaps.
+        let vpk_res = download(vpk_url, Path::new(TEMP_VPK), tx, cancel).await;
+        vpk_res?;
+        return Ok(Some(md5));
+    }
     let extract_started = std::time::Instant::now();
+    let extract_task = spawn_data_extract(dest, data_dest, md5, tx, cancel);
+    // Overlap VPK network download with Game Data ZIP extraction on disk
+    let vpk_res = download(vpk_url, Path::new(TEMP_VPK), tx, cancel).await;
+    log_file(&format!("vpk download {}, waiting for game data", if vpk_res.is_ok() { "ok" } else { "failed" }));
+    log_file("awaiting the game data worker");
+    let extract_res = extract_task.await.context("the data extract worker crashed")?;
+    log_file(&format!("game data extract + md5: {:.0}s", extract_started.elapsed().as_secs_f64()));
+    extract_res?;
+    vpk_res?;
+    Ok(None)
+}
+/// Extracts the downloaded game-data zip into `data_dest`, verifying its md5;
+/// rolls back written files on failure and drops the download on success.
+fn spawn_data_extract(
+    dest: &Path,
+    data_dest: &Path,
+    md5: Option<String>,
+    tx: &watch::Sender<Progress>,
+    cancel: &Arc<AtomicBool>,
+) -> tokio::task::JoinHandle<Result<()>> {
     let _ = tx.send(Progress::Extracting { done: 0, total: 0, file: 0, files: 0 });
     let tx_worker = tx.clone();
     let cancel_worker = cancel.clone();
     let data_dest_owned = data_dest.to_path_buf();
     let dest_owned = dest.to_path_buf();
-    let extract_task = tokio::task::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || {
         let parts = download::PartsReader::open(&dest_owned)
             .context("couldn't reopen the downloaded game data")?;
         let mut written = Vec::new();
@@ -1261,21 +1319,54 @@ async fn stage_data_and_vpk(
         }
         if verdict.is_ok() {
             let _ = tx_worker.send(Progress::VerificationComplete);
+            discard_data_download(&dest_owned);
         }
         log_file(&format!("game data worker: releasing {} tracked file paths", written.len()));
         drop(written);
         log_file(&format!("game data worker done: {}", if verdict.is_ok() { "ok" } else { "failed" }));
         verdict
-    });
-    // Overlap VPK network download with Game Data ZIP extraction on disk
-    let vpk_res = download(vpk_url, Path::new(TEMP_VPK), tx, cancel).await;
-    log_file(&format!("vpk download {}, waiting for game data", if vpk_res.is_ok() { "ok" } else { "failed" }));
-    log_file("awaiting the game data worker");
-    let extract_res = extract_task.await.context("the data extract worker crashed")?;
-    log_file(&format!("game data extract + md5: {:.0}s", extract_started.elapsed().as_secs_f64()));
-    extract_res?;
-    discard_data_download(dest);
-    vpk_res
+    })
+}
+/// Previous-install dirs to wipe before a fresh install; none when the game
+/// data lives inside the app dir (`defer`), so saves and assets survive an update.
+fn app_dirs_to_clear(titleid: &str, defer: bool) -> Vec<String> {
+    if titleid.is_empty() || defer {
+        return Vec::new();
+    }
+    ["ux0:app", "ur0:app", "uma0:app"].iter().map(|root| format!("{root}/{titleid}")).collect()
+}
+/// Deferred game-data extraction, run once the app is promoted. The app stays
+/// installed on failure, so the error says so; a cancel passes through as-is.
+async fn extract_after_promote(
+    dest: &Path,
+    data_dest: &Path,
+    md5: Option<String>,
+    tx: &watch::Sender<Progress>,
+    cancel: &Arc<AtomicBool>,
+) -> Result<()> {
+    let outcome = spawn_data_extract(dest, data_dest, md5, tx, cancel)
+        .await
+        .context("the data extract worker crashed")
+        .and_then(|r| r);
+    if let Err(err) = outcome {
+        log_file(&format!("game data extract failed AFTER promote: {err}"));
+        if err.to_string() == CANCELLED_MESSAGE {
+            return Err(err);
+        }
+        bail!("the app installed but its game data failed to extract ({err}); reinstall to retry");
+    }
+    Ok(())
+}
+/// True when `dest` is the app dir of `titleid` (or inside it) on any volume.
+fn data_in_app_dir(dest: &Path, titleid: &str) -> bool {
+    if titleid.is_empty() {
+        return false;
+    }
+    let dest = dest.to_string_lossy().to_uppercase();
+    ["UX0:", "UR0:", "UMA0:"].iter().any(|root| {
+        let base = format!("{root}APP/{}", titleid.to_uppercase());
+        dest.strip_prefix(&base).is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+    })
 }
 /// Moves an old single-slot download of this same url into the per-game folder
 /// (keeps a half-done 3 GB download); any other legacy leftovers are deleted.
@@ -1825,7 +1916,7 @@ mod progress_tests {
 #[cfg(test)]
 mod tests {
     use super::{
-        check_free_space, parse_plugin_plan, required_bytes, sanitize_data_dest, transfer_detail, updated_tai_config,
+        check_free_space, parse_plugin_plan, required_bytes, separate_downloads, sanitize_data_dest, transfer_detail,
         validated_tai_path,
     };
     #[test]
@@ -1848,6 +1939,17 @@ mod tests {
         assert!(sanitize_data_dest("ux0:data/SOMEGAME").is_ok());
         assert!(sanitize_data_dest("ur0:data/SOMEGAME").is_ok());
         assert!(sanitize_data_dest("uma0:data/SOMEGAME").is_ok());
+    }
+    #[test]
+    fn detects_data_inside_the_app_dir() {
+        let p = |s| super::data_in_app_dir(std::path::Path::new(s), "PCSB00001");
+        assert!(p("ux0:app/PCSB00001"));
+        assert!(p("ux0:app/pcsb00001/assets"));
+        assert!(p("uma0:app/PCSB00001/x"));
+        assert!(!p("ux0:app/PCSB000010"));
+        assert!(!p("ux0:app/OTHER0001"));
+        assert!(!p("ux0:data/PCSB00001"));
+        assert!(!super::data_in_app_dir(std::path::Path::new("ux0:app/"), ""));
     }
     #[test]
     fn rejects_missing_volume_root() {
@@ -1881,36 +1983,6 @@ mod tests {
         );
     }
     #[test]
-    fn inserts_a_plugin_before_the_next_taihen_section() {
-        let original = "*KERNEL\nur0:tai/old.skprx\n*ALL\nur0:tai/old.suprx\n";
-        let updated = updated_tai_config(original, "*KERNEL", "ur0:tai/new.skprx")
-            .unwrap()
-            .expect("config should change");
-        assert_eq!(
-            updated,
-            "*KERNEL\nur0:tai/old.skprx\nur0:tai/new.skprx\n*ALL\nur0:tai/old.suprx\n"
-        );
-    }
-    #[test]
-    fn does_not_duplicate_an_existing_plugin_line() {
-        assert!(
-            updated_tai_config("*ALL\nur0:tai/foo.suprx\n", "*ALL", "ur0:tai/foo.suprx")
-                .unwrap()
-                .is_none()
-        );
-    }
-    #[test]
-    fn adds_one_module_under_a_second_section() {
-        let original = "*main\nur0:tai/wifiturbo.suprx\n*NPXS10015\nur0:tai/henkaku.suprx\n";
-        let updated = updated_tai_config(original, "*NPXS10015", "ur0:tai/wifiturbo.suprx")
-            .unwrap()
-            .expect("the second section still needs the line");
-        assert_eq!(
-            updated,
-            "*main\nur0:tai/wifiturbo.suprx\n*NPXS10015\nur0:tai/henkaku.suprx\nur0:tai/wifiturbo.suprx\n"
-        );
-    }
-    #[test]
     fn multi_module_plan_keeps_each_file_once() {
         let plan = parse_plugin_plan(
             "ur0:tai/",
@@ -1924,10 +1996,241 @@ mod tests {
         assert!(parse_plugin_plan("ur0:tai/", "*KERNEL\n*main", "ur0:tai/wifiturbo.suprx").is_err());
     }
     #[test]
+    fn plugins_without_taihen_data_are_saved_for_manual_install() {
+        let mut entry: crate::data::AppEntry = serde_json::from_value(serde_json::json!({
+            "id": "kuio-vdb", "titleid": "X", "name": "kuio", "author": "", "description": "", "category": "plugin",
+            "icon_url": null, "download_url": "https://www.rinnegatamante.eu/vitadb/get_hb_url.php?id=245",
+            "version": "1", "size_bytes": 0, "downloads": 0, "rating": 0.0, "updated_at": "",
+        }))
+        .unwrap();
+        entry.platform = crate::data::Platform::Plugin;
+        assert!(super::manual_only(&entry));
+        let missing = std::env::temp_dir().join("vitaforge-no-such-download");
+        assert_eq!(super::manual_file_name(&entry, &missing), "kuio-vdb.prx", "a .php link gives no file name");
+        entry.download_url = "https://github.com/Avellea/mikuar/releases/download/1.1/mikuar.suprx".into();
+        assert_eq!(super::manual_file_name(&entry, &missing), "mikuar.suprx");
+        entry.plugin_install_path = Some("ur0:tai/".into());
+        entry.plugin_config_section = Some("*main".into());
+        entry.plugin_config_line = Some("ur0:tai/mikuar.suprx".into());
+        assert!(!super::manual_only(&entry));
+    }
+    #[test]
+    fn vpk_plugins_install_through_their_app() {
+        let mut entry: crate::data::AppEntry = serde_json::from_value(serde_json::json!({
+            "id": "yamt", "titleid": "YAMT", "name": "YAMT", "author": "", "description": "", "category": "plugin",
+            "icon_url": null, "download_url": "https://github.com/SKGleba/yamt-vita/releases/download/v4.0/yamt.vpk",
+            "version": "v4.0", "size_bytes": 0, "downloads": 0, "rating": 0.0, "updated_at": "",
+        }))
+        .unwrap();
+        entry.platform = crate::data::Platform::Plugin;
+        assert!(super::installs_through_app(&entry));
+        entry.download_url = "https://e.x/yamt.skprx".into();
+        assert!(!super::installs_through_app(&entry));
+    }
+    #[test]
+    fn multi_module_plugins_download_each_file() {
+        let plan = parse_plugin_plan("ur0:tai/", "*ALL\n*KERNEL", "ur0:tai/vsh.suprx\nur0:tai/kuio.skprx").unwrap().unwrap();
+        let mut entry: crate::data::AppEntry = serde_json::from_value(serde_json::json!({
+            "id": "vsh", "titleid": "VSH", "name": "vsh", "author": "", "description": "", "category": "plugin",
+            "icon_url": null, "download_url": "", "version": "1", "size_bytes": 0, "downloads": 0, "rating": 0.0, "updated_at": "",
+        }))
+        .unwrap();
+        entry.plugin_meta = Some(Box::new(crate::data::PluginMeta {
+            downloads: vec![
+                ("ur0:tai/kuio.skprx".into(), "https://e.x/kuio.skprx".into()),
+                ("ur0:tai/vsh.suprx".into(), "https://e.x/vsh.suprx".into()),
+            ],
+            ..Default::default()
+        }));
+        assert_eq!(separate_downloads(&entry, &plan).unwrap(), ["https://e.x/vsh.suprx", "https://e.x/kuio.skprx"]);
+        entry.plugin_meta.as_mut().unwrap().downloads.pop();
+        assert!(separate_downloads(&entry, &plan).is_none(), "one URL is the zip/single-file path");
+    }
+    #[test]
     fn plugin_lines_are_limited_to_taihen_modules() {
         assert!(validated_tai_path("ur0:tai/foo.skprx").is_ok());
         assert!(validated_tai_path("ux0:tai/foo.suprx").is_ok());
         assert!(validated_tai_path("ur0:tai/../evil.skprx").is_err());
         assert!(validated_tai_path("ur0:tai/foo.txt").is_err());
+    }
+}
+
+#[cfg(test)]
+mod deferred_data_tests {
+    use super::*;
+    use md5::{Digest, Md5};
+    use std::io::Write;
+
+    struct Fixture {
+        root: PathBuf,
+        zip: Vec<u8>,
+    }
+
+    impl Fixture {
+        /// A 4-part game-data zip under a private temp dir, as the downloader leaves it.
+        fn new(tag: &str) -> Self {
+            let root = std::env::temp_dir().join(format!("vf_defer_{tag}_{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(&root).unwrap();
+            let mut zip = Vec::new();
+            {
+                let mut w = zip::ZipWriter::new(std::io::Cursor::new(&mut zip));
+                let opts = zip::write::SimpleFileOptions::default()
+                    .compression_method(zip::CompressionMethod::Stored);
+                for i in 0..6u8 {
+                    w.start_file(format!("assets/f{i}.bin"), opts).unwrap();
+                    w.write_all(&vec![i; 4096 * (i as usize + 1)]).unwrap();
+                }
+                w.finish().unwrap();
+            }
+            let fx = Fixture { root, zip };
+            let dest = fx.dest();
+            let chunk = fx.zip.len() / download::PARALLEL_PARTS;
+            for i in 0..download::PARALLEL_PARTS {
+                let end = if i + 1 == download::PARALLEL_PARTS { fx.zip.len() } else { (i + 1) * chunk };
+                std::fs::write(download::part_path(&dest, i), &fx.zip[i * chunk..end]).unwrap();
+            }
+            fx
+        }
+        fn dest(&self) -> PathBuf {
+            self.root.join("data.zip")
+        }
+        fn app(&self) -> PathBuf {
+            self.root.join("app/PCSB00001")
+        }
+        fn md5(&self) -> String {
+            format!("{:x}", Md5::digest(&self.zip))
+        }
+        fn zip_left(&self) -> bool {
+            self.dest().exists()
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn channel() -> (watch::Sender<Progress>, Arc<AtomicBool>) {
+        (watch::channel(Progress::Resolving).0, Arc::new(AtomicBool::new(false)))
+    }
+
+    #[test]
+    fn app_dir_detection_covers_every_shape() {
+        let id = "PCSB00001";
+        let hit = |s: &str| data_in_app_dir(Path::new(s), id);
+        for yes in ["ux0:app/PCSB00001", "ux0:app/PCSB00001/", "ux0:app/PCSB00001/a/b", "ur0:app/PCSB00001/x", "uma0:app/PCSB00001", "ux0:app/pcsb00001/x"] {
+            assert!(hit(yes), "{yes}");
+        }
+        for no in ["ux0:app/PCSB000010", "ux0:app/PCSB00001x/a", "ux0:app/OTHER0001", "ux0:data/PCSB00001", "ux0:data", "ux0:app", "ux0:pspemu/app/PCSB00001"] {
+            assert!(!hit(no), "{no}");
+        }
+        assert!(data_in_app_dir(Path::new("ux0:app/pcsb00001"), "pcsb00001"));
+        assert!(!data_in_app_dir(Path::new("ux0:app/"), ""));
+    }
+
+    #[test]
+    fn wipes_previous_install_only_when_data_is_outside_the_app_dir() {
+        assert_eq!(
+            app_dirs_to_clear("PCSB00001", false),
+            ["ux0:app/PCSB00001", "ur0:app/PCSB00001", "uma0:app/PCSB00001"]
+        );
+        assert!(app_dirs_to_clear("PCSB00001", true).is_empty());
+        assert!(app_dirs_to_clear("", false).is_empty());
+        assert!(app_dirs_to_clear("", true).is_empty());
+    }
+
+    #[tokio::test]
+    async fn extracts_and_verifies_then_drops_the_download() {
+        let fx = Fixture::new("ok");
+        let (tx, cancel) = channel();
+        spawn_data_extract(&fx.dest(), &fx.app(), Some(fx.md5()), &tx, &cancel).await.unwrap().unwrap();
+        assert_eq!(std::fs::read(fx.app().join("assets/f5.bin")).unwrap(), vec![5u8; 4096 * 6]);
+        assert!(!fx.zip_left());
+        assert!(!download::part_path(&fx.dest(), 1).exists());
+    }
+
+    #[tokio::test]
+    async fn extracts_without_a_digest() {
+        let fx = Fixture::new("nomd5");
+        let (tx, cancel) = channel();
+        spawn_data_extract(&fx.dest(), &fx.app(), None, &tx, &cancel).await.unwrap().unwrap();
+        assert!(fx.app().join("assets/f0.bin").exists());
+    }
+
+    #[tokio::test]
+    async fn md5_mismatch_rolls_back_written_files_and_drops_the_corrupt_zip() {
+        let fx = Fixture::new("badmd5");
+        let (tx, cancel) = channel();
+        let err = spawn_data_extract(&fx.dest(), &fx.app(), Some("0".repeat(32)), &tx, &cancel)
+            .await.unwrap().unwrap_err();
+        assert!(err.to_string().contains("md5 mismatch"), "{err}");
+        assert!(!fx.app().join("assets/f0.bin").exists());
+        assert!(!fx.zip_left());
+    }
+
+    #[tokio::test]
+    async fn cancel_rolls_back_but_keeps_the_download_for_resume() {
+        let fx = Fixture::new("cancel");
+        let (tx, cancel) = channel();
+        cancel.store(true, Ordering::Relaxed);
+        let err = spawn_data_extract(&fx.dest(), &fx.app(), Some(fx.md5()), &tx, &cancel)
+            .await.unwrap().unwrap_err();
+        assert_eq!(err.to_string(), CANCELLED_MESSAGE);
+        assert!(!fx.app().join("assets/f0.bin").exists());
+        assert!(fx.zip_left());
+    }
+
+    #[tokio::test]
+    async fn missing_download_is_reported() {
+        let fx = Fixture::new("missing");
+        let (tx, cancel) = channel();
+        std::fs::remove_file(fx.dest()).unwrap();
+        let err = spawn_data_extract(&fx.dest(), &fx.app(), None, &tx, &cancel)
+            .await.unwrap().unwrap_err();
+        assert!(err.to_string().contains("couldn't reopen the downloaded game data"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn extraction_keeps_files_that_are_not_in_the_archive() {
+        let fx = Fixture::new("keep");
+        let (tx, cancel) = channel();
+        std::fs::create_dir_all(fx.app().join("savedata")).unwrap();
+        std::fs::write(fx.app().join("savedata/slot1.sav"), b"progress").unwrap();
+        spawn_data_extract(&fx.dest(), &fx.app(), Some(fx.md5()), &tx, &cancel).await.unwrap().unwrap();
+        assert_eq!(std::fs::read(fx.app().join("savedata/slot1.sav")).unwrap(), b"progress");
+        assert!(fx.app().join("assets/f0.bin").exists());
+    }
+
+    #[tokio::test]
+    async fn after_promote_lands_data_inside_the_promoted_app_dir() {
+        let fx = Fixture::new("promoted");
+        let (tx, cancel) = channel();
+        // the promoter has already put the app here
+        std::fs::create_dir_all(fx.app()).unwrap();
+        std::fs::write(fx.app().join("eboot.bin"), b"vpk").unwrap();
+        extract_after_promote(&fx.dest(), &fx.app(), Some(fx.md5()), &tx, &cancel).await.unwrap();
+        assert_eq!(std::fs::read(fx.app().join("eboot.bin")).unwrap(), b"vpk");
+        assert!(fx.app().join("assets/f3.bin").exists());
+    }
+
+    #[tokio::test]
+    async fn after_promote_failure_says_the_app_is_installed() {
+        let fx = Fixture::new("fail");
+        let (tx, cancel) = channel();
+        let err = extract_after_promote(&fx.dest(), &fx.app(), Some("0".repeat(32)), &tx, &cancel)
+            .await.unwrap_err();
+        assert!(err.to_string().starts_with("the app installed but its game data failed to extract"), "{err}");
+        assert!(!fx.app().join("assets/f0.bin").exists());
+    }
+
+    #[tokio::test]
+    async fn after_promote_cancel_is_not_wrapped() {
+        let fx = Fixture::new("pcancel");
+        let (tx, cancel) = channel();
+        cancel.store(true, Ordering::Relaxed);
+        let err = extract_after_promote(&fx.dest(), &fx.app(), None, &tx, &cancel).await.unwrap_err();
+        assert_eq!(err.to_string(), CANCELLED_MESSAGE);
     }
 }

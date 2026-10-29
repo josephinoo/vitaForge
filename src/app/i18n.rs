@@ -392,6 +392,9 @@ impl Language {
     pub fn settings_storage(self) -> &'static str {
         self.strings(|s| s.settings_storage)
     }
+    pub fn settings_plugins(self) -> &'static str {
+        self.strings(|s| s.settings_plugins)
+    }
     pub fn settings_install_notifications(self) -> &'static str {
         self.strings(|s| s.settings_install_notifications)
     }
@@ -877,6 +880,7 @@ struct LocalizedStrings {
     btn_choose: &'static str,
     settings_free_space: &'static str,
     settings_storage: &'static str,
+    settings_plugins: &'static str,
     settings_install_notifications: &'static str,
     enabled: &'static str,
     disabled: &'static str,
@@ -1044,6 +1048,7 @@ impl LocalizedStrings {
             btn_choose: r("btn-choose"),
             settings_free_space: r("settings-free-space"),
             settings_storage: r("settings-storage"),
+            settings_plugins: r("settings-plugins"),
             settings_install_notifications: r("settings-install-notifications"),
             enabled: r("enabled"),
             disabled: r("disabled"),
