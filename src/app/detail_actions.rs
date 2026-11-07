@@ -25,6 +25,10 @@ pub fn launchable(entry: &AppEntry) -> bool {
 }
 
 pub fn removable(entry: &AppEntry) -> bool {
+    // Plugins come out of config.txt; whether one is installed is the registry's call.
+    if entry.platform == Platform::Plugin {
+        return true;
+    }
     let id = entry.titleid.trim().to_uppercase();
     entry.platform == Platform::Vita
         && valid_title(&id)
@@ -34,7 +38,9 @@ pub fn removable(entry: &AppEntry) -> bool {
 /// ✕: the main thing the page wants done.
 pub fn primary(entry: &AppEntry, state: InstallState) -> DetailAction {
     match (entry.platform, state) {
-        (Platform::Plugin, _) => DetailAction::Download,
+        (Platform::Plugin, InstallState::Absent) => DetailAction::Download,
+        (Platform::Plugin, InstallState::Outdated) => DetailAction::Update,
+        (Platform::Plugin, InstallState::Installed) => DetailAction::Reinstall,
         (_, InstallState::Absent) => DetailAction::Install,
         (_, InstallState::Outdated) => DetailAction::Update,
         (_, InstallState::Installed) if launchable(entry) => DetailAction::Open,

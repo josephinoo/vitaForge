@@ -112,6 +112,12 @@ pub fn run(mut app: App) -> Result<()> {
                                 app.handle_command(AppCommand::SubmitComment(text))?;
                             }
                         }
+                        TextTarget::Report => {
+                            app.handle_command(AppCommand::SubmitReport(text))?;
+                        }
+                        TextTarget::ProfileName => {
+                            app.handle_command(AppCommand::SubmitProfileName(text))?;
+                        }
                     },
                     ime::ImeResult::Canceled if session.target == TextTarget::Search => {
                         app.handle_command(AppCommand::SetSearchQuery(session.query_before))?;
@@ -121,6 +127,8 @@ pub fn run(mut app: App) -> Result<()> {
                 match session.target {
                     TextTarget::Search => app.handle_command(AppCommand::CloseSearch)?,
                     TextTarget::Comment => app.handle_command(AppCommand::CloseCommentEntry)?,
+                    TextTarget::Report => app.handle_command(AppCommand::CloseReportEntry)?,
+                    TextTarget::ProfileName => app.handle_command(AppCommand::CloseProfileEntry)?,
                 }
                 held_direction = None;
                 held_since = Instant::now();
@@ -179,7 +187,14 @@ pub fn run(mut app: App) -> Result<()> {
         let pending_gpu = surface.pending_texture_uploads();
         app.icons.set_gpu_backlog(pending_gpu);
         app.tick(&egui_ctx)?;
-        let text_target = match &app.state {
+        let text_target = if app.report_entry {
+            Some(TextTarget::Report)
+        } else if app.profile_rename.is_some() {
+            Some(TextTarget::ProfileName)
+        } else {
+            None
+        };
+        let text_target = text_target.or(match &app.state {
             crate::app::AppState::Catalog(catalog) if catalog.search_requested => {
                 Some(TextTarget::Search)
             }
@@ -188,7 +203,7 @@ pub fn run(mut app: App) -> Result<()> {
                 ..
             } => Some(TextTarget::Comment),
             _ => None,
-        };
+        });
         let raw_input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -252,6 +267,8 @@ pub fn run(mut app: App) -> Result<()> {
             let purpose = match target {
                 TextTarget::Search => ime::ImePurpose::Search,
                 TextTarget::Comment => ime::ImePurpose::Comment,
+                TextTarget::Report => ime::ImePurpose::Report,
+                TextTarget::ProfileName => ime::ImePurpose::ProfileName,
             };
             let query_before = match &app.state {
                 crate::app::AppState::Catalog(catalog) => catalog.search_query.clone(),
@@ -259,7 +276,8 @@ pub fn run(mut app: App) -> Result<()> {
             };
             let initial = match target {
                 TextTarget::Search => query_before.as_str(),
-                TextTarget::Comment => "",
+                TextTarget::Comment | TextTarget::Report => "",
+                TextTarget::ProfileName => app.profile_rename.as_deref().unwrap_or(""),
             };
             if ime::open(&video, surface.window(), purpose, initial) {
                 ime = Some(ImeSession {
@@ -271,6 +289,8 @@ pub fn run(mut app: App) -> Result<()> {
                 match target {
                     TextTarget::Search => app.handle_command(AppCommand::CloseSearch)?,
                     TextTarget::Comment => app.handle_command(AppCommand::CloseCommentEntry)?,
+                    TextTarget::Report => app.handle_command(AppCommand::CloseReportEntry)?,
+                    TextTarget::ProfileName => app.handle_command(AppCommand::CloseProfileEntry)?,
                 }
             }
         }

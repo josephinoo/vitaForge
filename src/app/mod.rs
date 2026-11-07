@@ -19,6 +19,7 @@ pub(super) fn tile_art_url(app: &AppEntry) -> Option<&str> {
 }
 
 const MAX_PRECACHE_PER_LAUNCH: usize = 150;
+const CATALOG_REFRESH_EVERY: std::time::Duration = std::time::Duration::from_secs(600);
 fn precache_art_urls(apps: &[AppEntry]) -> Vec<String> {
     apps.iter()
         .filter_map(tile_art_url)
@@ -133,6 +134,14 @@ impl CatalogState {
         }
     }
     fn replace_apps(&mut self, apps: Vec<AppEntry>) {
+        // A background revalidation usually brings nothing new; skip the re-sort and re-filter then.
+        let unchanged = self.apps.len() == apps.len()
+            && self.apps.iter().zip(&apps).all(|(a, b)| {
+                a.id == b.id && a.version == b.version && a.hash == b.hash && a.download_url == b.download_url
+            });
+        if unchanged {
+            return;
+        }
         self.apps = apps;
         self.sorted_indices = self.sort_order_indices();
         self.recompute_dropdown_counts();
@@ -212,8 +221,8 @@ impl CatalogState {
                 .then_with(|| apps[a].name_lower.cmp(&apps[b].name_lower))
             }),
             SortOrder::Recent => order.sort_by(|&a, &b| {
-                let ea = apps[a].sort_epoch();
-                let eb = apps[b].sort_epoch();
+                let ea = apps[a].sort_key();
+                let eb = apps[b].sort_key();
                 match direction {
                     SortDirection::Asc => ea.cmp(&eb),
                     SortDirection::Desc => eb.cmp(&ea),
@@ -618,7 +627,7 @@ fn prefers_homebrew_candidate(apps: &[AppEntry], candidate: usize, incumbent: us
     if a.downloads != b.downloads {
         return a.downloads > b.downloads;
     }
-    a.sort_epoch() > b.sort_epoch()
+    a.sort_key() > b.sort_key()
 }
 
 fn collapse_homebrew_duplicates(apps: &[AppEntry], indices: Vec<usize>) -> Vec<usize> {
@@ -727,7 +736,28 @@ pub struct App {
     update_failed: usize,
     uninstall_rx: Option<oneshot::Receiver<(String, String, Result<(), String>)>>,
     pub report_notice: Option<String>,
+    /// Focused item while the report picker is open: a category, then Cancel, then Submit.
+    pub report_modal: Option<usize>,
+    /// The checked category.
+    pub report_choice: usize,
+    /// The IME is up for the report message.
+    pub report_entry: bool,
+    /// Name of the profile being renamed while the keyboard is open.
+    pub profile_rename: Option<String>,
     restart_at: Option<std::time::Instant>,
+    /// config.txt, the plugin registry and the backups, as Settings › Plugins shows them.
+    pub tai: Option<crate::install::tai::Snapshot>,
+    /// Catalog ids of registry plugins with a newer catalog version.
+    pub tai_outdated: Vec<String>,
+    /// config.txt changed since boot: taiHEN only rereads it on a reboot.
+    pub pending_reboot: bool,
+    pub reboot_armed: bool,
+    /// △ remove in the plugin list / ✕ restore in the backups: the first press arms.
+    pub tai_armed: bool,
+    pub tai_notice: Option<String>,
+    /// config.txt as it was when □ picked a line up; the reorder is saved on ✕.
+    tai_move_base: Option<String>,
+    refresh_due_at: std::time::Instant,
     updatable_cache: std::sync::Mutex<Option<((usize, usize, usize), usize)>>,
 }
 const LOAD_WATCHDOG: std::time::Duration = std::time::Duration::from_secs(60);
@@ -803,7 +833,19 @@ impl App {
             update_failed: 0,
             uninstall_rx: None,
             report_notice: None,
+            report_modal: None,
+            report_choice: 0,
+            report_entry: false,
+            profile_rename: None,
             restart_at: None,
+            tai: None,
+            tai_outdated: Vec::new(),
+            pending_reboot: false,
+            reboot_armed: false,
+            tai_armed: false,
+            tai_notice: None,
+            tai_move_base: None,
+            refresh_due_at: std::time::Instant::now() + CATALOG_REFRESH_EVERY,
             updatable_cache: std::sync::Mutex::new(None),
         })
     }
@@ -897,6 +939,8 @@ impl App {
             };
             if self.installed.refresh(ctx, entries) {
                 self.needs_installed_rescan = false;
+                let plugins = plugin_entries(entries);
+                self.refresh_tai_with(&plugins);
                 if let AppState::Catalog(catalog) = &mut self.state {
                     match catalog.tab {
                         StoreTab::Library => catalog.apply_install_filter(&self.installed, false),
@@ -913,6 +957,11 @@ impl App {
             }
             if previous != job.progress && job.progress == crate::install::Progress::RebootRequired {
                 crate::install::requirements::invalidate_all();
+                self.pending_reboot = true;
+                self.needs_installed_rescan = true;
+                if self.install_notifications {
+                    crate::install::notify::install_finished(self.lang, &job.title);
+                }
             }
             if previous != job.progress && job.progress == crate::install::Progress::Done {
                 self.installed.mark_installed(&job.app_id_title);
@@ -941,6 +990,9 @@ impl App {
             self.uninstall_rx = None;
             match result {
                 Ok(()) => {
+                    if key.starts_with("PLUGIN-") {
+                        self.pending_reboot = true;
+                    }
                     self.installed.mark_removed(&key);
                     crate::install::requirements::invalidate_all();
                     self.needs_installed_rescan = true;
@@ -1000,11 +1052,22 @@ impl App {
             self.cache_stats = stats;
             ctx.request_repaint();
         }
+        // The version probe is one small request; the snapshot is only downloaded when it changed.
+        if self.load_rx.is_none()
+            && matches!(self.state, AppState::Catalog(_))
+            && !self.install_busy()
+            && std::time::Instant::now() >= self.refresh_due_at
+        {
+            self.refresh_due_at = std::time::Instant::now() + CATALOG_REFRESH_EVERY;
+            self.spawn_catalog_fetch();
+        }
         let Some(rx) = &mut self.load_rx else { return Ok(()) };
         match rx.try_recv() {
             Ok(CatalogSource::Live(apps)) => {
                 self.load_rx = None;
-                if !self.install_busy() {
+                if self.install_busy() {
+                    self.refresh_due_at = std::time::Instant::now() + std::time::Duration::from_secs(30);
+                } else {
                     match &mut self.state {
                         AppState::Loading => {
                             let catalog = CatalogState::new(apps);
@@ -1068,6 +1131,23 @@ impl App {
             return match sub {
                 SubPage::Language => self.handle_command(AppCommand::SetLanguage(Language::ALL[index])),
                 SubPage::Theme => self.handle_command(AppCommand::SetTheme(ThemeId::ALL[index])),
+                SubPage::Plugins => {
+                    if nav.moving {
+                        self.tai_save_move();
+                    } else {
+                        self.tai_toggle(index);
+                    }
+                    Ok(())
+                }
+                SubPage::Config => Ok(()),
+                SubPage::Backups => {
+                    self.tai_restore(index);
+                    Ok(())
+                }
+                SubPage::Profiles => {
+                    self.tai_profile_confirm(index);
+                    Ok(())
+                }
             };
         }
         if nav.rail {
@@ -1085,6 +1165,47 @@ impl App {
                 nav.theme_before = theme;
                 nav.sub = Some(SubPage::Theme);
                 nav.sub_index = ThemeId::ALL.iter().position(|&t| t == theme).unwrap_or(0);
+                return Ok(());
+            }
+            Some(Row::PluginManager | Row::ConfigViewer | Row::ConfigBackups | Row::Profiles) => {
+                let sub = match nav.current_row() {
+                    Some(Row::PluginManager) => SubPage::Plugins,
+                    Some(Row::ConfigViewer) => SubPage::Config,
+                    Some(Row::Profiles) => SubPage::Profiles,
+                    _ => SubPage::Backups,
+                };
+                nav.sub = Some(sub);
+                nav.sub_index = 0;
+                self.tai_armed = false;
+                self.tai_notice = None;
+                self.refresh_tai();
+                return Ok(());
+            }
+            Some(Row::SafeMode) => {
+                let on = !self.tai.as_ref().is_some_and(crate::install::tai::Snapshot::safe_mode);
+                let store = crate::install::tai::store::Store::system();
+                let result = crate::install::tai::set_safe_mode(&store, on);
+                let notice = self.lang.tr(if on { "tai-safe-enabled" } else { "tai-safe-disabled" });
+                self.tai_finish(result, notice);
+                return Ok(());
+            }
+            Some(Row::MigrateConfig) => {
+                if self.tai.as_ref().is_some_and(|t| t.both_exist) {
+                    let result = crate::install::tai::store::Store::system().migrate_to_ur0();
+                    let notice = self.lang.tr("tai-migrated");
+                    self.tai_finish(result, notice);
+                }
+                return Ok(());
+            }
+            Some(Row::Reboot) => {
+                // Destructive: the first press only arms it, the second one reboots.
+                self.reboot_armed = !self.reboot_armed;
+                if !self.reboot_armed
+                    && let Err(err) = crate::install::lifecycle::reboot()
+                {
+                    let reason = format!("{err:#}");
+                    self.tai_notice = Some(self.lang.tr_args("tai-reboot-failed", &[("reason", &reason)]));
+                }
                 return Ok(());
             }
             Some(Row::Notifications) => AppCommand::ToggleInstallNotifications,
@@ -1141,10 +1262,12 @@ impl App {
                 plugin_install_path: None,
                 plugin_config_section: None,
                 plugin_config_line: None,
+            plugin_meta: None,
                 size_bytes: 0,
                 downloads: 0,
                 rating: 5.0,
                 updated_at: String::new(),
+                synced_at: String::new(),
                 ratings_count: 0,
                 likes_count: 0,
                 comments_count: 0,
@@ -1174,8 +1297,286 @@ impl App {
         Ok(())
     }
 
+    fn in_plugin_list(&self) -> bool {
+        matches!(&self.state, AppState::Settings { nav, .. } if nav.sub == Some(ui::settings::SubPage::Plugins))
+    }
+
+    /// Rereads config.txt and the registry, and tells the install index which
+    /// catalog plugins are installed or outdated.
+    fn refresh_tai(&mut self) {
+        let plugins = match &self.state {
+            AppState::Catalog(catalog) => plugin_entries(&catalog.apps),
+            AppState::Detail { previous, .. } | AppState::Settings { previous, .. } => plugin_entries(&previous.apps),
+            AppState::Loading => Vec::new(),
+        };
+        self.refresh_tai_with(&plugins);
+    }
+
+    fn refresh_tai_with(&mut self, plugins: &[AppEntry]) {
+        use crate::install::installed::InstallState;
+        let snapshot = crate::install::tai::Snapshot::read(&crate::install::tai::store::Store::system(), plugins);
+        self.tai_outdated = crate::install::tai::outdated(&snapshot.registry, plugins);
+        self.installed.set_plugin_states(snapshot.registry.plugins.iter().map(|record| {
+            let state = if self.tai_outdated.contains(&record.id) { InstallState::Outdated } else { InstallState::Installed };
+            (record.id.clone(), state)
+        }));
+        if let AppState::Settings { nav, .. } = &mut self.state {
+            nav.list_len = match nav.sub {
+                Some(ui::settings::SubPage::Plugins) => snapshot.entries.len(),
+                Some(ui::settings::SubPage::Config) => snapshot.config.line_count(),
+                Some(ui::settings::SubPage::Backups) => snapshot.backups.len(),
+                Some(ui::settings::SubPage::Profiles) => snapshot.profiles.len() + snapshot.importable.len() + 1,
+                _ => 0,
+            };
+            nav.sub_index = nav.sub_index.min(nav.list_len.saturating_sub(1));
+        }
+        self.tai = Some(snapshot);
+    }
+
+    /// After a config.txt edit: remember a reboot is due and show what happened.
+    fn tai_finish<T>(&mut self, result: Result<T>, notice: String) {
+        match result {
+            Ok(_) => {
+                self.pending_reboot = true;
+                self.tai_notice = Some(notice);
+            }
+            Err(err) => {
+                let reason = format!("{err:#}");
+                crate::install::log_file(&format!("config.txt edit failed: {reason}"));
+                self.tai_notice = Some(self.lang.tr_args("tai-error", &[("reason", &reason)]));
+            }
+        }
+        self.refresh_tai();
+    }
+
+    fn tai_entry(&self, index: usize) -> Option<crate::install::tai::config::EntryView> {
+        self.tai.as_ref()?.entries.get(index).cloned()
+    }
+
+    fn tai_toggle(&mut self, index: usize) {
+        self.tai_armed = false;
+        let Some(entry) = self.tai_entry(index) else { return };
+        let store = crate::install::tai::store::Store::system();
+        let result = crate::install::tai::set_enabled(&store, entry.line, !entry.enabled);
+        let mut notice = self.lang.tr("tai-saved");
+        if entry.enabled {
+            let catalog = match &self.state {
+                AppState::Settings { previous, .. } => plugin_entries(&previous.apps),
+                _ => Vec::new(),
+            };
+            let needed_by = self.tai.as_ref().zip(self.tai.as_ref().and_then(|t| t.registry.owner_of(&entry.path).map(|r| r.id.clone())))
+                .map(|(t, id)| crate::install::tai::dependents_of(&id, &t.registry, &catalog))
+                .unwrap_or_default();
+            if !needed_by.is_empty() {
+                notice = self.lang.tr_args("tai-needed-by", &[("names", &needed_by.join(", "))]);
+            }
+        }
+        self.tai_finish(result, notice);
+        self.audio.play(crate::audio::Sfx::Activation);
+    }
+
+    fn tai_remove(&mut self) -> Result<()> {
+        let AppState::Settings { nav, .. } = &self.state else { return Ok(()) };
+        let Some(entry) = self.tai_entry(nav.sub_index) else { return Ok(()) };
+        if entry.protected || nav.moving {
+            return Ok(());
+        }
+        self.tai_armed = !self.tai_armed;
+        if self.tai_armed {
+            return Ok(());
+        }
+        let store = crate::install::tai::store::Store::system();
+        let result = crate::install::tai::remove(&store, entry.line);
+        let notice = self.lang.tr("tai-saved");
+        self.tai_finish(result, notice);
+        self.audio.play(crate::audio::Sfx::Activation);
+        Ok(())
+    }
+
+    fn tai_start_move(&mut self) -> Result<()> {
+        let AppState::Settings { nav, .. } = &self.state else { return Ok(()) };
+        let index = nav.sub_index;
+        let Some(tai) = &self.tai else { return Ok(()) };
+        if tai.entries.get(index).is_none_or(|e| e.protected) {
+            return Ok(());
+        }
+        self.tai_move_base = Some(tai.config.render());
+        self.tai_armed = false;
+        if let AppState::Settings { nav, .. } = &mut self.state {
+            nav.moving = true;
+        }
+        self.audio.play(crate::audio::Sfx::Activation);
+        Ok(())
+    }
+
+    /// Moves the picked-up line in the on-screen copy only; ✕ writes it.
+    fn tai_move(&mut self, up: bool) {
+        let (AppState::Settings { nav, .. }, Some(tai)) = (&mut self.state, &mut self.tai) else { return };
+        let Some(entry) = tai.entries.get(nav.sub_index).cloned() else { return };
+        let mut config = tai.config.clone();
+        if let Ok(Some(line)) = config.move_entry(entry.line, up) {
+            tai.set_config(config);
+            if let Some(index) = tai.entries.iter().position(|e| e.line == line) {
+                nav.sub_index = index;
+            }
+            self.audio.play(crate::audio::Sfx::Navigate);
+        }
+    }
+
+    fn tai_save_move(&mut self) {
+        let Some(base) = self.tai_move_base.take() else { return };
+        if let AppState::Settings { nav, .. } = &mut self.state {
+            nav.moving = false;
+        }
+        let Some(edited) = self.tai.as_ref().map(|t| t.config.clone()) else { return };
+        if edited.render() == base {
+            return;
+        }
+        let store = crate::install::tai::store::Store::system();
+        let result = store.edit("reorder", |config| {
+            // Another writer got there first: don't overwrite its change.
+            if config.render() != base {
+                anyhow::bail!("config.txt changed while reordering");
+            }
+            *config = edited;
+            Ok(())
+        });
+        let notice = self.lang.tr("tai-saved");
+        self.tai_finish(result, notice);
+        self.audio.play(crate::audio::Sfx::Activation);
+    }
+
+    /// ✕ on the Profiles page: row 0 saves the current setup, a profile row applies it on the second press.
+    fn tai_profile_confirm(&mut self, index: usize) {
+        use crate::install::tai::profile;
+        let dir = std::path::Path::new(profile::PROFILE_DIR);
+        if index == 0 {
+            self.tai_armed = false;
+            let Some(tai) = &self.tai else { return };
+            let mut n = tai.profiles.len() + 1;
+            while tai.profiles.iter().any(|p| p.name == format!("Profile {n}")) {
+                n += 1;
+            }
+            let saved = profile::save(dir, &profile::capture(&format!("Profile {n}"), &tai.config));
+            let notice = self.lang.tr("tai-profile-saved");
+            match saved {
+                Ok(()) => self.tai_notice = Some(notice),
+                Err(err) => self.tai_notice = Some(self.lang.tr_args("tai-error", &[("reason", &format!("{err:#}"))])),
+            }
+            self.refresh_tai();
+            self.audio.play(crate::audio::Sfx::Activation);
+            return;
+        }
+        let saved = self.tai.as_ref().map_or(0, |t| t.profiles.len());
+        if index > saved {
+            self.tai_armed = false;
+            let Some((path, _)) = self.tai.as_ref().and_then(|t| t.importable.get(index - saved - 1).cloned()) else { return };
+            let result = profile::import(&path, dir);
+            let notice = self.lang.tr("tai-profile-imported");
+            match result {
+                Ok(_) => self.tai_notice = Some(notice),
+                Err(err) => self.tai_notice = Some(self.lang.tr_args("tai-error", &[("reason", &format!("{err:#}"))])),
+            }
+            self.refresh_tai();
+            self.audio.play(crate::audio::Sfx::Activation);
+            return;
+        }
+        let Some(profile) = self.tai.as_ref().and_then(|t| t.profiles.get(index - 1).cloned()) else { return };
+        self.tai_armed = !self.tai_armed;
+        if self.tai_armed {
+            return;
+        }
+        let store = crate::install::tai::store::Store::system();
+        let result = profile::apply(&store, &profile, |path| std::path::Path::new(path).exists());
+        let notice = match &result {
+            Ok(report) if !report.missing.is_empty() => {
+                self.lang.tr_args("tai-profile-missing", &[("count", &report.missing.len().to_string())])
+            }
+            _ => self.lang.tr("tai-profile-applied"),
+        };
+        self.tai_finish(result, notice);
+        self.audio.play(crate::audio::Sfx::Activation);
+    }
+
+    /// △ on the Profiles page: deletes the focused profile on the second press.
+    fn tai_profile_delete(&mut self) {
+        let AppState::Settings { nav, .. } = &self.state else { return };
+        let index = nav.sub_index;
+        let Some(name) = index.checked_sub(1).and_then(|i| self.tai.as_ref()?.profiles.get(i)).map(|p| p.name.clone()) else { return };
+        self.tai_armed = !self.tai_armed;
+        if self.tai_armed {
+            return;
+        }
+        let result = crate::install::tai::profile::delete(std::path::Path::new(crate::install::tai::profile::PROFILE_DIR), &name);
+        match result {
+            Ok(()) => self.tai_notice = Some(self.lang.tr("tai-profile-deleted")),
+            Err(err) => self.tai_notice = Some(self.lang.tr_args("tai-error", &[("reason", &format!("{err:#}"))])),
+        }
+        self.refresh_tai();
+    }
+
+    fn focused_profile_name(&self) -> Option<String> {
+        let AppState::Settings { nav, .. } = &self.state else { return None };
+        let index = nav.sub_index.checked_sub(1)?;
+        self.tai.as_ref()?.profiles.get(index).map(|p| p.name.clone())
+    }
+
+    /// □ on a saved profile: opens the keyboard with its current name.
+    fn tai_profile_start_rename(&mut self) {
+        self.tai_armed = false;
+        self.profile_rename = self.focused_profile_name();
+    }
+
+    fn tai_profile_rename(&mut self, old: &str, new: &str) {
+        if new.trim().is_empty() || new.trim() == old {
+            return;
+        }
+        let result = crate::install::tai::profile::rename(std::path::Path::new(crate::install::tai::profile::PROFILE_DIR), old, new);
+        match result {
+            Ok(()) => self.tai_notice = Some(self.lang.tr("tai-profile-renamed")),
+            Err(err) => self.tai_notice = Some(self.lang.tr_args("tai-error", &[("reason", &format!("{err:#}"))])),
+        }
+        self.refresh_tai();
+    }
+
+    /// Select on a saved profile: copies it to the export folder.
+    fn tai_profile_export(&mut self) {
+        let Some(name) = self.focused_profile_name() else { return };
+        let result = crate::install::tai::profile::export(
+            std::path::Path::new(crate::install::tai::profile::PROFILE_DIR),
+            &name,
+            std::path::Path::new(crate::install::tai::profile::EXPORT_DIR),
+        );
+        match result {
+            Ok(_) => self.tai_notice = Some(self.lang.tr("tai-profile-exported")),
+            Err(err) => self.tai_notice = Some(self.lang.tr_args("tai-error", &[("reason", &format!("{err:#}"))])),
+        }
+        self.refresh_tai();
+    }
+
+    fn in_profiles(&self) -> bool {
+        matches!(&self.state, AppState::Settings { nav, .. } if nav.sub == Some(ui::settings::SubPage::Profiles))
+    }
+
+    fn tai_restore(&mut self, index: usize) {
+        let Some(backup) = self.tai.as_ref().and_then(|t| t.backups.get(index).cloned()) else { return };
+        self.tai_armed = !self.tai_armed;
+        if self.tai_armed {
+            return;
+        }
+        let result = crate::install::tai::store::Store::system().restore(&backup);
+        let notice = self.lang.tr("tai-restored");
+        self.tai_finish(result, notice);
+        if let AppState::Settings { nav, .. } = &mut self.state {
+            nav.sub_index = 0;
+        }
+        self.audio.play(crate::audio::Sfx::Activation);
+    }
+
     fn leave_settings(&mut self) {
         self.purge_armed = false;
+        self.reboot_armed = false;
+        self.tai_armed = false;
         if let AppState::Settings { previous, nav } = &mut self.state {
             close_settings_sub(nav);
             let previous = std::mem::replace(previous.as_mut(), CatalogState::empty());
@@ -1183,6 +1584,85 @@ impl App {
             self.needs_installed_rescan = true;
             self.audio.play(crate::audio::Sfx::MenuFlyOut);
         }
+    }
+
+    /// Focus runs over the categories (two columns), then Cancel, then Submit.
+    fn handle_report_modal(&mut self, focus: usize, command: AppCommand) {
+        let count = data::api::REPORT_CATEGORIES.len();
+        let (cancel, submit) = (count, count + 1);
+        let half = count.div_ceil(2);
+        match command {
+            AppCommand::SubmitReport(text) => {
+                self.send_report(text);
+                self.report_entry = false;
+                self.report_modal = None;
+            }
+            AppCommand::CloseReportEntry => self.report_entry = false,
+            _ if self.report_entry => {}
+            AppCommand::Input(InputCommand::Confirm) => {
+                if focus < count {
+                    self.report_choice = focus;
+                } else if focus == cancel {
+                    self.report_modal = None;
+                } else {
+                    self.report_entry = true;
+                }
+            }
+            AppCommand::ReportPick(index) if index < count => {
+                self.report_choice = index;
+                self.report_modal = Some(index);
+            }
+            AppCommand::ReportSubmit => self.report_entry = true,
+            AppCommand::Input(InputCommand::MoveLeft | InputCommand::MoveRight) => {
+                self.report_modal = Some(match focus {
+                    f if f == cancel => submit,
+                    f if f == submit => cancel,
+                    f if f < half => (f + half).min(count - 1),
+                    f => f - half,
+                });
+            }
+            AppCommand::Input(InputCommand::MoveDown) => {
+                self.report_modal = Some(match focus {
+                    f if f >= cancel => 0,
+                    f if (f + 1) % half == 0 || f + 1 == count => submit,
+                    f => f + 1,
+                });
+            }
+            AppCommand::Input(InputCommand::MoveUp) => {
+                self.report_modal = Some(match focus {
+                    f if f == cancel => half - 1,
+                    f if f == submit => count - 1,
+                    f if f % half == 0 => submit,
+                    f => f - 1,
+                });
+            }
+            AppCommand::Input(InputCommand::Back) | AppCommand::CloseReport => {
+                self.report_modal = None;
+                self.audio.play(crate::audio::Sfx::HideModal);
+            }
+            _ => {}
+        }
+    }
+
+    fn send_report(&mut self, text: String) {
+        let AppState::Detail { app, .. } = &self.state else { return };
+        let (code, label) = data::api::REPORT_CATEGORIES[self.report_choice];
+        let text: String = text.trim().chars().take(1900).collect();
+        let message = if text.is_empty() { format!("{label} (reported from VitaForge)") } else { text };
+        let (app_id, version, title_id) = (app.id.parse::<i64>().ok(), app.version.clone(), app.titleid.clone());
+        let lang = self.lang;
+        self.audio.play(crate::audio::Sfx::Activation);
+        tokio::spawn(async move {
+            let key = match data::api::post_report(code, &message, app_id, &version, &title_id).await {
+                Ok(true) => "bugreport-sent",
+                Ok(false) => "bugreport-rate-limited",
+                Err(err) => {
+                    crate::install::log_file(&format!("report failed: {err:#}"));
+                    "bugreport-failed"
+                }
+            };
+            crate::install::notify::send(&lang.tr(key));
+        });
     }
 
     pub fn handle_command(&mut self, command: AppCommand) -> Result<()> {
@@ -1199,6 +1679,10 @@ impl App {
                 }
                 _ => return Ok(()),
             }
+        }
+        if let Some(selected) = self.report_modal {
+            self.handle_report_modal(selected, command);
+            return Ok(());
         }
         match command {
             AppCommand::Input(InputCommand::Back) => {
@@ -1278,6 +1762,30 @@ impl App {
                 if let AppState::Catalog(catalog) = &mut self.state {
                     catalog.search_requested = true;
                     self.audio.play(crate::audio::Sfx::Typing);
+                } else if matches!(self.state, AppState::Detail { .. }) {
+                    // Select has no other job on the detail screen.
+                    return self.handle_command(AppCommand::RequestReport);
+                }
+            }
+            // Only meaningful while the picker is open; `handle_report_modal` takes those.
+            AppCommand::ReportPick(_)
+            | AppCommand::CloseReport
+            | AppCommand::ReportSubmit
+            | AppCommand::CloseReportEntry
+            | AppCommand::SubmitReport(_) => {}
+            AppCommand::CloseProfileEntry => self.profile_rename = None,
+            AppCommand::SubmitProfileName(name) => {
+                if let Some(old) = self.profile_rename.take() {
+                    self.tai_profile_rename(&old, &name);
+                }
+            }
+            AppCommand::FlipSortDirection if self.in_profiles() => self.tai_profile_start_rename(),
+            AppCommand::RequestSearch if self.in_profiles() => self.tai_profile_export(),
+            AppCommand::RequestReport => {
+                if matches!(self.state, AppState::Detail { lightbox: None, .. }) {
+                    self.report_modal = Some(0);
+                    self.report_choice = 0;
+                    self.audio.play(crate::audio::Sfx::ShowModal);
                 }
             }
             AppCommand::CloseSearch => {
@@ -1311,6 +1819,12 @@ impl App {
                     self.audio.play(crate::audio::Sfx::TabTransition);
                 }
             }
+            AppCommand::CycleCategoryFilter if self.in_plugin_list() => return self.tai_remove(),
+            AppCommand::CycleCategoryFilter if self.in_profiles() => {
+                self.tai_profile_delete();
+                return Ok(());
+            }
+            AppCommand::FlipSortDirection if self.in_plugin_list() => return self.tai_start_move(),
             AppCommand::CycleCategoryFilter => {
                 if matches!(self.state, AppState::Detail { .. }) {
                     return self.handle_command(AppCommand::SecondaryAction);
@@ -1436,12 +1950,21 @@ impl App {
                     let titleid = app.titleid.clone();
                     let name = app.name.clone();
                     let (tx, rx) = oneshot::channel();
-                    tokio::spawn(async move {
-                        let result = crate::install::lifecycle::uninstall(&titleid)
-                            .await
-                            .map_err(|err| format!("{err:#}"));
-                        let _ = tx.send((key, name, result));
-                    });
+                    if app.platform == crate::data::Platform::Plugin {
+                        let plugin = app.clone();
+                        tokio::task::spawn_blocking(move || {
+                            let store = crate::install::tai::store::Store::system();
+                            let result = crate::install::tai::uninstall(&store, &plugin).map_err(|err| format!("{err:#}"));
+                            let _ = tx.send((key, name, result));
+                        });
+                    } else {
+                        tokio::spawn(async move {
+                            let result = crate::install::lifecycle::uninstall(&titleid)
+                                .await
+                                .map_err(|err| format!("{err:#}"));
+                            let _ = tx.send((key, name, result));
+                        });
+                    }
                     self.uninstall_rx = Some(rx);
                     self.audio.play(crate::audio::Sfx::Activation);
                 }
@@ -1529,6 +2052,11 @@ impl App {
             AppCommand::AnalogScroll(delta) => {
                 if let AppState::Detail { scroll_delta, .. } = &mut self.state {
                     *scroll_delta = (*scroll_delta + delta).max(0.0);
+                }
+            }
+            AppCommand::SetDetailScroll(offset) => {
+                if let AppState::Detail { scroll_delta, .. } = &mut self.state {
+                    *scroll_delta = offset.max(0.0);
                 }
             }
             AppCommand::PageStep(step) => match &mut self.state {
@@ -1674,8 +2202,13 @@ impl App {
             }
             AppCommand::SettingsRow(row) => {
                 if let AppState::Settings { nav, .. } = &mut self.state {
-                    nav.rail = false;
-                    nav.row = row;
+                    // Inside a list sub-page (plugins, backups) the index is the list item.
+                    if nav.sub.is_some() {
+                        nav.sub_index = row;
+                    } else {
+                        nav.rail = false;
+                        nav.row = row;
+                    }
                 }
                 return self.settings_confirm();
             }
@@ -1861,8 +2394,16 @@ impl App {
                     }
                     AppState::Settings { nav, .. } => {
                         self.purge_armed = false;
+                        self.reboot_armed = false;
+                        self.tai_armed = false;
                         self.cache_notice = None;
                         let before = (nav.section, nav.row, nav.rail, nav.sub_index);
+                        if nav.moving {
+                            if matches!(direction, InputCommand::MoveUp | InputCommand::MoveDown) {
+                                self.tai_move(direction == InputCommand::MoveUp);
+                            }
+                            return Ok(());
+                        }
                         if nav.sub.is_some() {
                             let last = nav.sub_len().saturating_sub(1);
                             match direction {
@@ -2075,9 +2616,17 @@ impl App {
                 self.audio.play(crate::audio::Sfx::MenuFlyIn);
             }
             AppCommand::CloseSettings => {
-                // ○ backs out one level: an open choice list first, then Settings itself.
+                // ○ backs out one level: a reorder in progress, an open choice list, then Settings itself.
                 self.purge_armed = false;
+                self.reboot_armed = false;
+                self.tai_armed = false;
                 if let AppState::Settings { nav, .. } = &mut self.state {
+                    if nav.moving {
+                        nav.moving = false;
+                        self.tai_move_base = None;
+                        self.refresh_tai();
+                        return Ok(());
+                    }
                     if nav.sub.is_some() {
                         close_settings_sub(nav);
                         return Ok(());
@@ -2461,10 +3010,12 @@ mod sort_tests {
             plugin_install_path: None,
             plugin_config_section: None,
             plugin_config_line: None,
+            plugin_meta: None,
             size_bytes,
             downloads,
             rating,
             updated_at: updated_at.to_owned(),
+            synced_at: String::new(),
             ratings_count: 0,
             likes_count: 0,
             comments_count: 0,
@@ -2717,6 +3268,10 @@ mod data_language_tests {
     }
 }
 
+fn plugin_entries(apps: &[AppEntry]) -> Vec<AppEntry> {
+    apps.iter().filter(|app| app.platform == crate::data::Platform::Plugin).cloned().collect()
+}
+
 /// Closes an open choice list; ensures the active theme is persisted.
 fn close_settings_sub(nav: &mut ui::settings::SettingsNav) {
     if nav.sub == Some(ui::settings::SubPage::Theme) {
@@ -2726,4 +3281,5 @@ fn close_settings_sub(nav: &mut ui::settings::SettingsNav) {
         nav.theme_before = theme;
     }
     nav.sub = None;
+    nav.moving = false;
 }

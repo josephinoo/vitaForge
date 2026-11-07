@@ -146,6 +146,18 @@ struct RawApp {
     #[serde(default)]
     plugin_config_line: Option<String>,
     #[serde(default)]
+    conflicts_with: Vec<String>,
+    #[serde(default)]
+    replaces: Vec<String>,
+    #[serde(default)]
+    requires: Vec<String>,
+    #[serde(default)]
+    kernel_priority: Option<i32>,
+    #[serde(default)]
+    reboot_required: Option<bool>,
+    #[serde(default)]
+    plugins: Vec<RawPluginPackage>,
+    #[serde(default)]
     source_catalog: Option<String>,
     #[serde(default)]
     source_labels: Vec<String>,
@@ -167,6 +179,16 @@ struct RawApp {
     user_rating: Option<u8>,
     #[serde(default)]
     release_date: Option<String>,
+    #[serde(default)]
+    updated_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawPluginPackage {
+    #[serde(default)]
+    config_line: Option<String>,
+    #[serde(default)]
+    url: String,
 }
 
 fn deserialize_genres<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
@@ -339,10 +361,26 @@ impl RawApp {
             plugin_install_path: self.plugin_install_path.and_then(non_empty),
             plugin_config_section: self.plugin_config_section.and_then(non_empty),
             plugin_config_line: self.plugin_config_line.and_then(non_empty),
+            plugin_meta: (platform == Platform::Plugin).then(|| {
+                Box::new(crate::data::PluginMeta {
+                    conflicts_with: self.conflicts_with,
+                    replaces: self.replaces,
+                    requires: self.requires,
+                    kernel_priority: self.kernel_priority,
+                    reboot_required: self.reboot_required.unwrap_or(false),
+                    downloads: self
+                        .plugins
+                        .into_iter()
+                        .filter_map(|p| Some((p.config_line?.trim().to_owned(), p.url)))
+                        .filter(|(line, url)| !line.is_empty() && !url.trim().is_empty())
+                        .collect(),
+                })
+            }),
             size_bytes,
             downloads: self.install_count,
             rating: self.average_rating,
             updated_at,
+            synced_at: self.updated_at.unwrap_or_default(),
             ratings_count: self.ratings_count,
             likes_count: self.likes_count,
             comments_count: self.comments_count,
@@ -574,6 +612,44 @@ pub async fn post_comment(app_id: &str, author_name: &str, content: &str) -> any
         .await?
         .error_for_status()?;
     Ok(())
+}
+/// shortcut: fixed copy of the server's report categories (GET /reports/categories), upgrade if it adds one.
+pub const REPORT_CATEGORIES: [(&str, &str); 11] = [
+    ("vpk_download", "VPK download"),
+    ("vpk_install", "VPK install"),
+    ("game_data", "Game data"),
+    ("app_crash", "App crashes"),
+    ("app_launch", "App won't launch"),
+    ("plugin", "Plugin"),
+    ("wrong_metadata", "Wrong info"),
+    ("missing_media", "Missing images"),
+    ("store_ui", "VitaForge UI"),
+    ("network", "Network"),
+    ("other", "Other"),
+];
+/// `Ok(false)` when the server refused for rate limiting (400), `Ok(true)` when stored.
+pub async fn post_report(
+    category: &str,
+    message: &str,
+    app_id: Option<i64>,
+    app_version: &str,
+    title_id: &str,
+) -> anyhow::Result<bool> {
+    let response = request(reqwest::Method::POST, "/reports")
+        .json(&serde_json::json!({
+            "category": category,
+            "message": message,
+            "app_id": app_id,
+            "app_version": app_version,
+            "title_id": title_id,
+        }))
+        .send()
+        .await?;
+    if response.status() == reqwest::StatusCode::BAD_REQUEST {
+        return Ok(false);
+    }
+    response.error_for_status()?;
+    Ok(true)
 }
 pub async fn post_rating(app_id: &str, score: u8) -> anyhow::Result<()> {
     request(reqwest::Method::POST, &format!("/apps/{app_id}/rate"))
@@ -835,10 +911,12 @@ mod tests {
             plugin_install_path: None,
             plugin_config_section: None,
             plugin_config_line: None,
+            plugin_meta: None,
             size_bytes: 0,
             downloads: 0,
             rating: 0.0,
             updated_at: String::new(),
+            synced_at: String::new(),
             ratings_count: 0,
             likes_count: 0,
             comments_count: 0,

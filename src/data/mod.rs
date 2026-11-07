@@ -68,6 +68,27 @@ impl Category {
         }
     }
 }
+/// Catalog hints the plugin manager uses when it edits config.txt.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, Deserialize)]
+pub struct PluginMeta {
+    /// Module file names (`refood.skprx`) or catalog ids that can't load alongside this one.
+    #[serde(default)]
+    pub conflicts_with: Vec<String>,
+    /// Catalog ids this plugin supersedes.
+    #[serde(default)]
+    pub replaces: Vec<String>,
+    /// 1 loads first in `*KERNEL`, 5 last.
+    #[serde(default)]
+    pub kernel_priority: Option<i32>,
+    /// Module file names or catalog ids that must be enabled for this plugin to work.
+    #[serde(default)]
+    pub requires: Vec<String>,
+    #[serde(default)]
+    pub reboot_required: bool,
+    /// `(config line, url)`: modules that download as separate files.
+    #[serde(default)]
+    pub downloads: Vec<(String, String)>,
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Platform {
@@ -258,10 +279,16 @@ pub struct AppEntry {
     pub plugin_config_section: Option<String>,
     #[serde(default)]
     pub plugin_config_line: Option<String>,
+    /// Conflicts and load order for plugins; `None` for everything else.
+    #[serde(default)]
+    pub plugin_meta: Option<Box<PluginMeta>>,
     pub size_bytes: u64,
     pub downloads: u64,
     pub rating: f32,
     pub updated_at: String,
+    /// Server row timestamp (ISO-8601, with time); breaks ties within the same `updated_at` day.
+    #[serde(default)]
+    pub synced_at: String,
     #[serde(default)]
     pub ratings_count: u32,
     #[serde(default)]
@@ -330,6 +357,16 @@ impl AppEntry {
             (Some(y), Some(m), Some(d)) => y * 10000 + m * 100 + d,
             _ => 0,
         }
+    }
+    /// `MM-DD HH:MM` from the server timestamp, else `MM-DD` from the release date.
+    pub fn updated_label(&self) -> Option<String> {
+        if let (Some(d), Some(t)) = (self.synced_at.get(5..10), self.synced_at.get(11..16)) {
+            return Some(format!("{d} {t}"));
+        }
+        self.updated_at.get(5..10).map(str::to_owned)
+    }
+    pub fn sort_key(&self) -> (u32, &str) {
+        (self.sort_epoch(), self.synced_at.as_str())
     }
     pub fn data_size_label(&self) -> String {
         format_size(self.data_size_bytes)

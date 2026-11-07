@@ -47,15 +47,17 @@
 - [ ] "Update all" in one action.
 
 ### Plugins
-- [ ] Plugin registry: id, version, source and target titles.
-- [ ] Safe `ur0:tai/config.txt` editing with a backup before every change.
-- [ ] Adopt plugins that were installed by hand.
-- [ ] Plugins section: enable, disable, reorder and remove.
-- [ ] Per-title and global load scopes (`*KERNEL`, `*main`, `TITLEID`).
-- [ ] Update detection and one-tap updates.
-- [ ] Dependency and conflict warnings.
+- [x] Plugin registry: id, version, source and target titles.
+- [x] Safe `ur0:tai/config.txt` editing with a backup before every change.
+- [x] Adopt plugins that were installed by hand.
+- [x] Plugins section: enable, disable, reorder and remove.
+- [x] Per-title and global load scopes (`*KERNEL`, `*main`, `TITLEID`).
+- [x] Update detection and one-tap updates.
+- [x] Conflicting plugins are switched off on install.
+- [ ] Plugin-to-plugin dependency warnings.
 - [ ] Plugin catalog with description, screenshots, compatibility and changelog.
-- [ ] Profiles, export / import and a safe mode that disables all plugins.
+- [x] Safe mode that disables every plugin but HENkaku, and restores them.
+- [ ] Profiles and export / import.
 
 ### Catalog & discovery
 - [ ] Combined filters, search history and suggestions.

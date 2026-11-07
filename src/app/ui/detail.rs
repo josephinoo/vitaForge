@@ -32,6 +32,8 @@ pub(crate) fn detail_screen(
     apps: &[crate::data::AppEntry],
     dep_job: Option<(&str, &crate::install::Progress)>,
     detail_focus: DetailFocus,
+    report_modal: Option<usize>,
+    report_choice: usize,
 ) -> Vec<AppCommand> {
     let mut commands = Vec::new();
     let state = installed.state(entry);
@@ -108,6 +110,10 @@ pub(crate) fn detail_screen(
 
     if data_prompt {
         data_prompt_modal(ctx, entry, data_language, data_step, lang, &mut commands);
+    }
+
+    if let Some(focus) = report_modal {
+        report_modal_ui(ctx, lang, focus, report_choice, &mut commands);
     }
 
     if uninstall_prompt {
@@ -248,11 +254,15 @@ pub(crate) fn detail_screen(
             let scroll_h = (ui.available_height() - 12.0).max(80.0);
             let viewport_w = ui.available_width();
             let enter_t = detail_enter_t(ui.ctx(), egui::Id::new(("detail_enter", entry.id.as_str())));
+            // Drawing with an offset past the end shows one frame of empty space, so clamp to last frame's limit first.
+            let max_id = egui::Id::new(("detail_max_scroll", entry.id.as_str()));
+            let known_max = ui.ctx().data(|d| d.get_temp::<f32>(max_id));
+            let scroll_offset = known_max.map_or(scroll_delta, |max| scroll_delta.min(max));
             let scroll_output = egui::ScrollArea::vertical()
                 .id_salt(&entry.id)
                 .auto_shrink([false, false])
                 .max_height(scroll_h)
-                .vertical_scroll_offset(scroll_delta)
+                .vertical_scroll_offset(scroll_offset)
                 .show(ui, |ui| {
                     ui.set_max_width(viewport_w);
                     ui.multiply_opacity(enter_t);
@@ -317,7 +327,13 @@ pub(crate) fn detail_screen(
                             });
                         ui.add_space(16.0);
                     }
-                    if entry.platform == Platform::Plugin {
+                    if crate::install::installs_through_app(entry) {
+                        text_panel(ui, &lang.tr("plugin-installer-note"), pal().warning);
+                        ui.add_space(22.0);
+                    } else if crate::install::manual_only(entry) {
+                        text_panel(ui, &lang.tr("plugin-manual-download-note"), pal().warning);
+                        ui.add_space(22.0);
+                    } else if entry.platform == Platform::Plugin {
                         text_panel(ui, lang.plugin_manual_note(), pal().warning);
                         ui.add_space(22.0);
                     }
@@ -439,6 +455,12 @@ pub(crate) fn detail_screen(
                     }
                     ui.add_space(20.0);
                 });
+            // egui clamps what it draws; hand the real limit back so the stored offset cannot run past the content.
+            let max_scroll = (scroll_output.content_size.y - scroll_output.inner_rect.height()).max(0.0);
+            ui.ctx().data_mut(|d| d.insert_temp(max_id, max_scroll));
+            if scroll_delta > max_scroll + 0.5 {
+                commands.push(AppCommand::SetDetailScroll(max_scroll));
+            }
             fade_into_footer(ui, scroll_output.inner_rect);
         });
     commands
@@ -447,6 +469,117 @@ pub(crate) fn detail_screen(
 /// Lets the scrolling content dissolve into the hint bar instead of being cut
 /// flush against it: a short gradient over the last rows, then solid bar colour
 /// down to the bar itself.
+const REPORT_BTN_H: f32 = 34.0;
+
+/// Fills the rect: blue and checked when `checked`, an outline otherwise; `focused` adds the gamepad ring.
+fn report_button(ui: &mut egui::Ui, size: egui::Vec2, label: &str, checked: bool, focused: bool, filled: bool) -> bool {
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    let lit = checked || filled;
+    let fill = if lit {
+        pal().accent
+    } else if response.hovered() {
+        pal().bg_card_hover
+    } else {
+        pal().bg_deep
+    };
+    ui.painter().rect_filled(rect, RADIUS_XS, fill);
+    if !lit {
+        ui.painter()
+            .rect_stroke(rect, RADIUS_XS, egui::Stroke::new(1.0_f32, pal().separator), egui::StrokeKind::Inside);
+    }
+    if focused {
+        ui.painter().rect_stroke(
+            rect.expand(1.5),
+            RADIUS_XS,
+            egui::Stroke::new(FOCUS_STROKE, pal().focus),
+            egui::StrokeKind::Outside,
+        );
+    }
+    let color = if lit { egui::Color32::WHITE } else { pal().text };
+    let galley = ui.fonts(|f| f.layout_no_wrap(label.to_owned(), font(FONT_BODY), color));
+    let icon = 16.0;
+    let gap = if checked { icon + 8.0 } else { 0.0 };
+    let start = rect.center().x - (galley.size().x + gap) / 2.0;
+    if checked {
+        let icon_rect = egui::Rect::from_min_size(
+            egui::pos2(start, rect.center().y - icon / 2.0),
+            egui::vec2(icon, icon),
+        );
+        crate::app::ui::chrome_icons::paint(ui, crate::app::ui::chrome_icons::ChromeIcon::Check, icon_rect, color);
+    }
+    ui.painter()
+        .galley(egui::pos2(start + gap, rect.center().y - galley.size().y / 2.0), galley, color);
+    response.clicked()
+}
+
+/// Two-column category picker; Submit then asks for the message.
+fn report_modal_ui(ctx: &egui::Context, lang: Language, focus: usize, choice: usize, commands: &mut Vec<AppCommand>) {
+    let categories = crate::data::api::REPORT_CATEGORIES;
+    let (cancel, submit) = (categories.len(), categories.len() + 1);
+    paint_modal_scrim(ctx);
+    egui::Area::new(egui::Id::new("report_prompt"))
+        .anchor(egui::Align2::CENTER_CENTER, modal_center_offset(ctx))
+        .order(egui::Order::Foreground)
+        .show(ctx, |ui| {
+            egui::Frame::window(&ctx.style())
+                .fill(pal().bg_card)
+                .stroke(egui::Stroke::new(1.5_f32, pal().accent_soft))
+                .corner_radius(RADIUS_LG)
+                .inner_margin(egui::vec2(20.0, 14.0))
+                .show(ui, |ui| {
+                    let col_w = 200.0;
+                    ui.set_width(col_w * 2.0 + 8.0);
+                    ui.vertical_centered(|ui| {
+                        ui.horizontal(|ui| {
+                            let title = lang.tr("bugreport-title");
+                            let galley = ui.fonts(|f| f.layout_no_wrap(title.clone(), font(FONT_LARGE), pal().text));
+                            let icon = 20.0;
+                            ui.add_space((ui.available_width() - galley.size().x - icon - 8.0) / 2.0);
+                            let (icon_rect, _) = ui.allocate_exact_size(egui::vec2(icon, icon), egui::Sense::hover());
+                            crate::app::ui::chrome_icons::paint(
+                                ui,
+                                crate::app::ui::chrome_icons::ChromeIcon::Alert,
+                                icon_rect,
+                                pal().text,
+                            );
+                            ui.label(egui::RichText::new(title).size(FONT_LARGE).strong().color(pal().text));
+                        });
+                        ui.label(
+                            egui::RichText::new(lang.tr("bugreport-hint"))
+                                .size(FONT_SMALL)
+                                .color(pal().text_dim),
+                        );
+                    });
+                    ui.add_space(12.0);
+                    let per_column = categories.len().div_ceil(2);
+                    ui.horizontal_top(|ui| {
+                        ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
+                        for column in 0..2 {
+                            ui.vertical(|ui| {
+                                ui.spacing_mut().item_spacing.y = 8.0;
+                                for (i, (_, label)) in categories.iter().enumerate().skip(column * per_column).take(per_column) {
+                                    if report_button(ui, egui::vec2(col_w, REPORT_BTN_H), label, i == choice, i == focus, false) {
+                                        commands.push(AppCommand::ReportPick(i));
+                                    }
+                                }
+                            });
+                        }
+                    });
+                    ui.add_space(12.0);
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 8.0;
+                        ui.add_space(ui.available_width() - 2.0 * 112.0 - 8.0);
+                        if report_button(ui, egui::vec2(112.0, REPORT_BTN_H), &lang.cancel_btn().to_uppercase(), false, focus == cancel, false) {
+                            commands.push(AppCommand::CloseReport);
+                        }
+                        if report_button(ui, egui::vec2(112.0, REPORT_BTN_H), &lang.tr("bugreport-submit"), false, focus == submit, true) {
+                            commands.push(AppCommand::ReportSubmit);
+                        }
+                    });
+                });
+        });
+}
+
 fn fade_into_footer(ui: &egui::Ui, viewport: egui::Rect) {
     const FADE_H: f32 = 26.0;
     let bar = pal().bg_header;
@@ -485,9 +618,10 @@ fn modal_center_offset(ctx: &egui::Context) -> egui::Vec2 {
 }
 
 fn paint_modal_scrim(ctx: &egui::Context) {
+    // Middle, not Foreground: a clickable Foreground area is raised on press and would end up over its own dialog.
     egui::Area::new(egui::Id::new("modal_scrim"))
         .fixed_pos(egui::Pos2::ZERO)
-        .order(egui::Order::Foreground)
+        .order(egui::Order::Middle)
         .show(ctx, |ui| {
             let screen = ui.ctx().screen_rect();
             let (bg, _) = ui.allocate_exact_size(screen.size(), egui::Sense::click());
@@ -1256,6 +1390,20 @@ fn left_column(
                     ui.add_space(8.0);
                     if like_button(ui, entry.user_liked, entry.likes_count) {
                         commands.push(AppCommand::ToggleLike);
+                    }
+                    ui.add_space(8.0);
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                egui::RichText::new(lang.tr("bugreport-btn"))
+                                    .size(FONT_SMALL)
+                                    .color(pal().text_dim),
+                            )
+                            .frame(false),
+                        )
+                        .clicked()
+                    {
+                        commands.push(AppCommand::RequestReport);
                     }
                 });
                 if state != InstallState::Absent {

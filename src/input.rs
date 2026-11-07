@@ -28,6 +28,8 @@ pub enum DataStep {
 pub enum TextTarget {
     Search,
     Comment,
+    Report,
+    ProfileName,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DetailFocus {
@@ -149,6 +151,14 @@ pub enum AppCommand {
     ToggleLike,
     RateCurrent(u8),
     RequestCommentEntry,
+    RequestReport,
+    ReportPick(usize),
+    CloseReport,
+    ReportSubmit,
+    CloseReportEntry,
+    SubmitReport(String),
+    CloseProfileEntry,
+    SubmitProfileName(String),
     CloseCommentEntry,
     SubmitComment(String),
     SelfUpdate,
@@ -163,6 +173,7 @@ pub enum AppCommand {
     ScreenshotStep(i32),
     SetDetailFocus(DetailFocus),
     AnalogScroll(f32),
+    SetDetailScroll(f32),
     PageStep(i32),
     LetterJump(bool),
     SecondaryAction,
@@ -190,6 +201,7 @@ pub fn map_keyboard_event(event: &Event) -> Option<AppCommand> {
         Keycode::F | Keycode::Slash => return Some(AppCommand::RequestSearch),
         Keycode::L => return Some(AppCommand::ToggleLike),
         Keycode::C => return Some(AppCommand::RequestCommentEntry),
+        Keycode::R => return Some(AppCommand::RequestReport),
         Keycode::S => return Some(AppCommand::FlipSortDirection),
         _ => return None,
     };
