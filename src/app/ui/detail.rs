@@ -266,6 +266,10 @@ pub(crate) fn detail_screen(
                 .show(ui, |ui| {
                     ui.set_max_width(viewport_w);
                     ui.multiply_opacity(enter_t);
+                    if entry.platform == Platform::Theme {
+                        theme_detail(ui, icons, lang, entry, state, install, viewport_w, &mut commands);
+                        return;
+                    }
                     let gap = 18.0;
                     let col_w = ((viewport_w - gap) / 2.0).floor();
                     ui.horizontal_top(|ui| {
@@ -1421,6 +1425,10 @@ fn left_column(
         install_action(ui, lang, entry, state, None, commands);
         ui.add_space(8.0);
     }
+    if entry.platform == crate::data::Platform::Theme && state != InstallState::Absent {
+        ui.label(egui::RichText::new(lang.tr("theme-apply-hint")).size(FONT_SMALL).color(pal().success));
+        ui.add_space(6.0);
+    }
     match install {
         None => {
             let secondary = detail_actions::secondary(entry, state);
@@ -2002,5 +2010,143 @@ fn paint_qr(ui: &mut egui::Ui, text: &str, side: f32) {
                 );
             }
         }
+    }
+}
+
+/// Theme page: the facts and the install button on the left, a big preview on the right.
+/// Themes have no ratings, comments or game data, so none of that is shown.
+fn theme_detail(
+    ui: &mut egui::Ui,
+    icons: &IconCache,
+    lang: Language,
+    entry: &crate::data::AppEntry,
+    state: InstallState,
+    install: Option<&crate::install::Progress>,
+    width: f32,
+    commands: &mut Vec<AppCommand>,
+) {
+    let gap = 18.0;
+    let col_w = ((width - gap) / 2.0).floor();
+    ui.horizontal_top(|ui| {
+        ui.allocate_ui_with_layout(egui::vec2(col_w, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+            ui.set_max_width(col_w);
+            ui.add(egui::Label::new(egui::RichText::new(&entry.name).size(FONT_HEADLINE).strong().color(pal().text)).wrap());
+            // The list only knows "psvt.ovh"; the real author comes with the detail page. Keep the line's
+            // height so nothing below jumps when it arrives.
+            if entry.overview.is_empty() && entry.author == "psvt.ovh" {
+                ui.add_space(FONT_BODY + 6.0);
+            } else if ui
+                .add(egui::Button::new(egui::RichText::new(&entry.author).size(FONT_BODY).strong().color(pal().accent_soft)).frame(false))
+                .clicked()
+            {
+                commands.push(AppCommand::MoreByAuthor(entry.author.clone()));
+            }
+            ui.add_space(4.0);
+            // The list row's subtitle is "a, b" tags for most themes but a free-text sentence for some.
+            // The detail page later rewrites real tags as "#a  #b". Tags are short; anything longer is
+            // a description, shown as plain text instead of one giant chip.
+            let tags: Vec<String> = if entry.description.contains('#') {
+                entry.description.split('#').map(|t| t.trim().to_owned()).collect()
+            } else {
+                entry.description.split(',').map(|t| t.trim().to_owned()).collect()
+            };
+            let looks_like_tags = tags.iter().all(|t| t.chars().count() <= 28);
+            if looks_like_tags {
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
+                    for tag in tags.iter().filter(|t| !t.is_empty()).take(8).map(|t| format!("#{t}")) {
+                        let galley = ui.fonts(|f| f.layout_no_wrap(tag, font(FONT_MICRO), pal().accent_soft));
+                        let rect = ui.allocate_exact_size(egui::vec2(galley.size().x + 12.0, 16.0), egui::Sense::hover()).0;
+                        ui.painter().rect_filled(rect, RADIUS_XS, pal().accent_soft.gamma_multiply(0.18));
+                        ui.painter().galley(rect.center() - galley.size() / 2.0, galley, pal().accent_soft);
+                    }
+                });
+            } else {
+                ui.add(egui::Label::new(egui::RichText::new(entry.description.trim()).size(FONT_SMALL).color(pal().text_dim)).wrap());
+            }
+            ui.add_space(12.0);
+            theme_stats(ui, lang, entry);
+            ui.add_space(14.0);
+            if install.is_none() {
+                install_action(ui, lang, entry, state, None, commands);
+                ui.add_space(6.0);
+            }
+            if state != InstallState::Absent {
+                ui.label(egui::RichText::new(lang.tr("theme-apply-hint")).size(FONT_SMALL).color(pal().success));
+                ui.add_space(6.0);
+            }
+            if install.is_none() {
+                let secondary = detail_actions::secondary(entry, state);
+                let tertiary = detail_actions::tertiary(entry, state);
+                ui.horizontal(|ui| {
+                    if let Some(action) = secondary
+                        && action_chip(ui, Glyph::Triangle, action_label(lang, action))
+                    {
+                        commands.push(AppCommand::InstallCurrent);
+                    }
+                    if let Some(action) = tertiary
+                        && action_chip(ui, Glyph::Square, action_label(lang, action))
+                    {
+                        commands.push(AppCommand::UninstallCurrent);
+                    }
+                });
+            }
+            // Validation and the date added go underneath.
+            let extra: Vec<_> = entry.overview.iter().filter(|(k, _)| k != "Source").collect();
+            if !extra.is_empty() {
+                ui.add_space(10.0);
+                for (key, value) in extra {
+                    info_row(ui, key, value);
+                }
+            }
+        });
+        ui.add_space(gap);
+        ui.allocate_ui_with_layout(egui::vec2(col_w, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+            ui.set_max_width(col_w);
+            let (rect, response) = ui.allocate_exact_size(egui::vec2(col_w, (col_w * 9.0 / 16.0).floor()), egui::Sense::click());
+            if let Some(url) = entry.screenshot_urls.first() {
+                draw_screenshot(ui, icons, rect, url, entry.category, true, lang);
+                if response.clicked() {
+                    commands.push(AppCommand::OpenScreenshot(0));
+                }
+            }
+        });
+    });
+    ui.add_space(20.0);
+}
+
+/// Downloads / size / version / added, in one card. A cell with no value is left out instead of
+/// showing "0 KB" or "-" (psvt.ovh doesn't always give a size).
+fn theme_stats(ui: &mut egui::Ui, lang: Language, entry: &crate::data::AppEntry) {
+    // Until the theme's page answers there is no size or version; hold their places with "..." so the
+    // card doesn't grow cell by cell. Once it has answered, a missing value just drops its cell.
+    let answered = !entry.overview.is_empty();
+    let mut cells: Vec<(String, String)> = vec![(short_count(entry.downloads), lang.downloads().to_owned())];
+    if entry.size_bytes > 0 {
+        cells.push((entry.size_label(), lang.size().to_owned()));
+    } else if !answered {
+        cells.push(("...".to_owned(), lang.size().to_owned()));
+    }
+    if !entry.version.trim().is_empty() {
+        cells.push((entry.version.trim().to_owned(), lang.version().to_owned()));
+    } else if !answered {
+        cells.push(("...".to_owned(), lang.version().to_owned()));
+    }
+    let width = ui.available_width();
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 50.0), egui::Sense::hover());
+    ui.painter().rect_filled(rect, CARD_RADIUS, glass(pal().bg_card));
+    ui.painter().rect_stroke(rect, CARD_RADIUS, egui::Stroke::new(1.0_f32, pal().separator), egui::StrokeKind::Inside);
+    let cell_w = width / cells.len() as f32;
+    for (index, (value, caption)) in cells.iter().enumerate() {
+        let x = rect.left() + cell_w * index as f32;
+        if index > 0 {
+            ui.painter().line_segment(
+                [egui::pos2(x, rect.top() + 10.0), egui::pos2(x, rect.bottom() - 10.0)],
+                egui::Stroke::new(1.0_f32, pal().separator),
+            );
+        }
+        let center_x = x + cell_w / 2.0;
+        ui.painter().text(egui::pos2(center_x, rect.top() + 18.0), egui::Align2::CENTER_CENTER, value, font(FONT_TITLE), pal().text);
+        ui.painter().text(egui::pos2(center_x, rect.top() + 36.0), egui::Align2::CENTER_CENTER, caption, font(FONT_SMALL), pal().text_faint);
     }
 }

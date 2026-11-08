@@ -206,6 +206,7 @@ pub(crate) fn tile_platform_badge(
             Platform::Psp | Platform::NpsPsp => "PSP",
             Platform::NpsPsx => "PS1",
             Platform::Plugin => "PLUG",
+            Platform::Theme => "THEME",
         },
     };
     let galley = ui.fonts(|f| f.layout_no_wrap(text.to_owned(), font(FONT_MICRO), pal().text));
@@ -284,6 +285,13 @@ pub(crate) fn cover_card(
     }
     draw_cover(ui, icons, image_rect, entry);
     tile_platform_badge(ui, image_rect, entry);
+    // shadcn-style hairline: a 1px edge at rest keeps covers crisp against the dark background.
+    ui.painter().rect_stroke(
+        image_rect,
+        CARD_RADIUS,
+        egui::Stroke::new(1.0_f32, pal().separator),
+        egui::StrokeKind::Inside,
+    );
     install_marker(ui.painter(), image_rect, installed.state(entry));
     tile_label_below(ui, label_rect, &entry.name, focus_t > 0.5);
     if focus_t > 0.01 {
@@ -354,12 +362,13 @@ pub(crate) fn catalog_grid(
     scroll_to_selected: bool,
     scroll_reset: bool,
     commands: &mut Vec<AppCommand>,
+    columns: usize,
 ) {
     let free_h = (ui.available_height() - GRID_BOTTOM_PAD).max(80.0);
     let available = (ui.available_width() - SCROLLBAR_RESERVE).max(0.0);
     let label_extra = TILE_LABEL_HEIGHT + TILE_LABEL_GAP;
     let max_card_w =
-        (available - GRID_COL_SPACING * (GRID_COLUMNS as f32 - 1.0)) / GRID_COLUMNS as f32;
+        (available - GRID_COL_SPACING * (columns as f32 - 1.0)) / columns as f32;
     let card_width = max_card_w.max(1.0);
     let natural_card_height = (card_width / COVER_ASPECT).max(1.0) + label_extra;
     // The catalog always presents two complete rows.
@@ -368,12 +377,12 @@ pub(crate) fn catalog_grid(
         .min(natural_card_height);
     let row_height = card_height + GRID_ROW_SPACING;
     let viewport_h = (row_height * 2.0).min(free_h);
-    let gaps = (GRID_COLUMNS as f32 - 1.0).max(1.0);
+    let gaps = (columns as f32 - 1.0).max(1.0);
     let leftover =
-        (available - card_width * GRID_COLUMNS as f32 - GRID_COL_SPACING * gaps).max(0.0);
+        (available - card_width * columns as f32 - GRID_COL_SPACING * gaps).max(0.0);
     let col_spacing = GRID_COL_SPACING;
     let row_inset = leftover * 0.5;
-    let total_rows = filtered_indices.len().div_ceil(GRID_COLUMNS);
+    let total_rows = filtered_indices.len().div_ceil(columns);
     let mut scroll_area = egui::ScrollArea::vertical()
         .id_salt("catalog_grid")
         .max_height(viewport_h);
@@ -387,7 +396,7 @@ pub(crate) fn catalog_grid(
             && !scroll_reset
             && let Some(cursor) = selected
         {
-            let row = cursor / GRID_COLUMNS;
+            let row = cursor / columns;
             let row_top = ui.max_rect().top() + row as f32 * row_height;
 
             let target_top = if row == 0 {
@@ -423,8 +432,8 @@ pub(crate) fn catalog_grid(
                     if row_inset > 0.0 {
                         ui.add_space(row_inset);
                     }
-                    for column in 0..GRID_COLUMNS {
-                        let item_index = grid_row * GRID_COLUMNS + column;
+                    for column in 0..columns {
+                        let item_index = grid_row * columns + column;
                         let Some(&real_index) = filtered_indices.get(item_index) else {
                             break;
                         };
@@ -453,16 +462,16 @@ pub(crate) fn catalog_grid(
                         if card.clicked {
                             commands.push(AppCommand::SelectApp { index: item_index });
                         }
-                        if column + 1 < GRID_COLUMNS {
+                        if column + 1 < columns {
                             ui.add_space(col_spacing);
                         }
                     }
                 });
                 ui.add_space(GRID_ROW_SPACING);
             }
-            let prefetch_start = min_row.saturating_sub(1) * GRID_COLUMNS;
+            let prefetch_start = min_row.saturating_sub(1) * columns;
             let prefetch_end =
-                ((max_row + 1) * GRID_COLUMNS + ART_LOOKAHEAD).min(filtered_indices.len());
+                ((max_row + 1) * columns + ART_LOOKAHEAD).min(filtered_indices.len());
             let mut warm = Vec::new();
             for item_index in prefetch_start..prefetch_end {
                 if let Some(&real_index) = filtered_indices.get(item_index)

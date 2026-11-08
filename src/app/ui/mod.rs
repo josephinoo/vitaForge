@@ -409,7 +409,20 @@ fn catalog_screen(
                         ui.add_space(6.0);
                     }
 
-                    if filtered_indices.is_empty() {
+                    if filtered_indices.is_empty()
+                        && content_type_group == ContentTypeGroup::Themes
+                        && crate::data::psvt::searching()
+                    {
+                        // The site is still answering the search.
+                        ui.add_space(18.0);
+                        let dots = ".".repeat(1 + (ui.input(|i| i.time) * 3.0) as usize % 3);
+                        ui.label(
+                            egui::RichText::new(format!("{}{dots}", lang.tr("themes-searching").trim_end_matches('…')))
+                                .size(FONT_LARGE)
+                                .color(pal().text_dim),
+                        );
+                        ui.ctx().request_repaint_after(std::time::Duration::from_millis(300));
+                    } else if filtered_indices.is_empty() {
                         ui.add_space(18.0);
                         let empty = match tab {
                             StoreTab::Library => lang.library_empty(),
@@ -458,6 +471,7 @@ fn catalog_screen(
                             scroll_to_selected,
                             scroll_reset,
                             &mut commands,
+                            content_type_group.grid_columns(),
                         );
                     }
                 });

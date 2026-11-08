@@ -92,6 +92,7 @@ make ftp VITA_IP=192.168.0.x
 
 - **[Rinnegatamante](https://github.com/Rinnegatamante)** for [VitaDB](https://vitadb.rinnegatamante.it/), [VitaDB-Downloader](https://github.com/Rinnegatamante/VitaDB-Downloader) and [vitaGL](https://github.com/Rinnegatamante/vitaGL).
 - The **vita-rust** team for the Rust toolchain for PS Vita.
+- **[psvt.ovh](https://psvt.ovh/)** (PSVita Custom Themes, by redsquirrel87) for the theme repository behind the Themes tab.
 - **[Northfear](https://github.com/Northfear)** for the SDL2 + vitaGL integration patterns.
 
 ## Contributors

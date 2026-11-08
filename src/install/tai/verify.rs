@@ -27,7 +27,8 @@ fn check_as(path: &Path, final_name: &Path, expected_size: Option<u64>) -> Resul
         std::fs::File::open(path)
             .and_then(|mut f| std::io::Read::read_exact(&mut f, &mut magic))
             .map_err(|_| anyhow::anyhow!("the downloaded plugin is too short to be a module"))?;
-        if magic != *b"\x7fELF" {
+        // Built plugins are SELF files ("SCE\0", from vita-make-fself); a raw ELF is also accepted.
+        if magic != *b"\x7fELF" && magic != *b"SCE\0" {
             bail!("the downloaded file isn't a valid plugin module");
         }
     }
@@ -127,6 +128,9 @@ mod tests {
         let short = d.join("c.suprx");
         std::fs::write(&short, b"\x7f").unwrap();
         assert!(check_module(&short, None).is_err());
+        let signed = d.join("e.suprx");
+        std::fs::write(&signed, [b"SCE\0".as_slice(), &[1; 60]].concat()).unwrap();
+        assert!(check_module(&signed, None).is_ok(), "SELF-packed modules are the normal case");
         let good = d.join("d.skprx");
         std::fs::write(&good, elf()).unwrap();
         assert!(check_module(&good, None).is_ok());

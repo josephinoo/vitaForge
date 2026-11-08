@@ -308,6 +308,7 @@ impl RawApp {
             content_id: self.content_id.and_then(non_empty),
             name_lower: String::new(), 
             author_lower: String::new(), 
+            description_lower: String::new(),
             name: self.name,
             original_name: self.original_name,
             overview: self.overview.map(|o| o.into_iter().collect()).unwrap_or_default(),
@@ -490,26 +491,40 @@ async fn fetch_remote_version_with_retry() -> anyhow::Result<CatalogVersionInfo>
     }
 }
 
+/// One GET of the merged snapshot; a non-2xx (rate limit, 5xx) is an error, not a JSON parse failure.
+async fn download_snapshot_once() -> anyhow::Result<Vec<AppEntry>> {
+    let response = request(reqwest::Method::GET, "/apps/snapshot").send().await?;
+    if !response.status().is_success() {
+        anyhow::bail!("catalog snapshot HTTP {}", response.status());
+    }
+    let page: AppsPage = response.json().await?;
+    let entries = page.data.into_iter().filter_map(RawApp::into_app_entry).collect();
+    Ok(drop_unavailable_platforms(entries))
+}
+
+async fn download_snapshot() -> anyhow::Result<Vec<AppEntry>> {
+    match download_snapshot_once().await {
+        Ok(entries) => Ok(entries),
+        Err(first) => {
+            eprintln!("catalog snapshot failed ({first:#}); retrying once…");
+            tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+            download_snapshot_once().await
+        }
+    }
+}
+
 async fn fetch_snapshot(remote_ver: CatalogVersionInfo) -> anyhow::Result<Vec<AppEntry>> {
     eprintln!(
         "Fetching fresh catalog snapshot from server (version: {})...",
         remote_ver.version
     );
-    let response = request(reqwest::Method::GET, "/apps/snapshot").send().await?;
-    let page: AppsPage = response.json().await?;
-    let entries: Vec<AppEntry> = page
-        .data
-        .into_iter()
-        .filter_map(RawApp::into_app_entry)
-        .collect();
-    let entries = drop_unavailable_platforms(entries);
-    let entries = tokio::task::spawn_blocking(move || {
+    let entries = download_snapshot().await?;
+    tokio::task::spawn_blocking(move || {
         save_cached_catalog_blocking(&entries, remote_ver);
         entries
     })
     .await
-    .map_err(|err| anyhow::anyhow!("catalog cache worker crashed: {err}"))?;
-    Ok(entries)
+    .map_err(|err| anyhow::anyhow!("catalog cache worker crashed: {err}"))
 }
 
 pub async fn fetch_catalog() -> anyhow::Result<Vec<AppEntry>> {
@@ -543,40 +558,20 @@ pub async fn fetch_catalog() -> anyhow::Result<Vec<AppEntry>> {
             eprintln!(
                 "catalog version unavailable ({err:#}); attempting snapshot without version gate…"
             );
-            match request(reqwest::Method::GET, "/apps/snapshot").send().await {
-                Ok(response) if response.status().is_success() => {
-                    let page: AppsPage = response.json().await?;
-                    let entries: Vec<AppEntry> = page
-                        .data
-                        .into_iter()
-                        .filter_map(RawApp::into_app_entry)
-                        .collect();
-                    let entries = drop_unavailable_platforms(entries);
-                    let version_info = CatalogVersionInfo {
-                        version: cached.as_ref().map(|(_, v)| v.version).unwrap_or(0),
-                        total_apps: entries.len() as i64,
-                        etag: String::new(),
-                    };
-                    let entries = tokio::task::spawn_blocking(move || {
-                        save_cached_catalog_blocking(&entries, version_info);
-                        entries
-                    })
-                    .await
-                    .map_err(|e| anyhow::anyhow!("catalog cache worker crashed: {e}"))?;
-                    Ok(entries)
-                }
-                Ok(response) => {
-                    anyhow::bail!(
-                        "Failed to fetch catalog snapshot (HTTP {}) and no complete local cache: {err:#}",
-                        response.status()
-                    )
-                }
-                Err(snap_err) => {
-                    anyhow::bail!(
-                        "Failed to fetch catalog and no complete local cache (version: {err:#}; snapshot: {snap_err:#})"
-                    )
-                }
-            }
+            let entries = download_snapshot()
+                .await
+                .map_err(|snap_err| anyhow::anyhow!("Failed to fetch catalog and no complete local cache (version: {err:#}; snapshot: {snap_err:#})"))?;
+            let version_info = CatalogVersionInfo {
+                version: cached.as_ref().map(|(_, v)| v.version).unwrap_or(0),
+                total_apps: entries.len() as i64,
+                etag: String::new(),
+            };
+            tokio::task::spawn_blocking(move || {
+                save_cached_catalog_blocking(&entries, version_info);
+                entries
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("catalog cache worker crashed: {e}"))
         }
     }
 }
@@ -882,6 +877,7 @@ mod tests {
             name_lower: String::new(),
             author: "x".into(),
             author_lower: String::new(),
+            description_lower: String::new(),
             description: String::new(),
             long_description: String::new(),
             requirements: String::new(),

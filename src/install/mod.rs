@@ -12,6 +12,8 @@ mod promoter;
 pub mod requirements;
 mod sfo;
 pub mod tai;
+pub mod theme;
+mod theme_db;
 use crate::data::AppEntry;
 use anyhow::{Context, Result, bail};
 use std::collections::VecDeque;
@@ -533,6 +535,7 @@ async fn run(
         crate::data::Platform::Vita => run_vita(entry, tx, cancel).await,
         crate::data::Platform::Psp => run_psp(entry, tx, cancel).await,
         crate::data::Platform::Plugin => run_plugin(entry, tx, cancel).await,
+        crate::data::Platform::Theme => theme::run(entry, tx, cancel).await,
         crate::data::Platform::NpsVita => run_nps_vita(entry, tx).await,
         crate::data::Platform::NpsPsp | crate::data::Platform::NpsPsx => {
             bail!("PSP/PS1 installs are temporarily unavailable")

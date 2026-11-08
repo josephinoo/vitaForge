@@ -19,7 +19,7 @@ pub(crate) fn catalog_header(
         egui::vec2(ui.available_width(), HEADER_HEIGHT),
         egui::Layout::left_to_right(egui::Align::Center),
         |ui| {
-            ui.spacing_mut().item_spacing = egui::vec2(3.0, 0.0);
+            ui.spacing_mut().item_spacing = egui::vec2(1.0, 0.0);
 
             for group in ContentTypeGroup::ALL {
                 let active = tab == StoreTab::Categories && content_type_group == group;
@@ -33,7 +33,7 @@ pub(crate) fn catalog_header(
                 }
             }
 
-            ui.add_space(6.0);
+            ui.add_space(3.0);
 
             if top_nav_button(
                 ui,

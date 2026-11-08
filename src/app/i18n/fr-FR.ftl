@@ -134,6 +134,7 @@ credits-body =
     Rinnegatamante — VitaDB-Downloader et vitaGL.
     Northfear — intégration SDL2 / vitaGL.
     vita-rust et VitaSDK — outils de développement PS Vita.
+    psvt.ovh (redsquirrel87) — dépôt PSVita Custom Themes, source de l’onglet Themes : https://psvt.ovh/
 
 add-comment = + Ajouter un commentaire
 btn-back = Retour
@@ -326,3 +327,7 @@ tai-profile-renamed = Profil renommé
 tai-profile-exported = Exporté vers ux0:data/vitaforge/export
 tai-profile-import-hint = Importer ce profil
 tai-beta = BÊTA : le gestionnaire de plugins peut contenir des erreurs. Sauvegardez config.txt avant de l'utiliser.
+group-themes = Thèmes
+category-theme = Thème
+theme-apply-hint = Installé. Appliquez-le dans Paramètres > Thème et arrière-plan.
+themes-searching = Recherche de thèmes…

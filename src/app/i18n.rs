@@ -111,6 +111,7 @@ impl Language {
                 crate::data::Category::Ps1Game => s.category_ps1_game,
                 crate::data::Category::PspGame => s.category_psp_game,
                 crate::data::Category::Plugin => s.category_plugin,
+                crate::data::Category::Theme => s.category_theme,
                 crate::data::Category::Port => s.category_port,
                 crate::data::Category::Tool => s.category_tool,
                 crate::data::Category::Utility => s.category_utility,
@@ -633,6 +634,7 @@ impl Language {
             crate::input::ContentTypeGroup::Apps => s.group_apps,
             crate::input::ContentTypeGroup::Emulators => s.group_emulators,
             crate::input::ContentTypeGroup::Plugins => s.group_plugins,
+            crate::input::ContentTypeGroup::Themes => s.group_themes,
         })
     }
     pub fn sidebar_platform_label(self, cat: crate::data::Category) -> &'static str {
@@ -645,6 +647,7 @@ impl Language {
             other => match other {
                 crate::data::Category::Emulator => s.category_emulator,
                 crate::data::Category::Plugin => s.category_plugin,
+                crate::data::Category::Theme => s.category_theme,
                 crate::data::Category::Utility => s.category_utility,
                 crate::data::Category::Tool => s.category_tool,
                 crate::data::Category::Other => s.category_other,
@@ -744,6 +747,7 @@ struct LocalizedStrings {
     category_ps1_game: &'static str,
     category_psp_game: &'static str,
     category_plugin: &'static str,
+    category_theme: &'static str,
     category_port: &'static str,
     category_tool: &'static str,
     category_utility: &'static str,
@@ -820,6 +824,7 @@ struct LocalizedStrings {
     group_apps: &'static str,
     group_emulators: &'static str,
     group_plugins: &'static str,
+    group_themes: &'static str,
     sidebar_vita: &'static str,
     sidebar_psp: &'static str,
     sidebar_ps1: &'static str,
@@ -912,6 +917,7 @@ impl LocalizedStrings {
             category_ps1_game: r("category-ps1-game"),
             category_psp_game: r("category-psp-game"),
             category_plugin: r("category-plugin"),
+            category_theme: r("category-theme"),
             category_port: r("category-port"),
             category_tool: r("category-tool"),
             category_utility: r("category-utility"),
@@ -988,6 +994,7 @@ impl LocalizedStrings {
             group_apps: r("group-apps"),
             group_emulators: r("group-emulators"),
             group_plugins: r("group-plugins"),
+            group_themes: r("group-themes"),
             sidebar_vita: r("sidebar-vita"),
             sidebar_psp: r("sidebar-psp"),
             sidebar_ps1: r("sidebar-ps1"),

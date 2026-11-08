@@ -133,6 +133,23 @@ impl CatalogState {
             sidebar_cursor: 0,
         }
     }
+    /// Adds a page of themes without touching the rest of the catalog. Returns the ones actually new.
+    fn append_themes(&mut self, themes: Vec<AppEntry>) -> Vec<AppEntry> {
+        let known: std::collections::HashSet<&str> =
+            self.apps.iter().filter(|a| a.platform == data::Platform::Theme).map(|a| a.id.as_str()).collect();
+        let fresh: Vec<AppEntry> = themes.into_iter().filter(|t| !known.contains(t.id.as_str())).collect();
+        if fresh.is_empty() {
+            return fresh;
+        }
+        self.apps.extend(fresh.iter().cloned());
+        self.sorted_indices = self.sort_order_indices();
+        self.recompute_dropdown_counts();
+        // Only the browsing tab shows this list; Library and Updates keep their own installed-only filter.
+        if self.tab == StoreTab::Categories {
+            self.refresh_filter_preserving_selection();
+        }
+        fresh
+    }
     fn replace_apps(&mut self, apps: Vec<AppEntry>) {
         // A background revalidation usually brings nothing new; skip the re-sort and re-filter then.
         let unchanged = self.apps.len() == apps.len()
@@ -218,7 +235,10 @@ impl CatalogState {
                     SortDirection::Asc => apps[a].rating.total_cmp(&apps[b].rating),
                     SortDirection::Desc => apps[b].rating.total_cmp(&apps[a].rating),
                 }
-                .then_with(|| apps[a].name_lower.cmp(&apps[b].name_lower))
+                // Themes keep the site's order (their rating is always 0).
+                .then_with(|| {
+                    if apps[a].platform == data::Platform::Theme { a.cmp(&b) } else { apps[a].name_lower.cmp(&apps[b].name_lower) }
+                })
             }),
             SortOrder::Recent => order.sort_by(|&a, &b| {
                 let ea = apps[a].sort_key();
@@ -313,6 +333,8 @@ impl CatalogState {
                         || app.name_lower.contains(&query)
                         || app.author_lower.contains(&query)
                         || app.titleid_lower.contains(&query)
+                        // psvt.ovh also matches a theme's tags, which live in the description.
+                        || (app.platform == data::Platform::Theme && app.description_lower.contains(&query))
                         || app.genres.iter().any(|genre| genre.to_lowercase().contains(&query)))
             })
             .collect();
@@ -365,6 +387,8 @@ impl CatalogState {
             .iter()
             .map(|&category| {
                 let count = apps.iter().filter(|app| app.category == category).count();
+                // Themes load page by page; show the full size from the start.
+                let count = if category == Category::Theme { count.max(data::psvt::total()) } else { count };
                 (category, count)
             })
             .collect();
@@ -372,6 +396,9 @@ impl CatalogState {
             .filter(|&i| group.contains(apps[i].category))
             .collect();
         self.group_total = collapse_homebrew_duplicates(apps, indices).len();
+        if group == ContentTypeGroup::Themes {
+            self.group_total = self.group_total.max(data::psvt::total());
+        }
     }
 
     fn move_selection(&mut self, delta: isize) -> bool {
@@ -716,6 +743,14 @@ pub struct App {
     pub self_update_prompt: bool,
     needs_installed_rescan: bool,
     load_rx: Option<oneshot::Receiver<CatalogSource>>,
+    theme_detail_rx: Option<oneshot::Receiver<(String, data::psvt::Detail)>>,
+    themes_rx: Option<oneshot::Receiver<Option<Vec<AppEntry>>>>,
+    themes_retry_at: std::time::Instant,
+    /// Last search text sent to psvt.ovh.
+    themes_searched: String,
+    /// The next themes result replaces the list (sort changed) instead of extending it.
+    themes_reorder: bool,
+    themes_sort: data::psvt::Sort,
     load_started_at: std::time::Instant,
     self_update_rx: Option<oneshot::Receiver<SelfUpdateInfo>>,
     comments_rx: Option<oneshot::Receiver<(String, Vec<data::api::Comment>)>>,
@@ -814,6 +849,12 @@ impl App {
             self_update_prompt: false,
             needs_installed_rescan: true,
             load_rx: Some(rx),
+            theme_detail_rx: None,
+            themes_rx: None,
+            themes_retry_at: std::time::Instant::now(),
+            themes_searched: String::new(),
+            themes_reorder: false,
+            themes_sort: data::psvt::Sort::default(),
             load_started_at: std::time::Instant::now(),
             self_update_rx: Some(self_update_rx),
             comments_rx: None,
@@ -865,6 +906,95 @@ impl App {
         });
         self.load_rx = Some(rx);
         self.load_started_at = std::time::Instant::now();
+    }
+    /// Scrolling toward the end of the Themes tab pulls the next psvt.ovh page.
+    fn page_themes(&mut self, ctx: &egui::Context) {
+        if let Some(rx) = &mut self.themes_rx
+            && let Ok(result) = rx.try_recv()
+        {
+            self.themes_rx = None;
+            if result.is_none() {
+                // Out of pages (or nothing loaded yet): don't ask again every frame.
+                self.themes_retry_at = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            }
+            let reorder = std::mem::take(&mut self.themes_reorder);
+            if let (Some(themes), AppState::Catalog(catalog)) = (result, &mut self.state) {
+                let fresh = if reorder {
+                    // A new sort order: the whole theme list is replaced (catalog entries stay as they are).
+                    let mut apps: Vec<AppEntry> = catalog.apps.iter().filter(|a| a.platform != data::Platform::Theme).cloned().collect();
+                    apps.extend(themes.iter().cloned());
+                    catalog.replace_apps(apps);
+                    themes
+                } else {
+                    // A page or search results: append only what's new; no catalog-wide rescan.
+                    catalog.append_themes(themes)
+                };
+                self.installed.add_themes(&fresh);
+                self.icons.precache_background(precache_art_urls(&fresh));
+                ctx.request_repaint();
+            }
+        }
+        // The total arrives in the background; refresh the sidebar number when it does.
+        if let AppState::Catalog(catalog) = &mut self.state
+            && data::psvt::total() > catalog.group_category_counts.iter().find(|(c, _)| *c == data::Category::Theme).map_or(0, |&(_, n)| n)
+        {
+            catalog.recompute_group_counts();
+        }
+        if self.themes_rx.is_some() || self.install_busy() {
+            return;
+        }
+        let AppState::Catalog(catalog) = &self.state else { return };
+        // Searching, sorting and paging only matter while browsing; on Library/Updates the content group
+        // is still Themes from before, and loading pages there would rebuild those tabs' lists.
+        if catalog.tab != StoreTab::Categories {
+            return;
+        }
+        // The site orders the whole list; sorting only the loaded pages would rank 60 random themes.
+        if catalog.content_type_group == ContentTypeGroup::Themes {
+            let wanted = match catalog.sort_order {
+                SortOrder::Downloads => data::psvt::Sort::Downloads,
+                SortOrder::Rating => data::psvt::Sort::Popular,
+                SortOrder::Name => data::psvt::Sort::Title,
+                SortOrder::Recent | SortOrder::Size => data::psvt::Sort::Newest,
+            };
+            if wanted != self.themes_sort && data::psvt::set_sort(wanted) {
+                self.themes_sort = wanted;
+                self.themes_reorder = true;
+                let (tx, rx) = oneshot::channel();
+                tokio::spawn(async move {
+                    let _ = tx.send(Some(data::psvt::fetch().await));
+                });
+                self.themes_rx = Some(rx);
+                return;
+            }
+        }
+        let query = catalog.search_query.trim().to_lowercase();
+        if catalog.content_type_group == ContentTypeGroup::Themes && query != self.themes_searched {
+            self.themes_searched = query.clone();
+            if !query.is_empty() {
+                // Search the whole site, not just the pages loaded so far.
+                data::psvt::begin_search();
+                let (tx, rx) = oneshot::channel();
+                tokio::spawn(async move {
+                    let _ = tx.send(data::psvt::search_merge(&query).await);
+                });
+                self.themes_rx = Some(rx);
+                return;
+            }
+        }
+        if std::time::Instant::now() < self.themes_retry_at {
+            return;
+        }
+        if catalog.content_type_group == ContentTypeGroup::Themes
+            && query.is_empty()
+            && catalog.selected + data::psvt::LOAD_AHEAD >= catalog.filtered_indices.len()
+        {
+            let (tx, rx) = oneshot::channel();
+            tokio::spawn(async move {
+                let _ = tx.send(data::psvt::load_more().await);
+            });
+            self.themes_rx = Some(rx);
+        }
     }
     fn refresh_cache_stats(&mut self) {
         let (tx, rx) = oneshot::channel();
@@ -1032,6 +1162,40 @@ impl App {
                 ctx.request_repaint();
             }
         }
+        if let Some(rx) = &mut self.theme_detail_rx
+            && let Ok((id, d)) = rx.try_recv()
+        {
+            self.theme_detail_rx = None;
+            if let AppState::Detail { app, .. } = &mut self.state
+                && app.id == id
+            {
+                if !d.version.is_empty() {
+                    app.version = d.version;
+                }
+                if !d.author.is_empty() {
+                    app.author = d.author;
+                }
+                if d.downloads > 0 {
+                    app.downloads = d.downloads;
+                }
+                if d.size_bytes > 0 {
+                    app.size_bytes = d.size_bytes;
+                }
+                if !d.tags.is_empty() {
+                    app.description = d.tags.iter().map(|t| format!("#{t}")).collect::<Vec<_>>().join("  ");
+                }
+                app.overview = [("Validation", d.validation), ("Added", d.added)]
+                    .into_iter()
+                    .filter(|(_, v)| !v.is_empty())
+                    .map(|(k, v)| (k.to_owned(), v))
+                    .collect();
+                if app.overview.is_empty() {
+                    // Marks the detail as answered, so the page stops showing placeholders.
+                    app.overview.push(("Source".to_owned(), "psvt.ovh".to_owned()));
+                }
+                ctx.request_repaint();
+            }
+        }
         if let Some(rx) = &mut self.comments_rx
             && let Ok((app_id, fetched)) = rx.try_recv()
         {
@@ -1052,6 +1216,7 @@ impl App {
             self.cache_stats = stats;
             ctx.request_repaint();
         }
+        self.page_themes(ctx);
         // The version probe is one small request; the snapshot is only downloaded when it changed.
         if self.load_rx.is_none()
             && matches!(self.state, AppState::Catalog(_))
@@ -1233,6 +1398,7 @@ impl App {
                 name_lower: String::new(),
                 author: "josephinoo".to_owned(),
                 author_lower: String::new(),
+                description_lower: String::new(),
                 description: format!("Self-update for VitaForge {}", info.tag),
                 long_description: String::new(),
                 requirements: String::new(),
@@ -1957,6 +2123,12 @@ impl App {
                             let result = crate::install::tai::uninstall(&store, &plugin).map_err(|err| format!("{err:#}"));
                             let _ = tx.send((key, name, result));
                         });
+                    } else if app.platform == crate::data::Platform::Theme {
+                        let theme = app.clone();
+                        tokio::task::spawn_blocking(move || {
+                            let result = crate::install::theme::uninstall(&theme).map_err(|err| format!("{err:#}"));
+                            let _ = tx.send((key, name, result));
+                        });
                     } else {
                         tokio::spawn(async move {
                             let result = crate::install::lifecycle::uninstall(&titleid)
@@ -2304,9 +2476,10 @@ impl App {
                             return Ok(());
                         }
 
-                        let columns = crate::app::ui::GRID_COLUMNS as isize;
+                        let grid_columns = catalog.content_type_group.grid_columns();
+                        let columns = grid_columns as isize;
                         let at_left_edge = !catalog.selection_active
-                            || catalog.selected % crate::app::ui::GRID_COLUMNS == 0;
+                            || catalog.selected % grid_columns == 0;
                         if matches!(direction, InputCommand::MoveLeft)
                             && at_left_edge
                             && catalog.shows_sidebar()
@@ -2890,6 +3063,16 @@ impl App {
             }
         });
         self.social_rx = Some(social_rx);
+        if entry.platform == data::Platform::Theme {
+            let theme_id = entry.id.clone();
+            let theme_hash = entry.hash.clone();
+            let (tx, rx) = oneshot::channel();
+            tokio::spawn(async move {
+                let detail = data::psvt::fetch_detail(&theme_id, &theme_hash).await;
+                let _ = tx.send((theme_id, detail));
+            });
+            self.theme_detail_rx = Some(rx);
+        }
         self.state = AppState::Detail {
             app: entry,
             previous: Box::new(catalog),
@@ -2981,6 +3164,7 @@ mod sort_tests {
             name_lower: String::new(),
             author: "unknown".to_owned(),
             author_lower: String::new(),
+            description_lower: String::new(),
             description: String::new(),
             long_description: String::new(),
             requirements: String::new(),

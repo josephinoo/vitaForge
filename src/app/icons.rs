@@ -695,7 +695,8 @@ fn scan_disk_index() -> HashSet<String> {
 }
 fn cache_digest(url: &str) -> Option<String> {
     use md5::Digest;
-    let clean_url = url.split('?').next().unwrap_or(url);
+    // wsrv.nl serves every image from `/?url=...`, so the query is the identity there.
+    let clean_url = if url.contains("wsrv.nl/") { url } else { url.split('?').next().unwrap_or(url) };
     if clean_url.rsplit('/').next().is_none_or(str::is_empty) {
         return None;
     }
@@ -756,9 +757,14 @@ async fn load_icon(url: &str, max_side: u32, cache: &IconCache, skip_disk: bool)
             }
         }
     }
-    let wait = match cache.try_reserve_slot() {
-        Ok(wait) => wait,
-        Err(retry_in) => return LoadOutcome::Deferred { retry_in },
+    // The vitaForge API's pacing doesn't apply to third-party hosts (psvt themes via wsrv.nl).
+    let wait = if url.contains("wsrv.nl") {
+        Duration::ZERO
+    } else {
+        match cache.try_reserve_slot() {
+            Ok(wait) => wait,
+            Err(retry_in) => return LoadOutcome::Deferred { retry_in },
+        }
     };
     if !wait.is_zero() {
         tokio::time::sleep(wait).await;
@@ -874,12 +880,11 @@ fn throttle_delay(headers: &reqwest::header::HeaderMap) -> Duration {
         .unwrap_or(DEFAULT_THROTTLE)
 }
 async fn fetch_bytes(url: &str) -> FetchOutcome {
-    let res = match crate::net::client()
-        .get(url)
-        .header("X-Client-ID", crate::data::client_id::get())
-        .send()
-        .await
-    {
+    let mut request = crate::net::client().get(url);
+    if !url.contains("wsrv.nl") {
+        request = request.header("X-Client-ID", crate::data::client_id::get());
+    }
+    let res = match request.send().await {
         Ok(res) => res,
         Err(err) => {
             eprintln!("couldn't fetch {url}: {err}");
