@@ -1,5 +1,8 @@
 use super::AppEntry;
-use super::api;
+use super::{api, psvt};
 pub async fn fetch_live() -> anyhow::Result<Vec<AppEntry>> {
-    api::fetch_catalog().await
+    let (catalog, themes) = tokio::join!(api::fetch_catalog(), psvt::fetch());
+    let mut entries = catalog?;
+    entries.extend(themes);
+    Ok(entries)
 }

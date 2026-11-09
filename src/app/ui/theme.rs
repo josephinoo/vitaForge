@@ -827,6 +827,7 @@ pub fn category_color(category: Category) -> egui::Color32 {
         Category::Port => egui::Color32::from_rgb(0x5b, 0x8d, 0xef),
         Category::Tool => egui::Color32::from_rgb(0x3a, 0xa8, 0xb5),
         Category::Plugin => egui::Color32::from_rgb(0x2a, 0x9a, 0xa8),
+        Category::Theme => egui::Color32::from_rgb(0x9b, 0x6b, 0xd6),
         Category::Other => egui::Color32::from_rgb(0x6b, 0x73, 0x80),
     }
 }

@@ -492,9 +492,9 @@ pub(crate) fn top_nav_button(
     let color = if active { pal().text } else { pal().text_dim };
     let galley = ui.fonts(|f| f.layout_no_wrap(label.to_owned(), font(FONT_MICRO), color));
     let height = TAB_PILL_HEIGHT;
-    let icon_pad = chrome_icons::NAV_ICON + 7.0;
+    let icon_pad = chrome_icons::NAV_ICON + 5.0;
     let (rect, response) = ui.allocate_exact_size(
-        egui::vec2((galley.size().x + 16.0 + icon_pad).max(42.0), height),
+        egui::vec2((galley.size().x + 10.0 + icon_pad).max(38.0), height),
         egui::Sense::click(),
     );
     let radius = height / 2.0;
@@ -509,7 +509,7 @@ pub(crate) fn top_nav_button(
     }
     let icon_rect = egui::Rect::from_center_size(
         egui::pos2(
-            rect.left() + 8.0 + chrome_icons::NAV_ICON * 0.5,
+            rect.left() + 5.0 + chrome_icons::NAV_ICON * 0.5,
             rect.center().y,
         ),
         egui::vec2(chrome_icons::NAV_ICON, chrome_icons::NAV_ICON),
@@ -517,7 +517,7 @@ pub(crate) fn top_nav_button(
     chrome_icons::paint(ui, icon, icon_rect, color);
     ui.painter().galley(
         egui::pos2(
-            rect.left() + 8.0 + icon_pad,
+            rect.left() + 5.0 + icon_pad,
             rect.center().y - galley.size().y / 2.0,
         ),
         galley,

@@ -16,6 +16,7 @@ pub(super) const HASH_LEN: usize = 32;
 const RESCAN_INTERVAL: Duration = Duration::from_secs(60);
 const INSTALLED_CACHE_FILE: &str = "ux0:data/vitaforge/installed_cache.json";
 const PLUGIN_KEY_PREFIX: &str = "PLUGIN-";
+const THEME_KEY_PREFIX: &str = "THEME-";
 const HASH_CHUNK: usize = 64 * 1024;
 const HASH_BATCH: usize = 8;
 const HASH_GAP: Duration = Duration::from_millis(15);
@@ -30,7 +31,7 @@ struct Wanted {
 }
 impl Wanted {
     fn from_entry(entry: &AppEntry) -> Option<Self> {
-        if entry.platform == Platform::Plugin {
+        if matches!(entry.platform, Platform::Plugin | Platform::Theme) {
             return None;
         }
         let psp = matches!(
@@ -66,6 +67,9 @@ impl Wanted {
     }
 }
 pub fn index_key(entry: &AppEntry) -> String {
+    if entry.platform == Platform::Theme {
+        return format!("{THEME_KEY_PREFIX}{}", entry.id.trim());
+    }
     if entry.platform == Platform::Plugin {
         // Plugins have no app folder; their state comes from the plugin registry.
         return format!("{PLUGIN_KEY_PREFIX}{}", entry.id.trim());
@@ -101,7 +105,7 @@ fn installed_at(titleid: &str) -> Option<String> {
         .as_secs();
     Some(format_ymd(secs))
 }
-fn format_ymd(unix_secs: u64) -> String {
+pub(crate) fn format_ymd(unix_secs: u64) -> String {
     let days = (unix_secs / 86_400) as i64;
     let z = days + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
@@ -271,6 +275,7 @@ impl InstalledIndex {
         }
         self.scanning.store(true, Ordering::Release);
         let wanted: Vec<Wanted> = entries.iter().filter_map(Wanted::from_entry).collect();
+        let themes: Vec<AppEntry> = entries.iter().filter(|e| e.platform == Platform::Theme).cloned().collect();
         let hash_gap = if self.states.lock().unwrap().is_empty() {
             FIRST_SCAN_HASH_GAP
         } else {
@@ -294,6 +299,8 @@ impl InstalledIndex {
                         ctx.request_repaint();
                     },
                 );
+                index.publish_themes(&themes);
+                ctx.request_repaint();
                 *index.scanned_at.lock().unwrap() = Some(Instant::now());
                 index.scanning.store(false, Ordering::Release);
                 ctx.request_repaint();
@@ -305,12 +312,43 @@ impl InstalledIndex {
         }
         true
     }
+    fn publish_themes(&self, themes: &[AppEntry]) {
+        let found: Vec<(String, InstallState)> = themes
+            .iter()
+            .map(|t| (index_key(t), super::theme::state(t)))
+            .filter(|(_, s)| *s != InstallState::Absent)
+            .collect();
+        let mut states = self.states.lock().unwrap();
+        let before = states.clone();
+        states.retain(|key, _| !key.starts_with(THEME_KEY_PREFIX));
+        states.extend(found);
+        *self.counts.lock().unwrap() = count_states(&states);
+        // Rescans run often and nothing usually changed: skip the disk write then.
+        if *states != before {
+            save_installed_cache(&states);
+        }
+    }
+    /// Themes that just arrived (a new page): check only those, without a full rescan.
+    pub fn add_themes(&self, themes: &[AppEntry]) {
+        let found: Vec<(String, InstallState)> = themes
+            .iter()
+            .map(|t| (index_key(t), super::theme::state(t)))
+            .filter(|(_, s)| *s != InstallState::Absent)
+            .collect();
+        if found.is_empty() {
+            return;
+        }
+        let mut states = self.states.lock().unwrap();
+        states.extend(found);
+        *self.counts.lock().unwrap() = count_states(&states);
+        save_installed_cache(&states);
+    }
     fn publish(&self, found: HashMap<String, InstallState>, authoritative: bool) {
         let snapshot = {
             let mut states = self.states.lock().unwrap();
             if authoritative {
                 // The folder scan knows nothing about plugins: keep what the registry said.
-                states.retain(|key, _| key.starts_with(PLUGIN_KEY_PREFIX));
+                states.retain(|key, _| key.starts_with(PLUGIN_KEY_PREFIX) || key.starts_with(THEME_KEY_PREFIX));
                 states.extend(found);
             } else {
                 states.extend(found);

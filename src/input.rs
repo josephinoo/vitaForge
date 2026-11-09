@@ -55,21 +55,23 @@ pub enum ContentTypeGroup {
     Apps,
     Emulators,
     Plugins,
+    Themes,
 }
 
 impl ContentTypeGroup {
-    pub const ALL: [ContentTypeGroup; 5] = [
+    pub const ALL: [ContentTypeGroup; 6] = [
         ContentTypeGroup::Home,
         ContentTypeGroup::Games,
         ContentTypeGroup::Apps,
         ContentTypeGroup::Emulators,
         ContentTypeGroup::Plugins,
+        ContentTypeGroup::Themes,
     ];
 
     pub fn contains(self, category: crate::data::Category) -> bool {
         use crate::data::Category;
         match self {
-            ContentTypeGroup::Home => true,
+            ContentTypeGroup::Home => !matches!(category, Category::Theme),
             ContentTypeGroup::Games => matches!(
                 category,
                 Category::PsVitaGame
@@ -83,6 +85,7 @@ impl ContentTypeGroup {
             }
             ContentTypeGroup::Emulators => matches!(category, Category::Emulator),
             ContentTypeGroup::Plugins => matches!(category, Category::Plugin),
+            ContentTypeGroup::Themes => matches!(category, Category::Theme),
         }
     }
 
@@ -97,6 +100,14 @@ impl ContentTypeGroup {
             ContentTypeGroup::Apps => &[Category::Utility, Category::Tool],
             ContentTypeGroup::Emulators => &[Category::Emulator],
             ContentTypeGroup::Plugins => &[Category::Plugin],
+            ContentTypeGroup::Themes => &[Category::Theme],
+        }
+    }
+
+    /// Same grid width on every tab; a match so a tab can get its own later.
+    pub fn grid_columns(self) -> usize {
+        match self {
+            _ => crate::app::ui::GRID_COLUMNS,
         }
     }
 

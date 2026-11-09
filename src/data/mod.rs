@@ -3,6 +3,7 @@ pub mod cache_manager;
 pub mod client_id;
 pub mod settings;
 pub mod source;
+pub mod psvt;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, Deserialize)]
@@ -14,19 +15,21 @@ pub enum Category {
     Ps1Game,
     PspGame,
     Plugin,
+    Theme,
     Port,
     Tool,
     Utility,
     Other,
 }
 impl Category {
-    pub const ALL: [Category; 6] = [
+    pub const ALL: [Category; 7] = [
         Category::Emulator,
         Category::Original,
         Category::PsVitaGame,
         Category::Plugin,
         Category::Port,
         Category::Utility,
+        Category::Theme,
     ];
     pub fn label_upper(self) -> &'static str {
         match self {
@@ -36,6 +39,7 @@ impl Category {
             Category::Ps1Game => "PS1 GAME",
             Category::PspGame => "PSP GAME",
             Category::Plugin => "PLUGIN",
+            Category::Theme => "THEME",
             Category::Port => "PORT",
             Category::Tool => "TOOL",
             Category::Utility => "UTILITY",
@@ -46,6 +50,9 @@ impl Category {
     pub fn from_api(category: &str, kind: &str) -> Category {
         if kind.eq_ignore_ascii_case("plugin") {
             return Category::Plugin;
+        }
+        if kind.eq_ignore_ascii_case("theme") {
+            return Category::Theme;
         }
         match category.trim().to_lowercase().as_str() {
             "emulator" | "emulators" => Category::Emulator,
@@ -96,6 +103,7 @@ pub enum Platform {
     Vita,
     Psp,
     Plugin,
+    Theme,
     NpsVita,
     NpsPsp,
     NpsPsx,
@@ -106,6 +114,7 @@ impl Platform {
             Platform::Vita => "VITA",
             Platform::Psp => "PSP",
             Platform::Plugin => "PLUGIN",
+            Platform::Theme => "THEME",
             Platform::NpsVita => "PS VITA (NPS)",
             Platform::NpsPsp => "PSP (NPS)",
             Platform::NpsPsx => "PS1 (NPS)",
@@ -116,6 +125,7 @@ impl Platform {
             Platform::Vita => "VITA",
             Platform::Psp => "PSP",
             Platform::Plugin => "PLUG",
+            Platform::Theme => "THEME",
             Platform::NpsVita => "PSV",
             Platform::NpsPsp => "PSP",
             Platform::NpsPsx => "PS1",
@@ -125,6 +135,7 @@ impl Platform {
         match kind {
             "psp_app" => Platform::Psp,
             "plugin" => Platform::Plugin,
+            "theme" => Platform::Theme,
             "psv_game" => Platform::NpsVita,
             "psp_game" => Platform::NpsPsp,
             "psx_game" => Platform::NpsPsx,
@@ -226,6 +237,8 @@ pub struct AppEntry {
     pub author: String,
     #[serde(skip)]
     pub author_lower: String,
+    #[serde(skip)]
+    pub description_lower: String,
     pub description: String,
     #[serde(default)]
     pub long_description: String,
@@ -339,6 +352,7 @@ impl AppEntry {
         }
         self.name_lower = self.name.to_lowercase();
         self.author_lower = self.author.to_lowercase();
+        self.description_lower = self.description.to_lowercase();
         self.titleid_lower = self.titleid.to_lowercase();
     }
     pub fn size_label(&self) -> String {

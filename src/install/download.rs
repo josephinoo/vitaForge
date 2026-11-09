@@ -135,6 +135,7 @@ fn eta_elapsed(elapsed_secs: f64, received: u64, base: u64) -> u32 {
 }
 const MAX_ATTEMPTS: u32 = 5;
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
+const STALL_TIMEOUT: Duration = Duration::from_secs(10);
 pub const PARALLEL_PARTS: usize = 4;
 const MIN_PARALLEL_BYTES: u64 = 4 * 1024 * 1024;
 
@@ -825,7 +826,17 @@ pub async fn fetch_to(
         let mut received = sink.resume_offset();
         let mut stream = response.bytes_stream();
         let mut attempt_failed = false;
-        while let Some(chunk) = stream.next().await {
+        loop {
+            // A stalled socket otherwise sits for the client's 30 s read timeout before the retry starts.
+            let next = match tokio::time::timeout(STALL_TIMEOUT, stream.next()).await {
+                Ok(next) => next,
+                Err(_) => {
+                    last_err = anyhow::anyhow!("the download stalled");
+                    attempt_failed = true;
+                    break;
+                }
+            };
+            let Some(chunk) = next else { break };
             if cancel.load(std::sync::atomic::Ordering::Relaxed) {
                 bail!(crate::install::CANCELLED_MESSAGE);
             }

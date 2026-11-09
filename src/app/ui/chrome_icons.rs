@@ -48,6 +48,7 @@ impl ChromeIcon {
             ContentTypeGroup::Apps => Self::Apps,
             ContentTypeGroup::Emulators => Self::Emulators,
             ContentTypeGroup::Plugins => Self::Plugins,
+            ContentTypeGroup::Themes => Self::Apps,
         }
     }
     pub fn for_store_tab(tab: crate::input::StoreTab) -> Self {
@@ -67,6 +68,7 @@ impl ChromeIcon {
             Category::Utility | Category::Tool => Self::Apps,
             Category::Emulator => Self::Emulators,
             Category::Plugin => Self::Plugins,
+            Category::Theme => Self::Apps,
             Category::Other => Self::All,
         }
     }
