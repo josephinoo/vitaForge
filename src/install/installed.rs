@@ -256,9 +256,9 @@ impl InstalledIndex {
             installed_at: installed_at(&index_key(entry)),
         })
     }
-    pub fn force_refresh(&self, ctx: &egui::Context, entries: &[AppEntry]) {
+    pub fn force_refresh(&self, ctx: &egui::Context, entries: &[AppEntry]) -> bool {
         *self.scanned_at.lock().unwrap() = None;
-        self.refresh(ctx, entries);
+        self.refresh(ctx, entries)
     }
     pub fn refresh(&self, ctx: &egui::Context, entries: &[AppEntry]) -> bool {
         if entries.is_empty() {

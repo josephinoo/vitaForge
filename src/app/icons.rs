@@ -418,12 +418,30 @@ impl IconCache {
                 bucket.remove(&url);
             }
             ctx.forget_image(&texture_name(&url, max_side));
-            let _ = self
-                .ready_count
-                .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| Some(n.saturating_sub(1)));
-            let _ = self.resident_bytes.try_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
-                Some(n.saturating_sub(byte_size))
-            });
+            let mut count = self.ready_count.load(Ordering::Relaxed);
+            while count > 0 {
+                match self.ready_count.compare_exchange_weak(
+                    count,
+                    count - 1,
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                ) {
+                    Ok(_) => break,
+                    Err(actual) => count = actual,
+                }
+            }
+            let mut bytes = self.resident_bytes.load(Ordering::Relaxed);
+            while bytes > 0 {
+                match self.resident_bytes.compare_exchange_weak(
+                    bytes,
+                    bytes.saturating_sub(byte_size),
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                ) {
+                    Ok(_) => break,
+                    Err(actual) => bytes = actual,
+                }
+            }
         }
     }
 
@@ -969,6 +987,48 @@ fn downsample_box(rgba: image::RgbaImage, max_side: u32) -> image::RgbaImage {
         .expect("box downsampler output dimensions match the buffer")
 }
 
+fn downsample_box_slice(src: &[u8], src_w: usize, src_h: usize, max_side: usize) -> (Vec<u8>, usize, usize) {
+    if src_w <= max_side && src_h <= max_side {
+        return (src.to_vec(), src_w, src_h);
+    }
+    let (dst_w, dst_h) = if src_w >= src_h {
+        (max_side, (src_h * max_side / src_w).max(1))
+    } else {
+        ((src_w * max_side / src_h).max(1), max_side)
+    };
+    let mut out = vec![0_u8; dst_w * dst_h * 4];
+    for dy in 0..dst_h {
+        let sy0 = dy * src_h / dst_h;
+        let sy1 = ((dy + 1) * src_h).div_ceil(dst_h).max(sy0 + 1).min(src_h);
+        for dx in 0..dst_w {
+            let sx0 = dx * src_w / dst_w;
+            let sx1 = ((dx + 1) * src_w).div_ceil(dst_w).max(sx0 + 1).min(src_w);
+            let mut sums = [0_u64; 4];
+            for sy in sy0..sy1 {
+                for sx in sx0..sx1 {
+                    let offset = (sy * src_w + sx) * 4;
+                    sums[0] += src[offset] as u64;
+                    sums[1] += src[offset + 1] as u64;
+                    sums[2] += src[offset + 2] as u64;
+                    sums[3] += src[offset + 3] as u64;
+                }
+            }
+            let count = ((sx1 - sx0) * (sy1 - sy0)) as u64;
+            let offset = (dy * dst_w + dx) * 4;
+            out[offset] = (sums[0] / count) as u8;
+            out[offset + 1] = (sums[1] / count) as u8;
+            out[offset + 2] = (sums[2] / count) as u8;
+            out[offset + 3] = (sums[3] / count) as u8;
+        }
+    }
+    (out, dst_w, dst_h)
+}
+
+fn color_image_from_rgba_slice(src: &[u8], width: u32, height: u32, max_side: u32) -> Option<egui::ColorImage> {
+    let (pixels, dst_w, dst_h) = downsample_box_slice(src, width as usize, height as usize, max_side as usize);
+    Some(egui::ColorImage::from_rgba_unmultiplied([dst_w, dst_h], &pixels))
+}
+
 fn color_image_from_rgba(rgba: Vec<u8>, width: u32, height: u32, max_side: u32) -> Option<egui::ColorImage> {
     let rgba = image::RgbaImage::from_raw(width, height, rgba)?;
     let rgba = downsample_box(rgba, max_side);
@@ -978,20 +1038,24 @@ fn color_image_from_rgba(rgba: Vec<u8>, width: u32, height: u32, max_side: u32) 
 
 #[cfg(target_os = "vita")]
 fn try_decode_fast_native(bytes: &[u8], max_side: u32) -> Option<egui::ColorImage> {
+    static HW_DECODE_BUF: std::sync::Mutex<Vec<u8>> = std::sync::Mutex::new(Vec::new());
     if bytes.len() < 4 {
         return None;
     }
     let mut w: i32 = 0;
     let mut h: i32 = 0;
     let max_bytes = 960 * 544 * 4;
-    let mut rgba_buf = vec![0u8; max_bytes];
+    let mut guard = HW_DECODE_BUF.lock().unwrap_or_else(|e| e.into_inner());
+    if guard.len() < max_bytes {
+        guard.resize(max_bytes, 0);
+    }
 
     if bytes[0] == 0xFF && bytes[1] == 0xD8 {
         let res = unsafe {
             vita_decode_jpeg_hw(
                 bytes.as_ptr(),
                 bytes.len(),
-                rgba_buf.as_mut_ptr(),
+                guard.as_mut_ptr(),
                 max_bytes,
                 &mut w as *mut i32,
                 &mut h as *mut i32,
@@ -999,9 +1063,10 @@ fn try_decode_fast_native(bytes: &[u8], max_side: u32) -> Option<egui::ColorImag
         };
         if res >= 0 && w > 0 && h > 0 {
             let size = (w as usize) * (h as usize) * 4;
-            if size <= rgba_buf.len() {
-                rgba_buf.truncate(size);
-                return color_image_from_rgba(rgba_buf, w as u32, h as u32, max_side);
+            if size <= guard.len() {
+                let img = color_image_from_rgba_slice(&guard[..size], w as u32, h as u32, max_side);
+                drop(guard);
+                return img;
             }
         }
     } else if bytes[0] == 0x89 && bytes[1] == b'P' && bytes[2] == b'N' && bytes[3] == b'G' {
@@ -1009,7 +1074,7 @@ fn try_decode_fast_native(bytes: &[u8], max_side: u32) -> Option<egui::ColorImag
             vita_decode_png_fast(
                 bytes.as_ptr(),
                 bytes.len(),
-                rgba_buf.as_mut_ptr(),
+                guard.as_mut_ptr(),
                 max_bytes,
                 &mut w as *mut i32,
                 &mut h as *mut i32,
@@ -1017,9 +1082,10 @@ fn try_decode_fast_native(bytes: &[u8], max_side: u32) -> Option<egui::ColorImag
         };
         if res >= 0 && w > 0 && h > 0 {
             let size = (w as usize) * (h as usize) * 4;
-            if size <= rgba_buf.len() {
-                rgba_buf.truncate(size);
-                return color_image_from_rgba(rgba_buf, w as u32, h as u32, max_side);
+            if size <= guard.len() {
+                let img = color_image_from_rgba_slice(&guard[..size], w as u32, h as u32, max_side);
+                drop(guard);
+                return img;
             }
         }
     }

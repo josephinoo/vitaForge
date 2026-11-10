@@ -616,6 +616,11 @@ async fn install_pbp_pkg(
     Ok(Progress::Done)
 }
 async fn queue_bgdl_vita(entry: &AppEntry, _tx: &watch::Sender<Progress>) -> Result<Progress> {
+    if !Path::new("vs0:sys/external/libshellsvc.suprx").exists()
+        || !Path::new("ur0:shell/db/app.db").exists()
+    {
+        bail!("LiveArea BGDL unavailable in this environment");
+    }
     let license = licensing::get_license_for_entry(entry);
     stage_bgdl_icon(entry).await;
     log_file(&format!(
@@ -632,12 +637,6 @@ async fn queue_bgdl_vita(entry: &AppEntry, _tx: &watch::Sender<Progress>) -> Res
     )
     .await
     .context("Failed to queue background download (BGDL)")?;
-    installed::stamp_pending_install(
-        &installed::index_key(entry),
-        &entry.hash,
-        &entry.version,
-        None,
-    );
     Ok(Progress::Queued)
 }
 async fn run_psp(
@@ -1567,8 +1566,15 @@ fn extract_streaming(
         Open(PathBuf),
         Data(Vec<u8>),
     }
-    let (tx, rx) = std::sync::mpsc::sync_channel::<Chunk>(8);
+    const CHUNK_BUF_CAP: usize = 256 * 1024;
+    const POOL_SLOTS: usize = 4;
+    let (tx_free, rx_free) = std::sync::mpsc::sync_channel::<Vec<u8>>(POOL_SLOTS);
+    for _ in 0..POOL_SLOTS {
+        let _ = tx_free.send(vec![0u8; CHUNK_BUF_CAP]);
+    }
+    let (tx, rx) = std::sync::mpsc::sync_channel::<Chunk>(POOL_SLOTS);
     std::thread::scope(|scope| {
+        let tx_recycle = tx_free.clone();
         let writer = scope.spawn(move || -> Result<()> {
             let mut out = None;
             for chunk in rx {
@@ -1577,9 +1583,13 @@ fn extract_streaming(
                         out = Some(std::fs::File::create(&path)
                             .with_context(|| format!("couldn't write {}", path.display()))?);
                     }
-                    Chunk::Data(data) => {
+                    Chunk::Data(mut data) => {
                         if let Some(out) = out.as_mut() {
                             out.write_all(&data)?;
+                        }
+                        if data.capacity() >= CHUNK_BUF_CAP {
+                            data.resize(CHUNK_BUF_CAP, 0);
+                            let _ = tx_recycle.try_send(data);
                         }
                     }
                 }
@@ -1632,9 +1642,15 @@ fn extract_streaming(
                 let mut crc = crc32fast::Hasher::new();
                 let mut size = 0u64;
                 loop {
-                    let mut buf = vec![0u8; 256 * 1024];
+                    let mut buf = rx_free
+                        .try_recv()
+                        .unwrap_or_else(|_| vec![0u8; CHUNK_BUF_CAP]);
+                    if buf.len() < CHUNK_BUF_CAP {
+                        buf.resize(CHUNK_BUF_CAP, 0);
+                    }
                     let n = data.read(&mut buf)?;
                     if n == 0 {
+                        let _ = tx_free.try_send(buf);
                         break;
                     }
                     buf.truncate(n);

@@ -16,6 +16,34 @@ fn image_format_for(path: &str) -> &'static str {
         "jpeg" // Covers and screenshots use fast JPEG compression
     }
 }
+fn optimize_external_image(url: &str, max_side: u32, is_icon: bool) -> String {
+    let api_base = api_url().trim_end_matches('/');
+    if url.starts_with(api_base) || url.contains("wsrv.nl") {
+        return url.to_owned();
+    }
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return url.to_owned();
+    }
+    let output = if is_icon { "png" } else { "jpg" };
+    format!(
+        "http://wsrv.nl/?url={}&w={max_side}&h={max_side}&fit=cover&output={output}&q=82&maxage=1y",
+        urlencoding_encode(url)
+    )
+}
+
+fn urlencoding_encode(input: &str) -> String {
+    let mut out = String::with_capacity(input.len() + 16);
+    for b in input.bytes() {
+        if b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.' || b == b'~' {
+            out.push(b as char);
+        } else {
+            use std::fmt::Write;
+            let _ = write!(out, "%{b:02X}");
+        }
+    }
+    out
+}
+
 fn absolute(path: &str) -> String {
     if path.starts_with("http://") || path.starts_with("https://") {
         return path.to_owned();
@@ -223,18 +251,22 @@ fn slim_entry_strings(entry: &mut AppEntry) {
     if !entry.long_description.is_empty()
         && entry.long_description.trim() == entry.description.trim()
     {
-        entry.long_description.clear();
-        entry.long_description.shrink_to_fit();
+        entry.long_description = String::new();
     }
     if entry.screenshot_urls.len() > MAX_SCREENSHOTS_KEPT {
         entry.screenshot_urls.truncate(MAX_SCREENSHOTS_KEPT);
         entry.screenshot_urls.shrink_to_fit();
     }
+    entry.name.shrink_to_fit();
+    entry.author.shrink_to_fit();
+    entry.titleid.shrink_to_fit();
     entry.description.shrink_to_fit();
     entry.long_description.shrink_to_fit();
     entry.requirements.shrink_to_fit();
     entry.changelog.shrink_to_fit();
     entry.download_url.shrink_to_fit();
+    entry.genres.shrink_to_fit();
+    entry.overview.shrink_to_fit();
 }
 impl RawApp {
     
@@ -299,7 +331,10 @@ impl RawApp {
                 cover_url.map(|u| force_min_size(&u, "medium")),
             )
         } else {
-            (icon_url, cover_url)
+            (
+                icon_url.map(|u| optimize_external_image(&u, 128, true)),
+                cover_url.map(|u| optimize_external_image(&u, 480, false)),
+            )
         };
         let mut entry = AppEntry {
             id: self.id.to_string(),

@@ -787,8 +787,8 @@ impl SdlEguiPainter {
             ),
             color: sdl2::pixels::Color::RGBA(r, g, b, a),
             tex_coord: sdl2::rect::FPoint::new(
-                (vertex.uv.x * uv_scale.x).clamp(0.0, 1.0),
-                (vertex.uv.y * uv_scale.y).clamp(0.0, 1.0),
+                (vertex.uv.x * uv_scale.x).clamp(0.0, uv_scale.x.min(1.0)),
+                (vertex.uv.y * uv_scale.y).clamp(0.0, uv_scale.y.min(1.0)),
             ),
         }
     }

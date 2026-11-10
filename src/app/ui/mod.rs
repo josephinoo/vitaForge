@@ -386,7 +386,7 @@ fn catalog_screen(
                 }
 
                 ui.vertical(|ui| {
-                    if tab != StoreTab::Categories
+                    if tab == StoreTab::Categories
                         && content_type_group == ContentTypeGroup::Games
                     {
                         ui.horizontal(|ui| {

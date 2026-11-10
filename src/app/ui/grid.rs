@@ -328,27 +328,37 @@ pub(crate) fn featured_card(
         rect.right_bottom(),
     );
     draw_cover(ui, icons, art, entry);
-    ui.painter().text(
-        rect.left_top() + egui::vec2(14.0, 8.0),
-        egui::Align2::LEFT_TOP,
-        label,
-        font(FONT_MICRO),
-        pal().accent_soft,
-    );
-    ui.painter().text(
-        rect.left_top() + egui::vec2(110.0, 8.0),
-        egui::Align2::LEFT_TOP,
-        &entry.name,
+    let label_galley = ui.fonts(|f| f.layout_no_wrap(label.to_owned(), font(FONT_MICRO), pal().accent_soft));
+    let label_pos = rect.left_top() + egui::vec2(14.0, 8.0);
+    let title_x = (label_pos.x + label_galley.size().x + 12.0).max(rect.left() + 110.0);
+    let max_text_w = (art.left() - 10.0 - title_x).max(0.0);
+    ui.painter().galley(label_pos, label_galley, pal().accent_soft);
+    let mut title_job = egui::text::LayoutJob::simple_singleline(
+        entry.name.clone(),
         font(FONT_TITLE),
         pal().text,
     );
-    ui.painter().text(
-        rect.left_top() + egui::vec2(110.0, 30.0),
-        egui::Align2::LEFT_TOP,
+    title_job.wrap = egui::text::TextWrapping {
+        max_width: max_text_w,
+        max_rows: 1,
+        break_anywhere: false,
+        overflow_character: Some('…'),
+    };
+    let title_galley = ui.fonts(|f| f.layout_job(title_job));
+    ui.painter().galley(egui::pos2(title_x, rect.top() + 8.0), title_galley, pal().text);
+    let mut sub_job = egui::text::LayoutJob::simple_singleline(
         format!("{} · {}", entry.platform.label(), entry.author),
         font(FONT_SMALL),
         pal().text_dim,
     );
+    sub_job.wrap = egui::text::TextWrapping {
+        max_width: max_text_w,
+        max_rows: 1,
+        break_anywhere: false,
+        overflow_character: Some('…'),
+    };
+    let sub_galley = ui.fonts(|f| f.layout_job(sub_job));
+    ui.painter().galley(egui::pos2(title_x, rect.top() + 30.0), sub_galley, pal().text_dim);
     response.clicked()
 }
 

@@ -89,7 +89,13 @@ pub fn open(
         param.initialText = state.buffer.as_mut_ptr();
         param.inputTextBuffer = state.buffer.as_mut_ptr();
         param.type_ = SCE_IME_TYPE_BASIC_LATIN as u32;
-        param.supportedLanguages = u64::from(SCE_IME_LANGUAGE_ENGLISH | SCE_IME_LANGUAGE_SPANISH);
+        param.supportedLanguages = u64::from(
+            SCE_IME_LANGUAGE_ENGLISH
+                | SCE_IME_LANGUAGE_SPANISH
+                | SCE_IME_LANGUAGE_FRENCH
+                | SCE_IME_LANGUAGE_ITALIAN
+                | SCE_IME_LANGUAGE_PORTUGUESE,
+        );
         param.languagesForced = 0;
         param.dialogMode = SCE_IME_DIALOG_DIALOG_MODE_WITH_CANCEL;
         param.textBoxMode = SCE_IME_DIALOG_TEXTBOX_MODE_WITH_CLEAR;

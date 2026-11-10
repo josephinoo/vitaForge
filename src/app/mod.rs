@@ -193,6 +193,7 @@ impl CatalogState {
     }
     fn apply_install_filter(&mut self, installed: &crate::install::installed::InstalledIndex, updates_only: bool) {
         use crate::install::installed::InstallState;
+        let query = self.search_query.trim().to_lowercase();
         self.filtered_indices = self
             .sorted_indices
             .iter()
@@ -200,11 +201,12 @@ impl CatalogState {
             .filter(|&idx| {
                 let Some(app) = self.apps.get(idx) else { return false };
                 let state = installed.state(app);
-                if updates_only {
+                let matches_state = if updates_only {
                     state == InstallState::Outdated
                 } else {
                     matches!(state, InstallState::Installed | InstallState::Outdated)
-                }
+                };
+                matches_state && Self::matches_query(app, &query)
             })
             .collect();
         self.filtered_indices =
@@ -216,7 +218,25 @@ impl CatalogState {
         } else {
             self.selected = 0;
             self.selection_active = true;
+            self.scroll_reset = true;
         }
+    }
+    fn matches_query(app: &AppEntry, query: &str) -> bool {
+        if query.is_empty() {
+            return true;
+        }
+        app.name_lower.contains(query)
+            || app.author_lower.contains(query)
+            || app.titleid_lower.contains(query)
+            || (app.platform == data::Platform::Theme && app.description_lower.contains(query))
+            || app.genres.iter().any(|genre| {
+                if genre.is_ascii() && query.is_ascii() {
+                    let mut b_iter = genre.as_bytes().windows(query.len());
+                    b_iter.any(|window| window.eq_ignore_ascii_case(query.as_bytes()))
+                } else {
+                    genre.to_lowercase().contains(query)
+                }
+            })
     }
     fn sort_order_indices(&self) -> Vec<usize> {
         let mut order: Vec<usize> = (0..self.apps.len()).collect();
@@ -329,13 +349,7 @@ impl CatalogState {
                     && matches_cat
                     && matches_fav
                     && matches_genre
-                    && (query.is_empty()
-                        || app.name_lower.contains(&query)
-                        || app.author_lower.contains(&query)
-                        || app.titleid_lower.contains(&query)
-                        // psvt.ovh also matches a theme's tags, which live in the description.
-                        || (app.platform == data::Platform::Theme && app.description_lower.contains(&query))
-                        || app.genres.iter().any(|genre| genre.to_lowercase().contains(&query)))
+                    && Self::matches_query(app, &query)
             })
             .collect();
         self.filtered_indices =
@@ -1067,7 +1081,7 @@ impl App {
                 AppState::Detail { previous, .. } | AppState::Settings { previous, .. } => &previous.apps,
                 AppState::Loading => &[],
             };
-            if self.installed.refresh(ctx, entries) {
+            if self.installed.force_refresh(ctx, entries) {
                 self.needs_installed_rescan = false;
                 let plugins = plugin_entries(entries);
                 self.refresh_tai_with(&plugins);
@@ -1924,6 +1938,7 @@ impl App {
                     }
                 }
             }
+            AppCommand::RequestSearch if self.in_profiles() => self.tai_profile_export(),
             AppCommand::RequestSearch => {
                 if let AppState::Catalog(catalog) = &mut self.state {
                     catalog.search_requested = true;
@@ -1946,7 +1961,6 @@ impl App {
                 }
             }
             AppCommand::FlipSortDirection if self.in_profiles() => self.tai_profile_start_rename(),
-            AppCommand::RequestSearch if self.in_profiles() => self.tai_profile_export(),
             AppCommand::RequestReport => {
                 if matches!(self.state, AppState::Detail { lightbox: None, .. }) {
                     self.report_modal = Some(0);
@@ -2018,7 +2032,11 @@ impl App {
             AppCommand::SetSortOrder(sort) => {
                 if let AppState::Catalog(catalog) = &mut self.state {
                     catalog.set_sort(sort);
-                    catalog.sync_sidebar_cursor();
+                    match catalog.tab {
+                        StoreTab::Library => catalog.apply_install_filter(&self.installed, false),
+                        StoreTab::Updates => catalog.apply_install_filter(&self.installed, true),
+                        StoreTab::Categories => catalog.sync_sidebar_cursor(),
+                    }
                     self.audio.play(crate::audio::Sfx::Activation);
                 }
             }
@@ -2252,6 +2270,11 @@ impl App {
             AppCommand::FlipSortDirection => {
                 if let AppState::Catalog(catalog) = &mut self.state {
                     catalog.flip_sort_direction();
+                    match catalog.tab {
+                        StoreTab::Library => catalog.apply_install_filter(&self.installed, false),
+                        StoreTab::Updates => catalog.apply_install_filter(&self.installed, true),
+                        StoreTab::Categories => {}
+                    }
                     self.audio.play(crate::audio::Sfx::Activation);
                 }
             }
@@ -3111,18 +3134,14 @@ impl App {
             return;
         }
         if let AppState::Catalog(catalog) = &mut self.state {
-            if catalog.tab == StoreTab::Categories
-                && (!catalog.search_query.is_empty() || catalog.search_requested)
-            {
-                catalog.search_query.clear();
-                catalog.search_requested = false;
-                catalog.refresh_filter();
-                return;
-            }
             if !catalog.search_query.is_empty() || catalog.search_requested {
                 catalog.search_query.clear();
                 catalog.search_requested = false;
-                catalog.refresh_filter();
+                match catalog.tab {
+                    StoreTab::Library => catalog.apply_install_filter(&self.installed, false),
+                    StoreTab::Updates => catalog.apply_install_filter(&self.installed, true),
+                    StoreTab::Categories => catalog.refresh_filter(),
+                }
                 return;
             }
         }
@@ -3143,7 +3162,6 @@ impl App {
                 _ => previous.refresh_filter_preserving_selection(),
             }
             self.state = AppState::Catalog(previous);
-            self.needs_installed_rescan = true;
             self.audio.play(crate::audio::Sfx::OutOfDetail);
         }
     }
@@ -3369,6 +3387,32 @@ mod sort_tests {
         assert_eq!(ids.len(), 2);
         assert!(ids.contains(&"hb".to_owned()));
         assert!(ids.contains(&"nps".to_owned()));
+    }
+
+    #[test]
+    fn install_filter_respects_search_query_and_sort_order() {
+        let mut a = entry("1", "vitadb", 10, 100, 4.0, "2026-01-01");
+        a.name = "Alpha Tool".to_owned();
+        a.titleid = "ALPH00001".to_owned();
+        a.rebuild_derived();
+
+        let mut b = entry("2", "vitadb", 20, 500, 5.0, "2026-02-01");
+        b.name = "Beta Game".to_owned();
+        b.titleid = "BETA00002".to_owned();
+        b.rebuild_derived();
+
+        let installed = crate::install::installed::InstalledIndex::new();
+        installed.mark_installed(&crate::install::installed::index_key(&a));
+        installed.mark_installed(&crate::install::installed::index_key(&b));
+
+        let mut state = CatalogState::new(vec![a, b]);
+        state.apply_store_tab(StoreTab::Library, &installed);
+        assert_eq!(state.filtered_indices.len(), 2);
+
+        state.search_query = "beta".to_owned();
+        state.apply_install_filter(&installed, false);
+        assert_eq!(state.filtered_indices.len(), 1);
+        assert_eq!(state.apps[state.filtered_indices[0]].id, "2");
     }
 
 }

@@ -63,6 +63,7 @@ pub fn run(mut app: App) -> Result<()> {
     let mut transition_started_at = Instant::now();
     const SCREEN_FADE_SECS: f32 = 0.15;
     let mut stalled_frames = 0u32;
+    let mut in_background = false;
     loop {
         let mut egui_events = Vec::new();
         pointer.deferred(&mut egui_events);
@@ -70,9 +71,7 @@ pub fn run(mut app: App) -> Result<()> {
         let screen_points = (WIDTH as f32 / UI_SCALE, HEIGHT as f32 / UI_SCALE);
         for event in event_pump.poll_iter() {
             match event {
-                sdl2::event::Event::Quit { .. }
-                | sdl2::event::Event::AppWillEnterBackground { .. }
-                | sdl2::event::Event::AppDidEnterBackground { .. } => {
+                sdl2::event::Event::Quit { .. } => {
                     #[cfg(target_os = "vita")]
                     unsafe {
                         vitasdk_sys::sceKernelExitProcess(0);
@@ -80,11 +79,24 @@ pub fn run(mut app: App) -> Result<()> {
                     #[cfg(not(target_os = "vita"))]
                     return Ok(());
                 }
+                sdl2::event::Event::AppWillEnterBackground { .. }
+                | sdl2::event::Event::AppDidEnterBackground { .. } => {
+                    in_background = true;
+                    held_direction = None;
+                }
+                sdl2::event::Event::AppWillEnterForeground { .. }
+                | sdl2::event::Event::AppDidEnterForeground { .. } => {
+                    in_background = false;
+                    egui_ctx.request_repaint();
+                }
                 sdl2::event::Event::ControllerDeviceAdded { .. } if controller.is_none() => {
                     controller = open_first_controller(&controllers);
                 }
                 sdl2::event::Event::ControllerDeviceRemoved { .. } => controller = None,
                 _ => {}
+            }
+            if in_background {
+                continue;
             }
             if ime.is_some() {
                 ime::feed_event(&event);
@@ -97,6 +109,16 @@ pub fn run(mut app: App) -> Result<()> {
             if let Some(command) = map_controller_button_event(&event) {
                 direct_commands.push(command);
             }
+        }
+        if in_background {
+            app.tick(&egui_ctx)?;
+            crate::install::process_pending_bgdl();
+            #[cfg(target_os = "vita")]
+            unsafe {
+                vitasdk_sys::sceKernelPowerTick(vitasdk_sys::SCE_KERNEL_POWER_TICK_DEFAULT);
+            }
+            std::thread::sleep(Duration::from_millis(50));
+            continue;
         }
         if ime.is_some() {
             if let Some(result) = ime::poll() {

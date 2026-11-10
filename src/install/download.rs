@@ -421,14 +421,15 @@ fn stream_files(
 /// Appends parts 1.. onto `dest`. `starts[i]` is part i's byte offset; a join
 /// cut short leaves `dest` a valid prefix, so it resumes from `dest`'s length.
 fn join_parts(dest: &Path, starts: &[u64], on_percent: impl FnMut(u32)) -> Result<()> {
-    let mut out = std::fs::OpenOptions::new().append(true).open(dest)?;
+    let out = std::fs::OpenOptions::new().append(true).open(dest)?;
     let joined = out.metadata()?.len();
     let parts: Vec<_> = (1..PARALLEL_PARTS)
         .filter(|&i| joined < starts[i] + std::fs::metadata(part_path(dest, i)).map(|m| m.len()).unwrap_or(0))
         .map(|i| (part_path(dest, i), joined.saturating_sub(starts[i])))
         .collect();
-    stream_files(&parts, |b| out.write_all(b), on_percent)?;
-    out.flush()?;
+    let mut out_buffered = std::io::BufWriter::with_capacity(256 * 1024, out);
+    stream_files(&parts, |b| out_buffered.write_all(b), on_percent)?;
+    out_buffered.flush()?;
     remove_parts(dest);
     Ok(())
 }
@@ -499,23 +500,41 @@ pub struct HashingReader<R> {
 }
 struct Md5Worker {
     tx: std::sync::mpsc::SyncSender<Vec<u8>>,
+    tx_free: std::sync::mpsc::SyncSender<Vec<u8>>,
+    rx_free: std::sync::mpsc::Receiver<Vec<u8>>,
     handle: std::thread::JoinHandle<String>,
 }
 impl Md5Worker {
     fn new() -> Self {
-        let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(8);
+        const SLOTS: usize = 4;
+        const BUF_SIZE: usize = 64 * 1024;
+        let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(SLOTS);
+        let (tx_free, rx_free) = std::sync::mpsc::sync_channel::<Vec<u8>>(SLOTS);
+        for _ in 0..SLOTS {
+            let _ = tx_free.send(vec![0u8; BUF_SIZE]);
+        }
+        let tx_recycle = tx_free.clone();
         let handle = std::thread::spawn(move || {
             use md5::Digest;
             let mut hasher = md5::Md5::new();
-            for chunk in rx {
+            for mut chunk in rx {
                 hasher.update(&chunk);
+                if chunk.capacity() >= BUF_SIZE {
+                    chunk.clear();
+                    let _ = tx_recycle.try_send(chunk);
+                }
             }
             format!("{:x}", hasher.finalize())
         });
-        Self { tx, handle }
+        Self { tx, tx_free, rx_free, handle }
     }
     fn update(&self, data: &[u8]) {
-        let _ = self.tx.send(data.to_vec());
+        let mut buf = self.rx_free.try_recv().unwrap_or_default();
+        buf.clear();
+        buf.extend_from_slice(data);
+        if self.tx.send(buf).is_err() {
+            // worker has stopped or panicked
+        }
     }
     fn finalize(self) -> std::io::Result<String> {
         drop(self.tx);

@@ -87,7 +87,7 @@ fn run() -> anyhow::Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
-        .max_blocking_threads(4)
+        .max_blocking_threads(2)
         .thread_stack_size(256 * 1024)
         .on_thread_start(lower_background_priority)
         .build()?;
