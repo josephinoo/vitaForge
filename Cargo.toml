@@ -57,6 +57,15 @@ codegen-units = 1
 
 [profile.release.package.zlib-rs]
 opt-level = 3
+# egui lays out and tessellates the whole UI on the CPU every frame; "s" costs real frame time on the A9.
+[profile.release.package.egui]
+opt-level = 3
+[profile.release.package.epaint]
+opt-level = 3
+[profile.release.package.emath]
+opt-level = 3
+[profile.release.package.ecolor]
+opt-level = 3
 [profile.release.package.flate2]
 opt-level = 3
 [profile.release.package.zip]

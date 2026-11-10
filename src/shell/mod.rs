@@ -33,6 +33,33 @@ const UI_SCALE: f32 = 1.3;
 const ACTIVE_FRAME_TIME: Duration = Duration::from_millis(16);
 const STICK_REPEAT_DELAY: Duration = Duration::from_millis(200);
 const STICK_REPEAT_INTERVAL: Duration = Duration::from_millis(70);
+/// Per-phase frame cost, logged every 120 frames to ux0:data/vitaforge/vitaforge.log.
+#[derive(Default)]
+struct FrameProf {
+    pre: Duration,
+    clear: Duration,
+    tick: Duration,
+    run: Duration,
+    tess: Duration,
+    paint: Duration,
+    total: Duration,
+    frames: u32,
+}
+impl FrameProf {
+    fn report(&mut self, frame: Duration) {
+        self.total += frame;
+        self.frames += 1;
+        if self.frames < 120 {
+            return;
+        }
+        let ms = |d: Duration| d.as_secs_f32() * 1000.0 / self.frames as f32;
+        crate::install::log_file(&format!(
+            "perf/frame avg ms: total {:.1} pre {:.1} tick {:.1} run {:.1} tess {:.1} clear {:.1} paint {:.1}",
+            ms(self.total), ms(self.pre), ms(self.tick), ms(self.run), ms(self.tess), ms(self.clear), ms(self.paint)
+        ));
+        *self = Self::default();
+    }
+}
 struct ImeSession {
     target: TextTarget,
     query_before: String,
@@ -64,7 +91,9 @@ pub fn run(mut app: App) -> Result<()> {
     const SCREEN_FADE_SECS: f32 = 0.15;
     let mut stalled_frames = 0u32;
     let mut in_background = false;
+    let mut prof = FrameProf::default();
     loop {
+        let frame_start = Instant::now();
         let mut egui_events = Vec::new();
         pointer.deferred(&mut egui_events);
         let mut direct_commands = Vec::new();
@@ -208,7 +237,10 @@ pub fn run(mut app: App) -> Result<()> {
         }
         let pending_gpu = surface.pending_texture_uploads();
         app.icons.set_gpu_backlog(pending_gpu);
+        prof.pre += frame_start.elapsed();
+        let t_tick = Instant::now();
         app.tick(&egui_ctx)?;
+        prof.tick += t_tick.elapsed();
         let text_target = if app.report_entry {
             Some(TextTarget::Report)
         } else if app.profile_rename.is_some() {
@@ -246,22 +278,31 @@ pub fn run(mut app: App) -> Result<()> {
             ..Default::default()
         };
         let mut ui_commands = Vec::new();
+        let t_run = Instant::now();
         let full_output = egui_ctx.run(raw_input, |ctx| {
             ui_commands = build_ui(ctx, &app);
         });
+        prof.run += t_run.elapsed();
         app.clear_one_shot_ui_state();
         for command in ui_commands {
             app.handle_command(command)?;
         }
+        let t_tess = Instant::now();
         let clipped_primitives =
             egui_ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
+        prof.tess += t_tess.elapsed();
         surface.set_common_dialog(ime.is_some());
+        let t_clear = Instant::now();
         surface.draw_scene();
+        prof.clear += t_clear.elapsed();
+        let t_paint = Instant::now();
         let paint_stats: FramePaintStats = surface.paint_egui(
             full_output.pixels_per_point,
             &clipped_primitives,
             &full_output.textures_delta,
         )?;
+        prof.paint += t_paint.elapsed();
+        prof.report(frame_start.elapsed());
         app.icons.set_gpu_backlog(surface.pending_texture_uploads());
         let mut dropped = surface.take_dropped_textures();
         if paint_stats.draw_calls == 0 && paint_stats.missing_textures == 0 {

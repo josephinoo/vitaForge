@@ -950,7 +950,8 @@ impl App {
         }
         // The total arrives in the background; refresh the sidebar number when it does.
         if let AppState::Catalog(catalog) = &mut self.state
-            && data::psvt::total() > catalog.group_category_counts.iter().find(|(c, _)| *c == data::Category::Theme).map_or(0, |&(_, n)| n)
+            // Home has no Theme row: a missing row must not count as 0, or this reruns the full catalog scan every frame.
+            && catalog.group_category_counts.iter().find(|(c, _)| *c == data::Category::Theme).is_some_and(|&(_, n)| data::psvt::total() > n)
         {
             catalog.recompute_group_counts();
         }
