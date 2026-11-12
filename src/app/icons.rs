@@ -34,8 +34,8 @@ const RETRY_DEFERRED: Duration = Duration::from_millis(80);
 const BACKGROUND_PACING: Duration = Duration::from_millis(15);
 const LIVE_PRIORITY_WINDOW: Duration = Duration::from_millis(100);
 const SCROLL_SETTLE_DELAY: Duration = Duration::from_millis(150);
-const READY_RESULTS_PER_FRAME: usize = 2;
-const MAX_COMPLETED_RESULTS: usize = 8;
+const READY_RESULTS_PER_FRAME: usize = 4;
+const MAX_COMPLETED_RESULTS: usize = 12;
 enum IconState {
     Loading,
     Ready { texture: egui::TextureHandle, last_used: u64, byte_size: usize },
@@ -83,6 +83,7 @@ pub struct IconCache {
     ready_count: Arc<AtomicUsize>,
     resident_bytes: Arc<AtomicUsize>,
     in_flight: Arc<AtomicUsize>,
+    disk_in_flight: Arc<AtomicUsize>,
     gpu_backlog: Arc<AtomicUsize>,
     completed: Arc<Mutex<VecDeque<CompletedIcon>>>,
     scrolling_until: Arc<Mutex<Instant>>,
@@ -112,6 +113,7 @@ impl IconCache {
             ready_count: Arc::new(AtomicUsize::new(0)),
             resident_bytes: Arc::new(AtomicUsize::new(0)),
             in_flight: Arc::new(AtomicUsize::new(0)),
+            disk_in_flight: Arc::new(AtomicUsize::new(0)),
             gpu_backlog: Arc::new(AtomicUsize::new(0)),
             completed: Arc::new(Mutex::new(VecDeque::new())),
             scrolling_until: Arc::new(Mutex::new(Instant::now())),
@@ -328,16 +330,23 @@ impl IconCache {
             }
         }
         let from_disk = !skip_disk && cache_digest(url).is_some_and(|d| self.disk_has(&d));
-        let spawn_budget =
-            if from_disk { MAX_CONCURRENT_DECODES } else { MAX_CONCURRENT_FETCHES };
+        let busy = if from_disk {
+            self.disk_in_flight.load(Ordering::Relaxed) >= MAX_CONCURRENT_DECODES * 2
+        } else {
+            self.in_flight.load(Ordering::Relaxed) >= MAX_CONCURRENT_FETCHES
+        };
         if self.gpu_backlog.load(Ordering::Relaxed) >= MAX_GPU_BACKLOG_FOR_SPAWN
-            || self.in_flight.load(Ordering::Relaxed) >= spawn_budget
+            || busy
             || lock(&self.completed).len() >= MAX_COMPLETED_RESULTS
         {
             return None;
         }
         bucket.insert(url.to_owned(), IconState::Loading);
-        self.in_flight.fetch_add(1, Ordering::Relaxed);
+        if from_disk {
+            self.disk_in_flight.fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.in_flight.fetch_add(1, Ordering::Relaxed);
+        }
         drop(entries);
         let cache = self.clone();
         let ctx = ctx.clone();
@@ -352,7 +361,11 @@ impl IconCache {
                 LoadOutcome::Failed => CompletedResult::Failed { url, max_side, attempts: attempts + 1 },
             };
             lock(&cache.completed).push_back(CompletedIcon { generation, result: completed });
-            cache.in_flight.fetch_sub(1, Ordering::Relaxed);
+            if from_disk {
+                cache.disk_in_flight.fetch_sub(1, Ordering::Relaxed);
+            } else {
+                cache.in_flight.fetch_sub(1, Ordering::Relaxed);
+            }
             ctx.request_repaint_after(Duration::from_millis(16));
         });
         None
@@ -365,15 +378,17 @@ impl IconCache {
         if self.gpu_backlog.load(Ordering::Relaxed) >= MAX_GPU_BACKLOG_FOR_SPAWN {
             return;
         }
-        let mut budget = MAX_CONCURRENT_FETCHES
+        let mut net_budget = MAX_CONCURRENT_FETCHES
             .saturating_sub(LIVE_RESERVED_SLOTS)
             .saturating_sub(self.in_flight.load(Ordering::Relaxed))
             .min(4);
-        if budget == 0 {
+        let mut disk_budget = (MAX_CONCURRENT_DECODES * 2)
+            .saturating_sub(self.disk_in_flight.load(Ordering::Relaxed));
+        if net_budget == 0 && disk_budget == 0 {
             return;
         }
         for url in urls {
-            if budget == 0 {
+            if net_budget == 0 && disk_budget == 0 {
                 break;
             }
             {
@@ -385,12 +400,22 @@ impl IconCache {
                     continue;
                 }
             }
-            let before = self.in_flight.load(Ordering::Relaxed);
+            let on_disk = cache_digest(&url).is_some_and(|d| self.disk_has(&d));
+            if on_disk && disk_budget == 0 {
+                continue;
+            }
+            if !on_disk && net_budget == 0 {
+                continue;
+            }
+            let before_net = self.in_flight.load(Ordering::Relaxed);
+            let before_disk = self.disk_in_flight.load(Ordering::Relaxed);
             let _ = self.get_sized(ctx, &url, MAX_ICON_SIDE);
-            if self.in_flight.load(Ordering::Relaxed) > before {
-                budget -= 1;
+            if self.disk_in_flight.load(Ordering::Relaxed) > before_disk {
+                disk_budget = disk_budget.saturating_sub(1);
+            } else if self.in_flight.load(Ordering::Relaxed) > before_net {
+                net_budget = net_budget.saturating_sub(1);
             } else if self.gpu_backlog.load(Ordering::Relaxed) >= MAX_GPU_BACKLOG_FOR_SPAWN
-                || self.in_flight.load(Ordering::Relaxed) >= MAX_CONCURRENT_FETCHES
+                || lock(&self.completed).len() >= MAX_COMPLETED_RESULTS
             {
                 break;
             }
@@ -559,6 +584,16 @@ enum WarmOutcome {
     Backoff(Duration),
 }
 
+fn write_cache_file(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    if std::fs::write(path, bytes).is_ok() {
+        return Ok(());
+    }
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    std::fs::write(path, bytes)
+}
+
 async fn warm_disk_cache(url: &str, cache: &IconCache) -> WarmOutcome {
     let Some(digest) = cache_digest(url) else { return WarmOutcome::Continue };
     if cache.disk_has(&digest) {
@@ -573,14 +608,9 @@ async fn warm_disk_cache(url: &str, cache: &IconCache) -> WarmOutcome {
         }
         FetchOutcome::Failed => return WarmOutcome::Continue,
     };
-    let wrote = tokio::task::spawn_blocking(move || {
-        if let Some(dir) = path.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
-        std::fs::write(&path, &bytes).is_ok()
-    })
-    .await
-    .unwrap_or(false);
+    let wrote = tokio::task::spawn_blocking(move || write_cache_file(&path, &bytes).is_ok())
+        .await
+        .unwrap_or(false);
     if wrote {
         cache.disk_remember(digest);
     }
@@ -824,6 +854,7 @@ async fn load_icon(url: &str, max_side: u32, cache: &IconCache, skip_disk: bool)
         }
     };
     let digest_for_write = digest.clone();
+    let disk_index = cache.disk_index.clone();
     let Ok(_decode_permit) = cache.decode_limit.acquire().await else {
         return LoadOutcome::Deferred { retry_in: RETRY_DEFERRED };
     };
@@ -832,30 +863,20 @@ async fn load_icon(url: &str, max_side: u32, cache: &IconCache, skip_disk: bool)
             eprintln!("couldn't decode the image ({} bytes)", bytes.len());
             return None;
         };
-        Some((decoded, bytes, path))
+        if let Some(path) = path {
+            if let Err(err) = write_cache_file(&path, &bytes) {
+                eprintln!("couldn't cache {}: {err}", path.display());
+            } else if let Some(d) = digest_for_write
+                && let Ok(mut g) = disk_index.lock()
+            {
+                g.insert(d);
+            }
+        }
+        Some(decoded)
     })
     .await;
     match decoded {
-        Ok(Some((image, bytes, path))) => {
-            if let Some(path) = path {
-                let disk_index = cache.disk_index.clone();
-                let _ = tokio::task::spawn_blocking(move || {
-                    if let Some(dir) = path.parent() {
-                        let _ = std::fs::create_dir_all(dir);
-                    }
-                    if let Err(err) = std::fs::write(&path, &bytes) {
-                        eprintln!("couldn't cache {}: {err}", path.display());
-                        return;
-                    }
-                    if let Some(d) = digest_for_write {
-                        if let Ok(mut g) = disk_index.lock() {
-                            g.insert(d);
-                        }
-                    }
-                });
-            }
-            LoadOutcome::Ready(image)
-        }
+        Ok(Some(image)) => LoadOutcome::Ready(image),
         Ok(None) => LoadOutcome::Failed,
         Err(err) => {
             eprintln!("image decode worker crashed for {url}: {err}");
@@ -935,59 +956,18 @@ unsafe extern "C" {
         out_h: *mut i32,
     ) -> i32;
 
-    fn vita_decode_png_fast(
+    fn vita_decode_png_alloc(
         png_data: *const u8,
         size: usize,
-        out_rgba: *mut u8,
-        out_max_bytes: usize,
         out_w: *mut i32,
         out_h: *mut i32,
-    ) -> i32;
-}
+    ) -> *mut u8;
 
-fn downsample_box(rgba: image::RgbaImage, max_side: u32) -> image::RgbaImage {
-    let src_w = rgba.width() as usize;
-    let src_h = rgba.height() as usize;
-    let max_side = max_side.max(1) as usize;
-    if src_w <= max_side && src_h <= max_side {
-        return rgba;
-    }
-    let (dst_w, dst_h) = if src_w >= src_h {
-        (max_side, (src_h * max_side / src_w).max(1))
-    } else {
-        ((src_w * max_side / src_h).max(1), max_side)
-    };
-    let src = rgba.as_raw();
-    let mut out = vec![0_u8; dst_w * dst_h * 4];
-    for dy in 0..dst_h {
-        let sy0 = dy * src_h / dst_h;
-        let sy1 = ((dy + 1) * src_h).div_ceil(dst_h).max(sy0 + 1).min(src_h);
-        for dx in 0..dst_w {
-            let sx0 = dx * src_w / dst_w;
-            let sx1 = ((dx + 1) * src_w).div_ceil(dst_w).max(sx0 + 1).min(src_w);
-            let mut sums = [0_u64; 4];
-            for sy in sy0..sy1 {
-                for sx in sx0..sx1 {
-                    let offset = (sy * src_w + sx) * 4;
-                    sums[0] += src[offset] as u64;
-                    sums[1] += src[offset + 1] as u64;
-                    sums[2] += src[offset + 2] as u64;
-                    sums[3] += src[offset + 3] as u64;
-                }
-            }
-            let count = ((sx1 - sx0) * (sy1 - sy0)) as u64;
-            let offset = (dy * dst_w + dx) * 4;
-            out[offset] = (sums[0] / count) as u8;
-            out[offset + 1] = (sums[1] / count) as u8;
-            out[offset + 2] = (sums[2] / count) as u8;
-            out[offset + 3] = (sums[3] / count) as u8;
-        }
-    }
-    image::RgbaImage::from_raw(dst_w as u32, dst_h as u32, out)
-        .expect("box downsampler output dimensions match the buffer")
+    fn vita_free_png_pixels(pixels: *mut u8);
 }
 
 fn downsample_box_slice(src: &[u8], src_w: usize, src_h: usize, max_side: usize) -> (Vec<u8>, usize, usize) {
+    let max_side = max_side.max(1);
     if src_w <= max_side && src_h <= max_side {
         return (src.to_vec(), src_w, src_h);
     }
@@ -1003,17 +983,18 @@ fn downsample_box_slice(src: &[u8], src_w: usize, src_h: usize, max_side: usize)
         for dx in 0..dst_w {
             let sx0 = dx * src_w / dst_w;
             let sx1 = ((dx + 1) * src_w).div_ceil(dst_w).max(sx0 + 1).min(src_w);
-            let mut sums = [0_u64; 4];
+            let mut sums = [0_u32; 4];
             for sy in sy0..sy1 {
+                let row = sy * src_w;
                 for sx in sx0..sx1 {
-                    let offset = (sy * src_w + sx) * 4;
-                    sums[0] += src[offset] as u64;
-                    sums[1] += src[offset + 1] as u64;
-                    sums[2] += src[offset + 2] as u64;
-                    sums[3] += src[offset + 3] as u64;
+                    let offset = (row + sx) * 4;
+                    sums[0] += src[offset] as u32;
+                    sums[1] += src[offset + 1] as u32;
+                    sums[2] += src[offset + 2] as u32;
+                    sums[3] += src[offset + 3] as u32;
                 }
             }
-            let count = ((sx1 - sx0) * (sy1 - sy0)) as u64;
+            let count = ((sx1 - sx0) * (sy1 - sy0)) as u32;
             let offset = (dy * dst_w + dx) * 4;
             out[offset] = (sums[0] / count) as u8;
             out[offset + 1] = (sums[1] / count) as u8;
@@ -1025,15 +1006,12 @@ fn downsample_box_slice(src: &[u8], src_w: usize, src_h: usize, max_side: usize)
 }
 
 fn color_image_from_rgba_slice(src: &[u8], width: u32, height: u32, max_side: u32) -> Option<egui::ColorImage> {
+    let max_side = max_side.max(1);
+    if width <= max_side && height <= max_side {
+        return Some(egui::ColorImage::from_rgba_unmultiplied([width as usize, height as usize], src));
+    }
     let (pixels, dst_w, dst_h) = downsample_box_slice(src, width as usize, height as usize, max_side as usize);
     Some(egui::ColorImage::from_rgba_unmultiplied([dst_w, dst_h], &pixels))
-}
-
-fn color_image_from_rgba(rgba: Vec<u8>, width: u32, height: u32, max_side: u32) -> Option<egui::ColorImage> {
-    let rgba = image::RgbaImage::from_raw(width, height, rgba)?;
-    let rgba = downsample_box(rgba, max_side);
-    let size = [rgba.width() as usize, rgba.height() as usize];
-    Some(egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw()))
 }
 
 #[cfg(target_os = "vita")]
@@ -1044,13 +1022,13 @@ fn try_decode_fast_native(bytes: &[u8], max_side: u32) -> Option<egui::ColorImag
     }
     let mut w: i32 = 0;
     let mut h: i32 = 0;
-    let max_bytes = 960 * 544 * 4;
-    let mut guard = HW_DECODE_BUF.lock().unwrap_or_else(|e| e.into_inner());
-    if guard.len() < max_bytes {
-        guard.resize(max_bytes, 0);
-    }
 
     if bytes[0] == 0xFF && bytes[1] == 0xD8 {
+        let max_bytes = 960 * 544 * 4;
+        let mut guard = HW_DECODE_BUF.lock().unwrap_or_else(|e| e.into_inner());
+        if guard.len() < max_bytes {
+            guard.resize(max_bytes, 0);
+        }
         let res = unsafe {
             vita_decode_jpeg_hw(
                 bytes.as_ptr(),
@@ -1070,23 +1048,20 @@ fn try_decode_fast_native(bytes: &[u8], max_side: u32) -> Option<egui::ColorImag
             }
         }
     } else if bytes[0] == 0x89 && bytes[1] == b'P' && bytes[2] == b'N' && bytes[3] == b'G' {
-        let res = unsafe {
-            vita_decode_png_fast(
+        let ptr = unsafe {
+            vita_decode_png_alloc(
                 bytes.as_ptr(),
                 bytes.len(),
-                guard.as_mut_ptr(),
-                max_bytes,
                 &mut w as *mut i32,
                 &mut h as *mut i32,
             )
         };
-        if res >= 0 && w > 0 && h > 0 {
+        if !ptr.is_null() && w > 0 && h > 0 {
             let size = (w as usize) * (h as usize) * 4;
-            if size <= guard.len() {
-                let img = color_image_from_rgba_slice(&guard[..size], w as u32, h as u32, max_side);
-                drop(guard);
-                return img;
-            }
+            let slice = unsafe { std::slice::from_raw_parts(ptr, size) };
+            let img = color_image_from_rgba_slice(slice, w as u32, h as u32, max_side);
+            unsafe { vita_free_png_pixels(ptr) };
+            return img;
         }
     }
     None
@@ -1106,9 +1081,8 @@ fn decode_image(bytes: &[u8], max_side: u32) -> Option<egui::ColorImage> {
             return None;
         }
     };
-    let rgba = downsample_box(decoded.into_rgba8(), max_side);
-    let size = [rgba.width() as usize, rgba.height() as usize];
-    Some(egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw()))
+    let rgba = decoded.into_rgba8();
+    color_image_from_rgba_slice(rgba.as_raw(), rgba.width(), rgba.height(), max_side)
 }
 #[cfg(test)]
 mod tests {
@@ -1311,5 +1285,16 @@ mod tests {
             .or_default()
             .insert("https://x/a.png".to_owned(), parked);
         assert!(!cache.is_loading("https://x/a.png", MAX_ICON_SIDE));
+    }
+
+    #[test]
+    fn downsampler_avoids_copying_smaller_images_and_scales_larger_ones() {
+        let small = vec![128_u8; 64 * 64 * 4];
+        let img = color_image_from_rgba_slice(&small, 64, 64, MAX_ICON_SIDE).unwrap();
+        assert_eq!(img.size, [64, 64]);
+
+        let large = vec![200_u8; 256 * 128 * 4];
+        let scaled = color_image_from_rgba_slice(&large, 256, 128, 128).unwrap();
+        assert_eq!(scaled.size, [128, 64]);
     }
 }

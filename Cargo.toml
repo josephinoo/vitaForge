@@ -74,3 +74,13 @@ opt-level = 3
 opt-level = 3
 [profile.release.package.crc32fast]
 opt-level = 3
+[profile.release.package.image]
+opt-level = 3
+[profile.release.package.png]
+opt-level = 3
+[profile.release.package.zune-jpeg]
+opt-level = 3
+[profile.release.package.zune-core]
+opt-level = 3
+[profile.release.package.fdeflate]
+opt-level = 3

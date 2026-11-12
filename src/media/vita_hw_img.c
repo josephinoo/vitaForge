@@ -1,5 +1,8 @@
 #include "vita_hw_img.h"
 
+#if defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(__vita__) || defined(PSP2)
+#define STBI_NEON
+#endif
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_STATIC
 #define STBI_NO_STDIO
@@ -148,4 +151,28 @@ int vita_decode_png_fast(const uint8_t *png_data, size_t size, uint8_t *out_rgba
     *out_w = w;
     *out_h = h;
     return 0;
+}
+
+uint8_t *vita_decode_png_alloc(const uint8_t *png_data, size_t size, int *out_w, int *out_h) {
+    if (!png_data || size < 8 || !out_w || !out_h) {
+        return NULL;
+    }
+    if (png_data[0] != 0x89 || png_data[1] != 'P' || png_data[2] != 'N' || png_data[3] != 'G') {
+        return NULL;
+    }
+    int w = 0, h = 0, channels = 0;
+    stbi_uc *pixels = stbi_load_from_memory((const stbi_uc *)png_data, (int)size, &w, &h, &channels, 4);
+    if (!pixels || w <= 0 || h <= 0) {
+        if (pixels) stbi_image_free(pixels);
+        return NULL;
+    }
+    *out_w = w;
+    *out_h = h;
+    return (uint8_t *)pixels;
+}
+
+void vita_free_png_pixels(uint8_t *pixels) {
+    if (pixels) {
+        stbi_image_free(pixels);
+    }
 }

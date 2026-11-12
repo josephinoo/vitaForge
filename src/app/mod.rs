@@ -27,6 +27,16 @@ fn precache_art_urls(apps: &[AppEntry]) -> Vec<String> {
         .take(MAX_PRECACHE_PER_LAUNCH)
         .collect()
 }
+fn precache_catalog_urls(catalog: &CatalogState) -> Vec<String> {
+    catalog
+        .filtered_indices
+        .iter()
+        .chain(catalog.sorted_indices.iter())
+        .filter_map(|&idx| catalog.apps.get(idx).and_then(tile_art_url))
+        .map(str::to_owned)
+        .take(MAX_PRECACHE_PER_LAUNCH)
+        .collect()
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum FocusPane {
@@ -1288,13 +1298,13 @@ impl App {
                         AppState::Loading => {
                             let catalog = CatalogState::new(apps);
                             self.installed.force_refresh(ctx, &catalog.apps);
-                            self.icons.precache_background(precache_art_urls(&catalog.apps));
+                            self.icons.precache_background(precache_catalog_urls(&catalog));
                             self.state = AppState::Catalog(catalog);
                         }
                         AppState::Catalog(catalog) => {
                             catalog.replace_apps(apps);
                             self.installed.force_refresh(ctx, &catalog.apps);
-                            self.icons.precache_background(precache_art_urls(&catalog.apps));
+                            self.icons.precache_background(precache_catalog_urls(catalog));
                         }
                         AppState::Detail { previous, .. } | AppState::Settings { previous, .. } => {
                             previous.replace_apps(apps);
