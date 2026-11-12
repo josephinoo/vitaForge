@@ -76,6 +76,15 @@ pub fn battery_percent() -> Option<u8> {
     percent
 }
 
+pub fn battery_charging() -> bool {
+    #[cfg(target_os = "vita")]
+    unsafe {
+        vitasdk_sys::scePowerIsBatteryCharging() == 1
+    }
+    #[cfg(not(target_os = "vita"))]
+    false
+}
+
 #[cfg(target_os = "vita")]
 fn battery_percent_uncached() -> Option<u8> {
     let pct = unsafe { vitasdk_sys::scePowerGetBatteryLifePercent() };

@@ -129,13 +129,20 @@ pub fn run(mut app: App) -> Result<()> {
             }
             if ime.is_some() {
                 ime::feed_event(&event);
+                app.last_input_at = Instant::now();
                 continue;
             }
             if let Some(command) = map_keyboard_event(&event) {
+                app.last_input_at = Instant::now();
                 direct_commands.push(command);
             }
+            let prev_pointer_events = egui_events.len();
             pointer.map_event(&event, screen_points, UI_SCALE, &mut egui_events);
+            if egui_events.len() > prev_pointer_events {
+                app.last_input_at = Instant::now();
+            }
             if let Some(command) = map_controller_button_event(&event) {
+                app.last_input_at = Instant::now();
                 direct_commands.push(command);
             }
         }
@@ -206,6 +213,9 @@ pub fn run(mut app: App) -> Result<()> {
         surface.set_frame_alpha(0.82 + 0.18 * fade_alpha);
         if ime.is_none() {
             let (rx, ry) = right_stick_axes(controller.as_ref());
+            if rx != 0.0 || ry != 0.0 {
+                app.last_input_at = Instant::now();
+            }
             if ry != 0.0 {
                 if matches!(app.state, crate::app::AppState::Detail { .. }) {
                     direct_commands.push(AppCommand::AnalogScroll(ry * 14.0));
@@ -222,6 +232,7 @@ pub fn run(mut app: App) -> Result<()> {
 
             match held_stick_direction(controller.as_ref()) {
                 Some(direction) if held_direction == Some(direction) => {
+                    app.last_input_at = Instant::now();
                     if held_since.elapsed() >= STICK_REPEAT_DELAY
                         && last_repeat_at.elapsed() >= STICK_REPEAT_INTERVAL
                     {
@@ -230,6 +241,7 @@ pub fn run(mut app: App) -> Result<()> {
                     }
                 }
                 Some(direction) => {
+                    app.last_input_at = Instant::now();
                     direct_commands.push(direction.into());
                     held_direction = Some(direction);
                     held_since = Instant::now();

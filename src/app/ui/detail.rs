@@ -34,6 +34,7 @@ pub(crate) fn detail_screen(
     detail_focus: DetailFocus,
     report_modal: Option<usize>,
     report_choice: usize,
+    dimmed: bool,
 ) -> Vec<AppCommand> {
     let mut commands = Vec::new();
     let state = installed.state(entry);
@@ -240,7 +241,7 @@ pub(crate) fn detail_screen(
     }
 
     if let Some(job) = install {
-        install_progress_modal(ctx, lang, &entry.name, job, cancellable, cancel_armed, &mut commands);
+        install_progress_modal_opt(ctx, lang, &entry.name, job, cancellable, cancel_armed, dimmed, &mut commands);
     }
 
     egui::CentralPanel::default()
@@ -650,13 +651,41 @@ pub(crate) fn install_progress_modal(
     cancel_armed: bool,
     commands: &mut Vec<AppCommand>,
 ) {
+    install_progress_modal_opt(ctx, lang, title, job, cancellable, cancel_armed, false, commands);
+}
+
+pub(crate) fn install_progress_modal_opt(
+    ctx: &egui::Context,
+    lang: Language,
+    title: &str,
+    job: &crate::install::Progress,
+    cancellable: bool,
+    cancel_armed: bool,
+    dimmed: bool,
+    commands: &mut Vec<AppCommand>,
+) {
     let finished = job.is_finished();
+    if dimmed && !finished {
+        egui::Area::new(egui::Id::new("dim_saver_backdrop"))
+            .fixed_pos(egui::pos2(0.0, 0.0))
+            .order(egui::Order::Middle)
+            .show(ctx, |ui| {
+                let screen_rect = ctx.screen_rect();
+                ui.painter().rect_filled(screen_rect, 0.0, egui::Color32::from_rgb(0, 0, 0));
+            });
+    }
+
     egui::Area::new(egui::Id::new("install_progress_modal"))
         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
         .order(egui::Order::Foreground)
         .show(ctx, |ui| {
+            let bg_color = if dimmed && !finished {
+                egui::Color32::from_rgb(10, 10, 12)
+            } else {
+                glass_modal(pal().bg_card)
+            };
             egui::Frame::window(&ctx.style())
-                .fill(glass_modal(pal().bg_card))
+                .fill(bg_color)
                 .stroke(egui::Stroke::new(
                     if cancel_armed { 2.5_f32 } else { 1.5_f32 },
                     if cancel_armed { pal().danger } else { pal().accent },
@@ -666,6 +695,28 @@ pub(crate) fn install_progress_modal(
                 .show(ui, |ui| {
                     ui.set_width(400.0);
                     ui.vertical_centered(|ui| {
+                        if let Some(pct) = crate::app::sysinfo::battery_percent() {
+                            let charging = crate::app::sysinfo::battery_charging();
+                            let bat_color = if pct <= 15 {
+                                pal().danger
+                            } else if pct <= 25 {
+                                pal().warning
+                            } else {
+                                pal().text_dim
+                            };
+                            let bat_str = if charging {
+                                format!("⚡ {pct}%")
+                            } else {
+                                format!("🔋 {pct}%")
+                            };
+                            ui.label(
+                                egui::RichText::new(bat_str)
+                                    .size(FONT_MICRO)
+                                    .color(bat_color),
+                            );
+                            ui.add_space(4.0);
+                        }
+
                         ui.label(
                             egui::RichText::new(title)
                                 .size(FONT_LARGE)

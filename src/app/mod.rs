@@ -811,6 +811,7 @@ pub struct App {
     pub report_entry: bool,
     /// Name of the profile being renamed while the keyboard is open.
     pub profile_rename: Option<String>,
+    pub last_input_at: std::time::Instant,
     pub auth_input_target: Option<crate::input::TextTarget>,
     pub auth_form: AuthForm,
     pub auth_busy: bool,
@@ -915,6 +916,7 @@ impl App {
             report_choice: 0,
             report_entry: false,
             profile_rename: None,
+            last_input_at: std::time::Instant::now(),
             auth_input_target: None,
             auth_form: AuthForm::default(),
             auth_busy: false,
@@ -1090,6 +1092,9 @@ impl App {
     }
     pub fn install_busy(&self) -> bool {
         self.install.as_ref().is_some_and(|job| !job.progress.is_finished())
+    }
+    pub fn is_dimmed(&self) -> bool {
+        self.install_busy() && self.last_input_at.elapsed() >= std::time::Duration::from_secs(120)
     }
     pub fn tick(&mut self, ctx: &egui::Context) -> Result<()> {
         if self.restart_at.is_some_and(|at| std::time::Instant::now() >= at) {

@@ -104,6 +104,7 @@ pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
                 *detail_focus,
                 app.report_modal,
                 app.report_choice,
+                app.is_dimmed(),
             )
         }
         AppState::Settings { nav, previous } => {
@@ -144,13 +145,14 @@ pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
     if app.self_update_prompt && let Some(info) = &app.self_update {
         self_update_modal(ctx, app.lang, &info.tag, &mut commands);
     } else if let Some(job) = app.install.as_ref().filter(|job| job.app_id == SELF_UPDATE_ID) {
-        crate::app::ui::detail::install_progress_modal(
+        crate::app::ui::detail::install_progress_modal_opt(
             ctx,
             app.lang,
             &job.title,
             &job.progress,
             job.progress.is_cancellable(),
             app.cancel_armed(),
+            app.is_dimmed(),
             &mut commands,
         );
     }
