@@ -174,14 +174,14 @@ fn self_update_modal(
             let screen = ui.ctx().screen_rect();
             let (bg, _) = ui.allocate_exact_size(screen.size(), egui::Sense::click());
             ui.painter()
-                .rect_filled(bg, 0.0, egui::Color32::from_black_alpha(200));
+                .rect_filled(bg, 0.0, egui::Color32::from_black_alpha(175));
         });
     egui::Area::new(egui::Id::new("self_update_modal"))
         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
         .order(egui::Order::Foreground)
         .show(ctx, |ui| {
             egui::Frame::window(&ctx.style())
-                .fill(theme::pal().bg_card)
+                .fill(theme::glass_modal(theme::pal().bg_card))
                 .stroke(egui::Stroke::new(1.5_f32, theme::pal().accent))
                 .corner_radius(theme::RADIUS_LG)
                 .inner_margin(egui::vec2(28.0, 20.0))

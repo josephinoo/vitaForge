@@ -562,12 +562,12 @@ fn account_section(ui: &mut egui::Ui, view: &SettingsView, commands: &mut Vec<Ap
                 ui.add_space(4.0);
 
                 ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
                     // Online green dot
-                    let (dot_rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+                    let (dot_rect, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
                     ui.painter().circle_filled(dot_rect.center(), 3.5, egui::Color32::from_rgb(34, 197, 94));
-                    ui.add_space(4.0);
                     ui.label(egui::RichText::new("Online").size(FONT_SMALL).color(egui::Color32::from_rgb(34, 197, 94)).strong());
-                    ui.add_space(8.0);
+                    ui.add_space(4.0);
                     ui.label(egui::RichText::new("Connected to VitaForge").size(FONT_SMALL).color(pal().text_dim));
                 });
 

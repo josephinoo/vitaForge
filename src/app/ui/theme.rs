@@ -646,6 +646,10 @@ pub fn glass(color: egui::Color32) -> egui::Color32 {
     color.gamma_multiply(GLASS_ALPHA)
 }
 
+pub fn glass_modal(color: egui::Color32) -> egui::Color32 {
+    color.gamma_multiply(0.92)
+}
+
 pub const RADIUS_XS: f32 = 5.0;
 pub const RADIUS_SM: f32 = 8.0;
 pub const RADIUS_MD: f32 = 10.0;

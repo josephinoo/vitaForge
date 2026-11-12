@@ -4,6 +4,7 @@
 #define STBI_STATIC
 #define STBI_NO_STDIO
 #define STBI_ONLY_PNG
+#define STBI_ONLY_JPEG
 #include "stb_image.h"
 
 #if defined(__vita__) || defined(PSP2)
@@ -68,10 +69,40 @@ int vita_decode_jpeg_hw(const uint8_t *jpeg_data, size_t size, uint8_t *out_rgba
         return -4;
     }
 
+#if defined(__vita__) || defined(PSP2)
     static uint8_t s_coef_buf[64 * 1024] __attribute__((aligned(64)));
 
+    // Set sentinel bytes: valid RGBA decoded from JPEG always sets alpha channel (byte 3, 7, etc.) to 0xFF.
+    // In emulators like Vita3K, sceJpegArmDecodeMJpeg is an unimplemented stub that returns 0 without writing any pixels.
+    if (required_bytes >= 16) {
+        memset(out_rgba, 0x55, 16);
+    }
+
     res = sceJpegArmDecodeMJpeg(jpeg_data, (SceSize)size, 0, out_rgba, (SceSize)out_max_bytes, s_coef_buf, sizeof(s_coef_buf));
-    return res;
+    if (res >= 0) {
+        // Verify that hardware decoder actually wrote pixels (not a no-op stub)
+        if (required_bytes >= 16 && (out_rgba[0] != 0x55 || out_rgba[1] != 0x55 || out_rgba[2] != 0x55 || out_rgba[3] != 0x55)) {
+            return res;
+        }
+    }
+#endif
+
+    // Fallback to fast stb_image CPU decode (essential on Vita3K or unsupported subsamplings)
+    int w = 0, h = 0, channels = 0;
+    stbi_uc *pixels = stbi_load_from_memory((const stbi_uc *)jpeg_data, (int)size, &w, &h, &channels, 4);
+    if (!pixels) {
+        return -5;
+    }
+    size_t req_bytes = (size_t)w * (size_t)h * 4;
+    if (out_max_bytes < req_bytes) {
+        stbi_image_free(pixels);
+        return -6;
+    }
+    memcpy(out_rgba, pixels, req_bytes);
+    stbi_image_free(pixels);
+    *out_w = w;
+    *out_h = h;
+    return 0;
 }
 
 #else

@@ -123,7 +123,7 @@ pub(crate) fn detail_screen(
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
                 egui::Frame::window(&ctx.style())
-                    .fill(pal().bg_card)
+                    .fill(glass_modal(pal().bg_card))
                     .stroke(egui::Stroke::new(
                         1.5_f32,
                         pal().danger,
@@ -441,9 +441,9 @@ pub(crate) fn detail_screen(
                                 .show(ui, |ui| {
                                     ui.vertical(|ui| {
                                         ui.horizontal(|ui| {
-                                            let rect = egui::Rect::from_center_size(ui.cursor().center(), egui::Vec2::splat(14.0));
-                                            crate::app::ui::chrome_icons::paint(ui, crate::app::ui::chrome_icons::ChromeIcon::User, rect, pal().accent_soft);
-                                            ui.add_space(18.0);
+                                            ui.spacing_mut().item_spacing.x = 4.0;
+                                            let (icon_rect, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
+                                            crate::app::ui::chrome_icons::paint(ui, crate::app::ui::chrome_icons::ChromeIcon::User, icon_rect, pal().accent_soft);
                                             ui.label(
                                                 egui::RichText::new(&comment.author_name)
                                                     .size(FONT_SMALL)
@@ -531,7 +531,7 @@ fn report_modal_ui(ctx: &egui::Context, lang: Language, focus: usize, choice: us
         .order(egui::Order::Foreground)
         .show(ctx, |ui| {
             egui::Frame::window(&ctx.style())
-                .fill(pal().bg_card)
+                .fill(glass_modal(pal().bg_card))
                 .stroke(egui::Stroke::new(1.5_f32, pal().accent_soft))
                 .corner_radius(RADIUS_LG)
                 .inner_margin(egui::vec2(20.0, 14.0))
@@ -635,7 +635,7 @@ fn paint_modal_scrim(ctx: &egui::Context) {
             let screen = ui.ctx().screen_rect();
             let (bg, _) = ui.allocate_exact_size(screen.size(), egui::Sense::click());
             ui.painter()
-                .rect_filled(bg, 0.0, egui::Color32::from_black_alpha(200));
+                .rect_filled(bg, 0.0, egui::Color32::from_black_alpha(175));
         });
 }
 
@@ -656,7 +656,7 @@ pub(crate) fn install_progress_modal(
         .order(egui::Order::Foreground)
         .show(ctx, |ui| {
             egui::Frame::window(&ctx.style())
-                .fill(pal().bg_card)
+                .fill(glass_modal(pal().bg_card))
                 .stroke(egui::Stroke::new(
                     if cancel_armed { 2.5_f32 } else { 1.5_f32 },
                     if cancel_armed { pal().danger } else { pal().accent },
@@ -1808,7 +1808,7 @@ fn data_prompt_modal(
         .order(egui::Order::Foreground)
         .show(ctx, |ui| {
             egui::Frame::window(&ctx.style())
-                .fill(pal().bg_card)
+                .fill(glass_modal(pal().bg_card))
                 .stroke(egui::Stroke::new(1.0_f32, pal().separator))
                 .corner_radius(RADIUS_LG)
                 .inner_margin(egui::vec2(20.0, 14.0))

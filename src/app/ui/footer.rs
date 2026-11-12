@@ -214,7 +214,11 @@ pub(crate) fn button_hints(
     const GLYPH: f32 = 14.0;
     egui::TopBottomPanel::bottom("hints")
         .exact_height(HINT_BAR_HEIGHT)
-        .frame(egui::Frame::NONE.fill(pal().bg_header))
+        .frame(
+            egui::Frame::NONE
+                .fill(glass(pal().bg_header))
+                .stroke(egui::Stroke::new(1.0_f32, pal().glass_edge)),
+        )
         .show(ctx, |ui| {
             let panel = ui.max_rect();
             let row = egui::Rect::from_min_max(

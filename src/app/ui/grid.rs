@@ -218,7 +218,13 @@ pub(crate) fn tile_platform_badge(
     ui.painter().rect_filled(
         badge,
         RADIUS_XS,
-        egui::Color32::from_rgba_unmultiplied(0x4a, 0x4a, 0x52, 200),
+        egui::Color32::from_rgba_unmultiplied(0x1a, 0x1a, 0x22, 190),
+    );
+    ui.painter().rect_stroke(
+        badge,
+        RADIUS_XS,
+        egui::Stroke::new(1.0_f32, pal().glass_edge),
+        egui::StrokeKind::Inside,
     );
     ui.painter()
         .galley(badge.center() - galley.size() / 2.0, galley, pal().text);
