@@ -28,6 +28,7 @@ pub enum Row {
     AccountLogout,
     Language,
     Notifications,
+    SoundEffects,
     Theme,
     ClearIcons,
     ClearCatalog,
@@ -69,7 +70,7 @@ pub const SECTIONS: [(Section, &[Row]); 6] = [
             Row::AccountLogout,
         ],
     ),
-    (Section::General, &[Row::Language, Row::Notifications]),
+    (Section::General, &[Row::Language, Row::Notifications, Row::SoundEffects]),
     (Section::Appearance, &[Row::Theme]),
     (
         Section::Plugins,
@@ -164,6 +165,7 @@ pub fn theme_label(theme: ThemeId, lang: Language) -> &'static str {
     match theme {
         ThemeId::Midnight => lang.theme_midnight(),
         ThemeId::Obsidian => lang.theme_obsidian(),
+        ThemeId::OledBlack => lang.theme_oled_black(),
         ThemeId::Aurora => lang.theme_aurora(),
         ThemeId::Sunset => lang.theme_sunset(),
         ThemeId::HighContrast => lang.theme_high_contrast(),
@@ -198,6 +200,7 @@ pub(crate) struct SettingsView<'a> {
     pub stats: &'a CacheStats,
     pub cache_notice: Option<&'a str>,
     pub install_notifications: bool,
+    pub sound_effects: bool,
     pub purge_armed: bool,
     pub plugins: PluginsView<'a>,
     pub auth_form: &'a crate::app::AuthForm,
@@ -437,6 +440,9 @@ fn content(ui: &mut egui::Ui, view: &SettingsView, commands: &mut Vec<AppCommand
             }),
             Row::Notifications => setting_row(ui, ChromeIcon::Bell, lang.settings_install_notifications(), lang.settings_notifications_hint(), focused, false, |ui| {
                 toggle(ui, view.install_notifications);
+            }),
+            Row::SoundEffects => setting_row(ui, ChromeIcon::Sliders, lang.settings_sound_effects(), lang.settings_sound_effects_hint(), focused, false, |ui| {
+                toggle(ui, view.sound_effects);
             }),
             Row::Theme => setting_row(ui, ChromeIcon::Palette, lang.settings_theme(), lang.settings_theme_hint(), focused, false, |ui| {
                 chevron(ui);
@@ -1387,6 +1393,7 @@ mod tests {
                             stats: &stats,
                             cache_notice: None,
                             install_notifications: true,
+                            sound_effects: true,
                             purge_armed: false,
                             plugins: PluginsView {
                                 tai: Some(&snapshot),
@@ -1440,7 +1447,7 @@ mod tests {
                     egui::TopBottomPanel::bottom("hints").exact_height(47.0).show(ctx, |_| {});
                     settings_page(ctx, SettingsView {
                         lang: Language::English, nav: &nav, catalog_count: 0, stats: &stats,
-                        cache_notice: None, install_notifications: true, purge_armed: false,
+                        cache_notice: None, install_notifications: true, sound_effects: true, purge_armed: false,
                         plugins: PluginsView { tai: Some(&snapshot), outdated: &[], pending_reboot: false,
                             reboot_armed: false, armed: false, notice: None },
                         appear: 1.0,
@@ -1463,6 +1470,7 @@ mod tests {
         for row in [
             Row::Language,
             Row::Notifications,
+            Row::SoundEffects,
             Row::Theme,
             Row::ClearIcons,
             Row::ClearCatalog,

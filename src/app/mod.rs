@@ -897,7 +897,7 @@ impl App {
             comments_rx: None,
             social_rx: None,
             cache_stats_rx: None,
-            audio: crate::audio::AudioEngine::new(),
+            audio: crate::audio::AudioEngine::new(settings.sound_effects),
             cache_stats: data::cache_manager::CacheStats::default(),
             cache_notice: None,
             purge_armed: false,
@@ -1435,6 +1435,7 @@ impl App {
                 return Ok(());
             }
             Some(Row::Notifications) => AppCommand::ToggleInstallNotifications,
+            Some(Row::SoundEffects) => AppCommand::ToggleSoundEffects,
             Some(Row::ClearIcons) => AppCommand::ClearIconCache,
             Some(Row::ClearCatalog) => AppCommand::ClearCatalogCache,
             Some(Row::PurgeAll) => AppCommand::PurgeAllCache,
@@ -2894,6 +2895,11 @@ impl App {
             AppCommand::ToggleInstallNotifications => {
                 self.install_notifications = !self.install_notifications;
                 data::settings::set_install_notifications(self.install_notifications);
+            }
+            AppCommand::ToggleSoundEffects => {
+                let enabled = !self.audio.is_enabled();
+                self.audio.set_enabled(enabled);
+                data::settings::set_sound_effects(enabled);
             }
             AppCommand::ClearIconCache => {
                 let freed = data::cache_manager::clear_icon_cache();

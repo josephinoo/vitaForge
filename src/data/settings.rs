@@ -14,11 +14,14 @@ pub struct Settings {
     pub language: Option<crate::app::i18n::Language>,
     #[serde(default = "default_install_notifications")]
     pub install_notifications: bool,
+    #[serde(default = "default_sound_effects")]
+    pub sound_effects: bool,
     #[serde(default)]
     pub theme: crate::app::ui::theme::ThemeId,
 }
 
 const fn default_install_notifications() -> bool { true }
+const fn default_sound_effects() -> bool { true }
 
 impl Default for Settings {
     fn default() -> Self {
@@ -27,6 +30,7 @@ impl Default for Settings {
             sort_direction: SortDirection::default(),
             language: None,
             install_notifications: true,
+            sound_effects: true,
             theme: Default::default(),
         }
     }
@@ -47,6 +51,12 @@ pub fn set_theme(theme: crate::app::ui::theme::ThemeId) {
 pub fn set_install_notifications(enabled: bool) {
     let mut settings = load();
     settings.install_notifications = enabled;
+    save(&settings);
+}
+
+pub fn set_sound_effects(enabled: bool) {
+    let mut settings = load();
+    settings.sound_effects = enabled;
     save(&settings);
 }
 
@@ -132,6 +142,11 @@ mod tests {
     #[test]
     fn install_notifications_default_to_enabled() {
         assert!(Settings::default().install_notifications);
+    }
+
+    #[test]
+    fn sound_effects_default_to_enabled() {
+        assert!(Settings::default().sound_effects);
     }
 
     #[test]

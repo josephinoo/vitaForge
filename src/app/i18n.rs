@@ -318,6 +318,9 @@ impl Language {
     pub fn theme_obsidian(self) -> &'static str {
         self.strings(|s| s.theme_obsidian)
     }
+    pub fn theme_oled_black(self) -> &'static str {
+        self.strings(|s| s.theme_oled_black)
+    }
     pub fn theme_aurora(self) -> &'static str {
         self.strings(|s| s.theme_aurora)
     }
@@ -401,6 +404,12 @@ impl Language {
     }
     pub fn settings_install_notifications(self) -> &'static str {
         self.strings(|s| s.settings_install_notifications)
+    }
+    pub fn settings_sound_effects(self) -> &'static str {
+        self.strings(|s| s.settings_sound_effects)
+    }
+    pub fn settings_sound_effects_hint(self) -> &'static str {
+        self.strings(|s| s.settings_sound_effects_hint)
     }
     pub fn enabled(self) -> &'static str {
         self.strings(|s| s.enabled)
@@ -879,6 +888,7 @@ struct LocalizedStrings {
     settings_purge_hint: &'static str,
     theme_midnight: &'static str,
     theme_obsidian: &'static str,
+    theme_oled_black: &'static str,
     theme_aurora: &'static str,
     theme_sunset: &'static str,
     theme_high_contrast: &'static str,
@@ -891,6 +901,8 @@ struct LocalizedStrings {
     settings_storage: &'static str,
     settings_plugins: &'static str,
     settings_install_notifications: &'static str,
+    settings_sound_effects: &'static str,
+    settings_sound_effects_hint: &'static str,
     enabled: &'static str,
     disabled: &'static str,
     settings_version: &'static str,
@@ -1050,6 +1062,7 @@ impl LocalizedStrings {
             settings_purge_hint: r("settings-purge-hint"),
             theme_midnight: r("theme-midnight"),
             theme_obsidian: r("theme-obsidian"),
+            theme_oled_black: r("theme-oled-black"),
             theme_aurora: r("theme-aurora"),
             theme_sunset: r("theme-sunset"),
             theme_high_contrast: r("theme-high-contrast"),
@@ -1062,6 +1075,8 @@ impl LocalizedStrings {
             settings_storage: r("settings-storage"),
             settings_plugins: r("settings-plugins"),
             settings_install_notifications: r("settings-install-notifications"),
+            settings_sound_effects: r("settings-sound-effects"),
+            settings_sound_effects_hint: r("settings-sound-effects-hint"),
             enabled: r("enabled"),
             disabled: r("disabled"),
             settings_version: r("settings-version"),

@@ -159,6 +159,7 @@ pub enum AppCommand {
     SetTheme(crate::app::ui::theme::ThemeId),
     SetLanguage(crate::app::i18n::Language),
     ToggleInstallNotifications,
+    ToggleSoundEffects,
     ClearIconCache,
     ClearCatalogCache,
     PurgeAllCache,
