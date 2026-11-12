@@ -1085,6 +1085,7 @@ async fn run_vita(
     cancel: &Arc<AtomicBool>,
 ) -> Result<Progress> {
     let _ = tx.send(Progress::Resolving);
+    let resolving = std::time::Instant::now();
     let url = match entry.source.as_deref() {
         Some(repo) => match github::latest_release(repo).await {
             Some(release) => {
@@ -1095,6 +1096,7 @@ async fn run_vita(
         },
         None => entry.download_url.clone(),
     };
+    log_file(&format!("resolved the download link in {:.1}s", resolving.elapsed().as_secs_f32()));
     if url.is_empty() {
         bail!("no download link for this app");
     }

@@ -160,26 +160,46 @@ struct ParallelProbe {
 }
 
 async fn probe_parallel(url: &str) -> Option<ParallelProbe> {
+    // One hiccup here used to leave a 200 MB download on a single connection (~3x slower), so retry and say why.
+    for attempt in 1..=3u32 {
+        match probe_parallel_once(url).await {
+            Ok(probe) => return Some(probe),
+            Err((retryable, why)) => {
+                crate::install::log_file(&format!("parallel: probe attempt {attempt} failed: {why}"));
+                if !retryable {
+                    return None;
+                }
+                tokio::time::sleep(Duration::from_millis(600)).await;
+            }
+        }
+    }
+    None
+}
+
+/// Err((retryable, reason)): a server that answers without Range support won't change its mind.
+async fn probe_parallel_once(url: &str) -> std::result::Result<ParallelProbe, (bool, String)> {
     // shortcut: 1-byte Range probe instead of HEAD because GitHub/Archive redirects strip Accept-Ranges on HEAD, upgrade if custom CDN added
     let resp = crate::net::client()
         .get(url)
         .header("Range", "bytes=0-0")
         .send()
         .await
-        .ok()?;
-    if resp.status() != reqwest::StatusCode::PARTIAL_CONTENT {
-        return None;
+        .map_err(|e| (true, format!("request error: {e}")))?;
+    let status = resp.status();
+    if status != reqwest::StatusCode::PARTIAL_CONTENT {
+        return Err((status.is_server_error() || status == reqwest::StatusCode::TOO_MANY_REQUESTS, format!("status {status}")));
     }
     let total = resp
         .headers()
         .get(reqwest::header::CONTENT_RANGE)
         .and_then(|v| v.to_str().ok())
         .and_then(|r| r.rsplit('/').next())
-        .and_then(|t| t.parse::<u64>().ok())?;
+        .and_then(|t| t.parse::<u64>().ok())
+        .ok_or((false, "no usable Content-Range".to_owned()))?;
     if total < MIN_PARALLEL_BYTES {
-        return None;
+        return Err((false, format!("only {total} bytes, not worth splitting")));
     }
-    Some(ParallelProbe {
+    Ok(ParallelProbe {
         final_url: resp.url().as_str().to_owned(),
         total,
     })
