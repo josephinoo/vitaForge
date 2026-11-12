@@ -4,7 +4,28 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 const STORAGE_CACHE_TTL: Duration = Duration::from_secs(15);
 const BATTERY_CACHE_TTL: Duration = Duration::from_secs(5);
 
+#[cfg(target_os = "vita")]
+fn vita_local_datetime() -> Option<vitasdk_sys::SceDateTime> {
+    unsafe extern "C" {
+        fn sceRtcGetCurrentClockLocalTime(time: *mut vitasdk_sys::SceDateTime) -> core::ffi::c_int;
+    }
+    unsafe {
+        let mut dt: vitasdk_sys::SceDateTime = core::mem::zeroed();
+        if sceRtcGetCurrentClockLocalTime(&mut dt) < 0 {
+            return None;
+        }
+        Some(dt)
+    }
+}
+
 pub fn log_stamp() -> String {
+    #[cfg(target_os = "vita")]
+    if let Some(dt) = vita_local_datetime() {
+        return format!(
+            "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+            dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second
+        );
+    }
     let secs = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
     let z = (secs / 86_400) as i64 + 719_468;
     let era = z.div_euclid(146_097);
@@ -20,6 +41,10 @@ pub fn log_stamp() -> String {
 }
 
 pub fn clock_hhmm() -> String {
+    #[cfg(target_os = "vita")]
+    if let Some(dt) = vita_local_datetime() {
+        return format!("{:02}:{:02}", dt.hour, dt.minute);
+    }
     let Ok(elapsed) = SystemTime::now().duration_since(UNIX_EPOCH) else {
         return String::from("--:--");
     };
@@ -49,6 +74,15 @@ pub fn battery_percent() -> Option<u8> {
         });
     }
     percent
+}
+
+pub fn battery_charging() -> bool {
+    #[cfg(target_os = "vita")]
+    unsafe {
+        vitasdk_sys::scePowerIsBatteryCharging() == 1
+    }
+    #[cfg(not(target_os = "vita"))]
+    false
 }
 
 #[cfg(target_os = "vita")]

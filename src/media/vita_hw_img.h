@@ -12,6 +12,8 @@ int vita_hw_init_jpeg(void);
 void vita_hw_finish_jpeg(void);
 int vita_decode_jpeg_hw(const uint8_t *jpeg_data, size_t size, uint8_t *out_rgba, size_t out_max_bytes, int *out_w, int *out_h);
 int vita_decode_png_fast(const uint8_t *png_data, size_t size, uint8_t *out_rgba, size_t out_max_bytes, int *out_w, int *out_h);
+uint8_t *vita_decode_png_alloc(const uint8_t *png_data, size_t size, int *out_w, int *out_h);
+void vita_free_png_pixels(uint8_t *pixels);
 
 #ifdef __cplusplus
 }

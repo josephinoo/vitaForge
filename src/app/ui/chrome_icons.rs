@@ -38,6 +38,7 @@ pub enum ChromeIcon {
     ChevronRight,
     ChevronLeft,
     Check,
+    User,
 }
 
 impl ChromeIcon {
@@ -111,6 +112,7 @@ impl ChromeIcon {
             Self::ChevronRight => '\u{e073}',
             Self::ChevronLeft => '\u{e071}',
             Self::Check => '\u{e070}',
+            Self::User => '\u{e19f}',
         }
     }
 }

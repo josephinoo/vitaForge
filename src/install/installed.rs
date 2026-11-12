@@ -256,9 +256,9 @@ impl InstalledIndex {
             installed_at: installed_at(&index_key(entry)),
         })
     }
-    pub fn force_refresh(&self, ctx: &egui::Context, entries: &[AppEntry]) {
+    pub fn force_refresh(&self, ctx: &egui::Context, entries: &[AppEntry]) -> bool {
         *self.scanned_at.lock().unwrap() = None;
-        self.refresh(ctx, entries);
+        self.refresh(ctx, entries)
     }
     pub fn refresh(&self, ctx: &egui::Context, entries: &[AppEntry]) -> bool {
         if entries.is_empty() {
@@ -598,7 +598,7 @@ fn scan(
         let already_current = effective_version.is_some_and(|installed| {
             entries
                 .iter()
-                .all(|entry| !version_is_older(installed, &entry.catalog_version))
+                .all(|entry| version_is_at_least(installed, &entry.catalog_version))
         });
         let state = if already_current {
             InstallState::Installed
@@ -612,12 +612,6 @@ fn scan(
                 std::thread::sleep(hash_gap);
                 if hash_entries.iter().any(|entry| {
                     hash_state(key, app_dir, &entry.hash, &entry.hash2) == InstallState::Installed
-                }) {
-                    InstallState::Installed
-                } else if effective_version.is_some_and(|installed| {
-                    entries
-                        .iter()
-                        .all(|entry| !version_is_older(installed, &entry.catalog_version))
                 }) {
                     InstallState::Installed
                 } else {
@@ -671,31 +665,58 @@ pub fn resolve_version(stamp: Option<String>, sfo: Option<String>) -> Option<Str
         (None, sfo) => sfo,
     }
 }
-pub fn version_is_older(installed: &str, catalog: &str) -> bool {
-    fn parts(v: &str) -> Option<Vec<u64>> {
-        let nums: Vec<u64> = v
+fn comparable_parts(installed: &str, catalog: &str) -> Option<(Vec<u64>, Vec<u64>)> {
+    fn raw_parts(v: &str) -> Option<Vec<&str>> {
+        let segs: Vec<&str> = v
             .trim()
             .trim_start_matches(['v', 'V'])
             .split(|c: char| !c.is_ascii_digit())
             .filter(|s| !s.is_empty())
-            .filter_map(|s| s.parse::<u64>().ok())
             .collect();
-        if nums.is_empty() {
+        (!segs.is_empty()).then_some(segs)
+    }
+    fn is_sfo_tenth(v: &str) -> bool {
+        let b = v.trim().as_bytes();
+        b.len() == 5
+            && b[0].is_ascii_digit()
+            && b[1].is_ascii_digit()
+            && b[2] == b'.'
+            && b[3].is_ascii_digit()
+            && b[4] == b'0'
+    }
+    fn parse(segs: &[&str], scale_sfo_tenth: bool) -> Option<Vec<u64>> {
+        let mut nums: Vec<u64> = segs.iter().filter_map(|s| s.parse::<u64>().ok()).collect();
+        if nums.len() != segs.len() {
             return None;
         }
-        let mut nums = nums;
+        if scale_sfo_tenth && nums.len() == 2 {
+            nums[1] /= 10;
+        }
         while nums.last() == Some(&0) {
             nums.pop();
         }
         Some(nums)
     }
-    fn looks_like_date(nums: &[u64]) -> bool {
-        nums.first().is_some_and(|&first| first >= 1000)
+    let (a_segs, b_segs) = (raw_parts(installed)?, raw_parts(catalog)?);
+    let is_zero_major = |segs: &[&str]| segs.first().is_some_and(|s| s.parse::<u64>() == Ok(0));
+    // vita-mksfoex defaults APP_VER to "01.00"; never let that look newer than a 0.x release.
+    if (installed.trim() == "01.00" && is_zero_major(&b_segs))
+        || (catalog.trim() == "01.00" && is_zero_major(&a_segs))
+    {
+        return None;
     }
-    match (parts(installed), parts(catalog)) {
-        (Some(a), Some(b)) if looks_like_date(&a) == looks_like_date(&b) => a < b,
-        _ => false,
-    }
+    let a_single_minor = a_segs.len() == 2 && a_segs[1].len() == 1;
+    let b_single_minor = b_segs.len() == 2 && b_segs[1].len() == 1;
+    let a = parse(&a_segs, is_sfo_tenth(installed) && b_single_minor)?;
+    let b = parse(&b_segs, is_sfo_tenth(catalog) && a_single_minor)?;
+    let looks_like_date = |nums: &[u64]| nums.first().is_some_and(|&first| first >= 1000);
+    (looks_like_date(&a) == looks_like_date(&b)).then_some((a, b))
+}
+pub fn version_is_older(installed: &str, catalog: &str) -> bool {
+    comparable_parts(installed, catalog).is_some_and(|(a, b)| a < b)
+}
+fn version_is_at_least(installed: &str, catalog: &str) -> bool {
+    comparable_parts(installed, catalog).is_some_and(|(a, b)| a >= b)
 }
 fn locate(entry: &Wanted) -> Option<PathBuf> {
     for root in entry.roots() {
@@ -973,7 +994,8 @@ pub(super) fn md5_file(path: &Path) -> Option<String> {
 mod tests {
     use super::{
         HASH_CACHE_DIR, InstallState, compare, count_states, format_ymd, hash_file_path,
-        hash_state, md5_file, read_hash_file, resolve_version, version_is_older,
+        hash_state, md5_file, read_hash_file, resolve_version, version_is_at_least,
+        version_is_older,
     };
     use std::collections::HashMap;
     #[test]
@@ -982,6 +1004,13 @@ mod tests {
         assert_eq!(pick("0.55", "00.57").as_deref(), Some("00.57"));
         assert!(!version_is_older("00.57", "0.55"));
         assert_eq!(pick("0.57", "00.55").as_deref(), Some("0.57"));
+        // SFO padded tenths ("01.10" for 1.1) must not outrank the stamp or a 1.2 catalog entry
+        assert_eq!(pick("v.1.1", "01.10").as_deref(), Some("v.1.1"));
+        assert!(version_is_older("01.10", "v.1.2"));
+        assert!(!version_is_at_least("01.10", "v.1.2"));
+        // vita-mksfoex default "01.00" must not override a 0.x stamp or block a 0.x update
+        assert_eq!(pick("0.2", "01.00").as_deref(), Some("0.2"));
+        assert!(!version_is_at_least("01.00", "0.3"));
         // different segment counts are never compared
         assert_eq!(pick("0.1.4", "01.05").as_deref(), Some("0.1.4"));
         assert_eq!(resolve_version(None, Some("01.00".into())).as_deref(), Some("01.00"));

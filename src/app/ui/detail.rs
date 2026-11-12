@@ -34,6 +34,7 @@ pub(crate) fn detail_screen(
     detail_focus: DetailFocus,
     report_modal: Option<usize>,
     report_choice: usize,
+    dimmed: bool,
 ) -> Vec<AppCommand> {
     let mut commands = Vec::new();
     let state = installed.state(entry);
@@ -123,7 +124,7 @@ pub(crate) fn detail_screen(
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
                 egui::Frame::window(&ctx.style())
-                    .fill(pal().bg_card)
+                    .fill(glass_modal(pal().bg_card))
                     .stroke(egui::Stroke::new(
                         1.5_f32,
                         pal().danger,
@@ -240,7 +241,7 @@ pub(crate) fn detail_screen(
     }
 
     if let Some(job) = install {
-        install_progress_modal(ctx, lang, &entry.name, job, cancellable, cancel_armed, &mut commands);
+        install_progress_modal_opt(ctx, lang, &entry.name, job, cancellable, cancel_armed, dimmed, &mut commands);
     }
 
     egui::CentralPanel::default()
@@ -440,12 +441,17 @@ pub(crate) fn detail_screen(
                                 .inner_margin(10.0)
                                 .show(ui, |ui| {
                                     ui.vertical(|ui| {
-                                        ui.label(
-                                            egui::RichText::new(&comment.author_name)
-                                                .size(FONT_SMALL)
-                                                .strong()
-                                                .color(pal().accent_soft),
-                                        );
+                                        ui.horizontal(|ui| {
+                                            ui.spacing_mut().item_spacing.x = 4.0;
+                                            let (icon_rect, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
+                                            crate::app::ui::chrome_icons::paint(ui, crate::app::ui::chrome_icons::ChromeIcon::User, icon_rect, pal().accent_soft);
+                                            ui.label(
+                                                egui::RichText::new(&comment.author_name)
+                                                    .size(FONT_SMALL)
+                                                    .strong()
+                                                    .color(pal().accent_soft),
+                                            );
+                                        });
                                         ui.add_space(2.0);
                                         ui.label(
                                             egui::RichText::new(&comment.content)
@@ -526,7 +532,7 @@ fn report_modal_ui(ctx: &egui::Context, lang: Language, focus: usize, choice: us
         .order(egui::Order::Foreground)
         .show(ctx, |ui| {
             egui::Frame::window(&ctx.style())
-                .fill(pal().bg_card)
+                .fill(glass_modal(pal().bg_card))
                 .stroke(egui::Stroke::new(1.5_f32, pal().accent_soft))
                 .corner_radius(RADIUS_LG)
                 .inner_margin(egui::vec2(20.0, 14.0))
@@ -630,7 +636,7 @@ fn paint_modal_scrim(ctx: &egui::Context) {
             let screen = ui.ctx().screen_rect();
             let (bg, _) = ui.allocate_exact_size(screen.size(), egui::Sense::click());
             ui.painter()
-                .rect_filled(bg, 0.0, egui::Color32::from_black_alpha(200));
+                .rect_filled(bg, 0.0, egui::Color32::from_black_alpha(175));
         });
 }
 
@@ -645,13 +651,41 @@ pub(crate) fn install_progress_modal(
     cancel_armed: bool,
     commands: &mut Vec<AppCommand>,
 ) {
+    install_progress_modal_opt(ctx, lang, title, job, cancellable, cancel_armed, false, commands);
+}
+
+pub(crate) fn install_progress_modal_opt(
+    ctx: &egui::Context,
+    lang: Language,
+    title: &str,
+    job: &crate::install::Progress,
+    cancellable: bool,
+    cancel_armed: bool,
+    dimmed: bool,
+    commands: &mut Vec<AppCommand>,
+) {
     let finished = job.is_finished();
+    if dimmed && !finished {
+        egui::Area::new(egui::Id::new("dim_saver_backdrop"))
+            .fixed_pos(egui::pos2(0.0, 0.0))
+            .order(egui::Order::Middle)
+            .show(ctx, |ui| {
+                let screen_rect = ctx.screen_rect();
+                ui.painter().rect_filled(screen_rect, 0.0, egui::Color32::from_rgb(0, 0, 0));
+            });
+    }
+
     egui::Area::new(egui::Id::new("install_progress_modal"))
         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
         .order(egui::Order::Foreground)
         .show(ctx, |ui| {
+            let bg_color = if dimmed && !finished {
+                egui::Color32::from_rgb(10, 10, 12)
+            } else {
+                glass_modal(pal().bg_card)
+            };
             egui::Frame::window(&ctx.style())
-                .fill(pal().bg_card)
+                .fill(bg_color)
                 .stroke(egui::Stroke::new(
                     if cancel_armed { 2.5_f32 } else { 1.5_f32 },
                     if cancel_armed { pal().danger } else { pal().accent },
@@ -661,6 +695,28 @@ pub(crate) fn install_progress_modal(
                 .show(ui, |ui| {
                     ui.set_width(400.0);
                     ui.vertical_centered(|ui| {
+                        if let Some(pct) = crate::app::sysinfo::battery_percent() {
+                            let charging = crate::app::sysinfo::battery_charging();
+                            let bat_color = if pct <= 15 {
+                                pal().danger
+                            } else if pct <= 25 {
+                                pal().warning
+                            } else {
+                                pal().text_dim
+                            };
+                            let bat_str = if charging {
+                                format!("⚡ {pct}%")
+                            } else {
+                                format!("🔋 {pct}%")
+                            };
+                            ui.label(
+                                egui::RichText::new(bat_str)
+                                    .size(FONT_MICRO)
+                                    .color(bat_color),
+                            );
+                            ui.add_space(4.0);
+                        }
+
                         ui.label(
                             egui::RichText::new(title)
                                 .size(FONT_LARGE)
@@ -1358,9 +1414,14 @@ fn left_column(
                     commands.push(AppCommand::SetDetailFocus(DetailFocus::Author));
                     commands.push(AppCommand::MoreByAuthor(entry.author.clone()));
                 }
-                if !entry.version.trim().is_empty() {
+                let ver = entry
+                    .version
+                    .trim()
+                    .trim_start_matches(['v', 'V'])
+                    .trim_start_matches('.');
+                if !ver.is_empty() {
                     ui.label(
-                        egui::RichText::new(format!("v.{}", entry.version.trim()))
+                        egui::RichText::new(format!("v.{ver}"))
                             .size(FONT_SMALL)
                             .color(pal().text_faint),
                     );
@@ -1798,7 +1859,7 @@ fn data_prompt_modal(
         .order(egui::Order::Foreground)
         .show(ctx, |ui| {
             egui::Frame::window(&ctx.style())
-                .fill(pal().bg_card)
+                .fill(glass_modal(pal().bg_card))
                 .stroke(egui::Stroke::new(1.0_f32, pal().separator))
                 .corner_radius(RADIUS_LG)
                 .inner_margin(egui::vec2(20.0, 14.0))

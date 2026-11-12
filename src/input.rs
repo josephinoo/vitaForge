@@ -30,6 +30,9 @@ pub enum TextTarget {
     Comment,
     Report,
     ProfileName,
+    AuthUsername,
+    AuthPassword,
+    AuthEmail,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DetailFocus {
@@ -156,6 +159,7 @@ pub enum AppCommand {
     SetTheme(crate::app::ui::theme::ThemeId),
     SetLanguage(crate::app::i18n::Language),
     ToggleInstallNotifications,
+    ToggleSoundEffects,
     ClearIconCache,
     ClearCatalogCache,
     PurgeAllCache,
@@ -172,6 +176,12 @@ pub enum AppCommand {
     SubmitProfileName(String),
     CloseCommentEntry,
     SubmitComment(String),
+    RequestAuthInput(TextTarget),
+    CloseAuthInput,
+    SubmitAuthInput(String),
+    AuthToggleMode,
+    AuthSubmit,
+    AuthLogout,
     SelfUpdate,
     LaunchCurrent,
     UninstallCurrent,

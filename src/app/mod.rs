@@ -27,6 +27,16 @@ fn precache_art_urls(apps: &[AppEntry]) -> Vec<String> {
         .take(MAX_PRECACHE_PER_LAUNCH)
         .collect()
 }
+fn precache_catalog_urls(catalog: &CatalogState) -> Vec<String> {
+    catalog
+        .filtered_indices
+        .iter()
+        .chain(catalog.sorted_indices.iter())
+        .filter_map(|&idx| catalog.apps.get(idx).and_then(tile_art_url))
+        .map(str::to_owned)
+        .take(MAX_PRECACHE_PER_LAUNCH)
+        .collect()
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum FocusPane {
@@ -193,6 +203,7 @@ impl CatalogState {
     }
     fn apply_install_filter(&mut self, installed: &crate::install::installed::InstalledIndex, updates_only: bool) {
         use crate::install::installed::InstallState;
+        let query = self.search_query.trim().to_lowercase();
         self.filtered_indices = self
             .sorted_indices
             .iter()
@@ -200,11 +211,12 @@ impl CatalogState {
             .filter(|&idx| {
                 let Some(app) = self.apps.get(idx) else { return false };
                 let state = installed.state(app);
-                if updates_only {
+                let matches_state = if updates_only {
                     state == InstallState::Outdated
                 } else {
                     matches!(state, InstallState::Installed | InstallState::Outdated)
-                }
+                };
+                matches_state && Self::matches_query(app, &query)
             })
             .collect();
         self.filtered_indices =
@@ -216,7 +228,25 @@ impl CatalogState {
         } else {
             self.selected = 0;
             self.selection_active = true;
+            self.scroll_reset = true;
         }
+    }
+    fn matches_query(app: &AppEntry, query: &str) -> bool {
+        if query.is_empty() {
+            return true;
+        }
+        app.name_lower.contains(query)
+            || app.author_lower.contains(query)
+            || app.titleid_lower.contains(query)
+            || (app.platform == data::Platform::Theme && app.description_lower.contains(query))
+            || app.genres.iter().any(|genre| {
+                if genre.is_ascii() && query.is_ascii() {
+                    let mut b_iter = genre.as_bytes().windows(query.len());
+                    b_iter.any(|window| window.eq_ignore_ascii_case(query.as_bytes()))
+                } else {
+                    genre.to_lowercase().contains(query)
+                }
+            })
     }
     fn sort_order_indices(&self) -> Vec<usize> {
         let mut order: Vec<usize> = (0..self.apps.len()).collect();
@@ -329,13 +359,7 @@ impl CatalogState {
                     && matches_cat
                     && matches_fav
                     && matches_genre
-                    && (query.is_empty()
-                        || app.name_lower.contains(&query)
-                        || app.author_lower.contains(&query)
-                        || app.titleid_lower.contains(&query)
-                        // psvt.ovh also matches a theme's tags, which live in the description.
-                        || (app.platform == data::Platform::Theme && app.description_lower.contains(&query))
-                        || app.genres.iter().any(|genre| genre.to_lowercase().contains(&query)))
+                    && Self::matches_query(app, &query)
             })
             .collect();
         self.filtered_indices =
@@ -727,6 +751,14 @@ enum CatalogSource {
 const SELF_REPO_URL: &str = "https://github.com/josephinoo/vitaForge";
 const SELF_UPDATE_ID: &str = "vitaforge_self_update";
 
+#[derive(Debug, Clone, Default)]
+pub struct AuthForm {
+    pub is_register: bool,
+    pub username: String,
+    pub password: String,
+    pub email: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct SelfUpdateInfo {
     pub tag: String,
@@ -779,6 +811,12 @@ pub struct App {
     pub report_entry: bool,
     /// Name of the profile being renamed while the keyboard is open.
     pub profile_rename: Option<String>,
+    pub last_input_at: std::time::Instant,
+    pub auth_input_target: Option<crate::input::TextTarget>,
+    pub auth_form: AuthForm,
+    pub auth_busy: bool,
+    pub auth_status_message: Option<(String, bool)>, // (message, is_error)
+    auth_rx: Option<oneshot::Receiver<Result<crate::data::auth::AuthSession, String>>>,
     restart_at: Option<std::time::Instant>,
     /// config.txt, the plugin registry and the backups, as Settings › Plugins shows them.
     pub tai: Option<crate::install::tai::Snapshot>,
@@ -860,7 +898,7 @@ impl App {
             comments_rx: None,
             social_rx: None,
             cache_stats_rx: None,
-            audio: crate::audio::AudioEngine::new(),
+            audio: crate::audio::AudioEngine::new(settings.sound_effects),
             cache_stats: data::cache_manager::CacheStats::default(),
             cache_notice: None,
             purge_armed: false,
@@ -878,6 +916,12 @@ impl App {
             report_choice: 0,
             report_entry: false,
             profile_rename: None,
+            last_input_at: std::time::Instant::now(),
+            auth_input_target: None,
+            auth_form: AuthForm::default(),
+            auth_busy: false,
+            auth_status_message: None,
+            auth_rx: None,
             restart_at: None,
             tai: None,
             tai_outdated: Vec::new(),
@@ -936,7 +980,8 @@ impl App {
         }
         // The total arrives in the background; refresh the sidebar number when it does.
         if let AppState::Catalog(catalog) = &mut self.state
-            && data::psvt::total() > catalog.group_category_counts.iter().find(|(c, _)| *c == data::Category::Theme).map_or(0, |&(_, n)| n)
+            // Home has no Theme row: a missing row must not count as 0, or this reruns the full catalog scan every frame.
+            && catalog.group_category_counts.iter().find(|(c, _)| *c == data::Category::Theme).is_some_and(|&(_, n)| data::psvt::total() > n)
         {
             catalog.recompute_group_counts();
         }
@@ -1048,6 +1093,9 @@ impl App {
     pub fn install_busy(&self) -> bool {
         self.install.as_ref().is_some_and(|job| !job.progress.is_finished())
     }
+    pub fn is_dimmed(&self) -> bool {
+        self.install_busy() && self.last_input_at.elapsed() >= std::time::Duration::from_secs(120)
+    }
     pub fn tick(&mut self, ctx: &egui::Context) -> Result<()> {
         if self.restart_at.is_some_and(|at| std::time::Instant::now() >= at) {
             self.restart_at = None;
@@ -1067,7 +1115,7 @@ impl App {
                 AppState::Detail { previous, .. } | AppState::Settings { previous, .. } => &previous.apps,
                 AppState::Loading => &[],
             };
-            if self.installed.refresh(ctx, entries) {
+            if self.installed.force_refresh(ctx, entries) {
                 self.needs_installed_rescan = false;
                 let plugins = plugin_entries(entries);
                 self.refresh_tai_with(&plugins);
@@ -1196,6 +1244,24 @@ impl App {
                 ctx.request_repaint();
             }
         }
+        if let Some(rx) = &mut self.auth_rx
+            && let Ok(result) = rx.try_recv()
+        {
+            self.auth_rx = None;
+            self.auth_busy = false;
+            match result {
+                Ok(session) => {
+                    self.auth_status_message = Some((format!("Conectado como {}", session.username), false));
+                    self.auth_form.password.clear();
+                    self.audio.play(crate::audio::Sfx::Activation);
+                }
+                Err(err) => {
+                    self.auth_status_message = Some((err, true));
+                    self.audio.play(crate::audio::Sfx::HideModal);
+                }
+            }
+            ctx.request_repaint();
+        }
         if let Some(rx) = &mut self.comments_rx
             && let Ok((app_id, fetched)) = rx.try_recv()
         {
@@ -1237,13 +1303,13 @@ impl App {
                         AppState::Loading => {
                             let catalog = CatalogState::new(apps);
                             self.installed.force_refresh(ctx, &catalog.apps);
-                            self.icons.precache_background(precache_art_urls(&catalog.apps));
+                            self.icons.precache_background(precache_catalog_urls(&catalog));
                             self.state = AppState::Catalog(catalog);
                         }
                         AppState::Catalog(catalog) => {
                             catalog.replace_apps(apps);
                             self.installed.force_refresh(ctx, &catalog.apps);
-                            self.icons.precache_background(precache_art_urls(&catalog.apps));
+                            self.icons.precache_background(precache_catalog_urls(catalog));
                         }
                         AppState::Detail { previous, .. } | AppState::Settings { previous, .. } => {
                             previous.replace_apps(apps);
@@ -1374,9 +1440,17 @@ impl App {
                 return Ok(());
             }
             Some(Row::Notifications) => AppCommand::ToggleInstallNotifications,
+            Some(Row::SoundEffects) => AppCommand::ToggleSoundEffects,
             Some(Row::ClearIcons) => AppCommand::ClearIconCache,
             Some(Row::ClearCatalog) => AppCommand::ClearCatalogCache,
             Some(Row::PurgeAll) => AppCommand::PurgeAllCache,
+            Some(Row::AccountUsername) => AppCommand::RequestAuthInput(crate::input::TextTarget::AuthUsername),
+            Some(Row::AccountPassword) => AppCommand::RequestAuthInput(crate::input::TextTarget::AuthPassword),
+            Some(Row::AccountEmail) => AppCommand::RequestAuthInput(crate::input::TextTarget::AuthEmail),
+            Some(Row::AccountSubmit) => AppCommand::AuthSubmit,
+            Some(Row::AccountToggleMode) => AppCommand::AuthToggleMode,
+            Some(Row::AccountLogout) => AppCommand::AuthLogout,
+            Some(Row::AccountStatus) => return Ok(()),
             None => return Ok(()),
         };
         self.handle_command(command)
@@ -1924,6 +1998,7 @@ impl App {
                     }
                 }
             }
+            AppCommand::RequestSearch if self.in_profiles() => self.tai_profile_export(),
             AppCommand::RequestSearch => {
                 if let AppState::Catalog(catalog) = &mut self.state {
                     catalog.search_requested = true;
@@ -1946,7 +2021,6 @@ impl App {
                 }
             }
             AppCommand::FlipSortDirection if self.in_profiles() => self.tai_profile_start_rename(),
-            AppCommand::RequestSearch if self.in_profiles() => self.tai_profile_export(),
             AppCommand::RequestReport => {
                 if matches!(self.state, AppState::Detail { lightbox: None, .. }) {
                     self.report_modal = Some(0);
@@ -2018,7 +2092,11 @@ impl App {
             AppCommand::SetSortOrder(sort) => {
                 if let AppState::Catalog(catalog) = &mut self.state {
                     catalog.set_sort(sort);
-                    catalog.sync_sidebar_cursor();
+                    match catalog.tab {
+                        StoreTab::Library => catalog.apply_install_filter(&self.installed, false),
+                        StoreTab::Updates => catalog.apply_install_filter(&self.installed, true),
+                        StoreTab::Categories => catalog.sync_sidebar_cursor(),
+                    }
                     self.audio.play(crate::audio::Sfx::Activation);
                 }
             }
@@ -2252,6 +2330,11 @@ impl App {
             AppCommand::FlipSortDirection => {
                 if let AppState::Catalog(catalog) = &mut self.state {
                     catalog.flip_sort_direction();
+                    match catalog.tab {
+                        StoreTab::Library => catalog.apply_install_filter(&self.installed, false),
+                        StoreTab::Updates => catalog.apply_install_filter(&self.installed, true),
+                        StoreTab::Categories => {}
+                    }
                     self.audio.play(crate::audio::Sfx::Activation);
                 }
             }
@@ -2818,6 +2901,11 @@ impl App {
                 self.install_notifications = !self.install_notifications;
                 data::settings::set_install_notifications(self.install_notifications);
             }
+            AppCommand::ToggleSoundEffects => {
+                let enabled = !self.audio.is_enabled();
+                self.audio.set_enabled(enabled);
+                data::settings::set_sound_effects(enabled);
+            }
             AppCommand::ClearIconCache => {
                 let freed = data::cache_manager::clear_icon_cache();
                 self.icons.clear_disk_index();
@@ -2901,7 +2989,7 @@ impl App {
                 if !content.is_empty()
                     && let AppState::Detail { app, comments, .. } = &mut self.state
                 {
-                    let author_name = data::client_id::display_name();
+                    let author_name = data::auth::username().unwrap_or_else(data::client_id::display_name);
                     comments.insert(
                         0,
                         data::api::Comment { author_name: author_name.clone(), content: content.clone() },
@@ -2914,6 +3002,68 @@ impl App {
                         }
                     });
                 }
+            }
+            AppCommand::RequestAuthInput(target) => {
+                self.auth_input_target = Some(target);
+                self.audio.play(crate::audio::Sfx::ShowModal);
+            }
+            AppCommand::CloseAuthInput => {
+                self.auth_input_target = None;
+                self.audio.play(crate::audio::Sfx::HideModal);
+            }
+            AppCommand::SubmitAuthInput(text) => {
+                if let Some(target) = self.auth_input_target.take() {
+                    match target {
+                        crate::input::TextTarget::AuthUsername => self.auth_form.username = text.trim().to_owned(),
+                        crate::input::TextTarget::AuthPassword => self.auth_form.password = text,
+                        crate::input::TextTarget::AuthEmail => self.auth_form.email = text.trim().to_owned(),
+                        _ => {}
+                    }
+                }
+            }
+            AppCommand::AuthToggleMode => {
+                self.auth_form.is_register = !self.auth_form.is_register;
+                self.auth_status_message = None;
+                self.audio.play(crate::audio::Sfx::Navigate);
+            }
+            AppCommand::AuthSubmit => {
+                if !self.auth_busy {
+                    let username = self.auth_form.username.trim().to_owned();
+                    let password = self.auth_form.password.clone();
+                    let email = if self.auth_form.email.trim().is_empty() {
+                        None
+                    } else {
+                        Some(self.auth_form.email.trim().to_owned())
+                    };
+                    let is_register = self.auth_form.is_register;
+
+                    if username.is_empty() || password.is_empty() {
+                        self.auth_status_message = Some((self.lang.tr("auth-error-empty"), true));
+                        self.audio.play(crate::audio::Sfx::HideModal);
+                        return Ok(());
+                    }
+
+                    self.auth_busy = true;
+                    self.auth_status_message = None;
+                    self.audio.play(crate::audio::Sfx::Activation);
+
+                    let (tx, rx) = oneshot::channel();
+                    self.auth_rx = Some(rx);
+
+                    tokio::spawn(async move {
+                        let res = if is_register {
+                            crate::data::api::register_user(&username, &password, email.as_deref()).await
+                        } else {
+                            crate::data::api::login_user(&username, &password).await
+                        };
+                        let _ = tx.send(res.map_err(|e| e.to_string()));
+                    });
+                }
+            }
+            AppCommand::AuthLogout => {
+                crate::data::auth::logout();
+                self.auth_status_message = Some((self.lang.tr("auth-logged-out"), false));
+                self.audio.play(crate::audio::Sfx::ToggleOff);
             }
         }
         Ok(())
@@ -3111,18 +3261,14 @@ impl App {
             return;
         }
         if let AppState::Catalog(catalog) = &mut self.state {
-            if catalog.tab == StoreTab::Categories
-                && (!catalog.search_query.is_empty() || catalog.search_requested)
-            {
-                catalog.search_query.clear();
-                catalog.search_requested = false;
-                catalog.refresh_filter();
-                return;
-            }
             if !catalog.search_query.is_empty() || catalog.search_requested {
                 catalog.search_query.clear();
                 catalog.search_requested = false;
-                catalog.refresh_filter();
+                match catalog.tab {
+                    StoreTab::Library => catalog.apply_install_filter(&self.installed, false),
+                    StoreTab::Updates => catalog.apply_install_filter(&self.installed, true),
+                    StoreTab::Categories => catalog.refresh_filter(),
+                }
                 return;
             }
         }
@@ -3143,7 +3289,6 @@ impl App {
                 _ => previous.refresh_filter_preserving_selection(),
             }
             self.state = AppState::Catalog(previous);
-            self.needs_installed_rescan = true;
             self.audio.play(crate::audio::Sfx::OutOfDetail);
         }
     }
@@ -3369,6 +3514,32 @@ mod sort_tests {
         assert_eq!(ids.len(), 2);
         assert!(ids.contains(&"hb".to_owned()));
         assert!(ids.contains(&"nps".to_owned()));
+    }
+
+    #[test]
+    fn install_filter_respects_search_query_and_sort_order() {
+        let mut a = entry("1", "vitadb", 10, 100, 4.0, "2026-01-01");
+        a.name = "Alpha Tool".to_owned();
+        a.titleid = "ALPH00001".to_owned();
+        a.rebuild_derived();
+
+        let mut b = entry("2", "vitadb", 20, 500, 5.0, "2026-02-01");
+        b.name = "Beta Game".to_owned();
+        b.titleid = "BETA00002".to_owned();
+        b.rebuild_derived();
+
+        let installed = crate::install::installed::InstalledIndex::new();
+        installed.mark_installed(&crate::install::installed::index_key(&a));
+        installed.mark_installed(&crate::install::installed::index_key(&b));
+
+        let mut state = CatalogState::new(vec![a, b]);
+        state.apply_store_tab(StoreTab::Library, &installed);
+        assert_eq!(state.filtered_indices.len(), 2);
+
+        state.search_query = "beta".to_owned();
+        state.apply_install_filter(&installed, false);
+        assert_eq!(state.filtered_indices.len(), 1);
+        assert_eq!(state.apps[state.filtered_indices[0]].id, "2");
     }
 
 }

@@ -33,6 +33,33 @@ const UI_SCALE: f32 = 1.3;
 const ACTIVE_FRAME_TIME: Duration = Duration::from_millis(16);
 const STICK_REPEAT_DELAY: Duration = Duration::from_millis(200);
 const STICK_REPEAT_INTERVAL: Duration = Duration::from_millis(70);
+/// Per-phase frame cost, logged every 120 frames to ux0:data/vitaforge/vitaforge.log.
+#[derive(Default)]
+struct FrameProf {
+    pre: Duration,
+    clear: Duration,
+    tick: Duration,
+    run: Duration,
+    tess: Duration,
+    paint: Duration,
+    total: Duration,
+    frames: u32,
+}
+impl FrameProf {
+    fn report(&mut self, frame: Duration) {
+        self.total += frame;
+        self.frames += 1;
+        if self.frames < 120 {
+            return;
+        }
+        let ms = |d: Duration| d.as_secs_f32() * 1000.0 / self.frames as f32;
+        crate::install::log_file(&format!(
+            "perf/frame avg ms: total {:.1} pre {:.1} tick {:.1} run {:.1} tess {:.1} clear {:.1} paint {:.1}",
+            ms(self.total), ms(self.pre), ms(self.tick), ms(self.run), ms(self.tess), ms(self.clear), ms(self.paint)
+        ));
+        *self = Self::default();
+    }
+}
 struct ImeSession {
     target: TextTarget,
     query_before: String,
@@ -63,16 +90,17 @@ pub fn run(mut app: App) -> Result<()> {
     let mut transition_started_at = Instant::now();
     const SCREEN_FADE_SECS: f32 = 0.15;
     let mut stalled_frames = 0u32;
+    let mut in_background = false;
+    let mut prof = FrameProf::default();
     loop {
+        let frame_start = Instant::now();
         let mut egui_events = Vec::new();
         pointer.deferred(&mut egui_events);
         let mut direct_commands = Vec::new();
         let screen_points = (WIDTH as f32 / UI_SCALE, HEIGHT as f32 / UI_SCALE);
         for event in event_pump.poll_iter() {
             match event {
-                sdl2::event::Event::Quit { .. }
-                | sdl2::event::Event::AppWillEnterBackground { .. }
-                | sdl2::event::Event::AppDidEnterBackground { .. } => {
+                sdl2::event::Event::Quit { .. } => {
                     #[cfg(target_os = "vita")]
                     unsafe {
                         vitasdk_sys::sceKernelExitProcess(0);
@@ -80,23 +108,53 @@ pub fn run(mut app: App) -> Result<()> {
                     #[cfg(not(target_os = "vita"))]
                     return Ok(());
                 }
+                sdl2::event::Event::AppWillEnterBackground { .. }
+                | sdl2::event::Event::AppDidEnterBackground { .. } => {
+                    in_background = true;
+                    held_direction = None;
+                }
+                sdl2::event::Event::AppWillEnterForeground { .. }
+                | sdl2::event::Event::AppDidEnterForeground { .. } => {
+                    in_background = false;
+                    egui_ctx.request_repaint();
+                }
                 sdl2::event::Event::ControllerDeviceAdded { .. } if controller.is_none() => {
                     controller = open_first_controller(&controllers);
                 }
                 sdl2::event::Event::ControllerDeviceRemoved { .. } => controller = None,
                 _ => {}
             }
+            if in_background {
+                continue;
+            }
             if ime.is_some() {
                 ime::feed_event(&event);
+                app.last_input_at = Instant::now();
                 continue;
             }
             if let Some(command) = map_keyboard_event(&event) {
+                app.last_input_at = Instant::now();
                 direct_commands.push(command);
             }
+            let prev_pointer_events = egui_events.len();
             pointer.map_event(&event, screen_points, UI_SCALE, &mut egui_events);
+            if egui_events.len() > prev_pointer_events {
+                app.last_input_at = Instant::now();
+            }
             if let Some(command) = map_controller_button_event(&event) {
+                app.last_input_at = Instant::now();
                 direct_commands.push(command);
             }
+        }
+        if in_background {
+            app.tick(&egui_ctx)?;
+            crate::install::process_pending_bgdl();
+            #[cfg(target_os = "vita")]
+            unsafe {
+                vitasdk_sys::sceKernelPowerTick(vitasdk_sys::SCE_KERNEL_POWER_TICK_DEFAULT);
+            }
+            std::thread::sleep(Duration::from_millis(50));
+            continue;
         }
         if ime.is_some() {
             if let Some(result) = ime::poll() {
@@ -118,6 +176,9 @@ pub fn run(mut app: App) -> Result<()> {
                         TextTarget::ProfileName => {
                             app.handle_command(AppCommand::SubmitProfileName(text))?;
                         }
+                        TextTarget::AuthUsername | TextTarget::AuthPassword | TextTarget::AuthEmail => {
+                            app.handle_command(AppCommand::SubmitAuthInput(text))?;
+                        }
                     },
                     ime::ImeResult::Canceled if session.target == TextTarget::Search => {
                         app.handle_command(AppCommand::SetSearchQuery(session.query_before))?;
@@ -129,6 +190,9 @@ pub fn run(mut app: App) -> Result<()> {
                     TextTarget::Comment => app.handle_command(AppCommand::CloseCommentEntry)?,
                     TextTarget::Report => app.handle_command(AppCommand::CloseReportEntry)?,
                     TextTarget::ProfileName => app.handle_command(AppCommand::CloseProfileEntry)?,
+                    TextTarget::AuthUsername | TextTarget::AuthPassword | TextTarget::AuthEmail => {
+                        app.handle_command(AppCommand::CloseAuthInput)?
+                    }
                 }
                 held_direction = None;
                 held_since = Instant::now();
@@ -149,6 +213,9 @@ pub fn run(mut app: App) -> Result<()> {
         surface.set_frame_alpha(0.82 + 0.18 * fade_alpha);
         if ime.is_none() {
             let (rx, ry) = right_stick_axes(controller.as_ref());
+            if rx != 0.0 || ry != 0.0 {
+                app.last_input_at = Instant::now();
+            }
             if ry != 0.0 {
                 if matches!(app.state, crate::app::AppState::Detail { .. }) {
                     direct_commands.push(AppCommand::AnalogScroll(ry * 14.0));
@@ -165,6 +232,7 @@ pub fn run(mut app: App) -> Result<()> {
 
             match held_stick_direction(controller.as_ref()) {
                 Some(direction) if held_direction == Some(direction) => {
+                    app.last_input_at = Instant::now();
                     if held_since.elapsed() >= STICK_REPEAT_DELAY
                         && last_repeat_at.elapsed() >= STICK_REPEAT_INTERVAL
                     {
@@ -173,6 +241,7 @@ pub fn run(mut app: App) -> Result<()> {
                     }
                 }
                 Some(direction) => {
+                    app.last_input_at = Instant::now();
                     direct_commands.push(direction.into());
                     held_direction = Some(direction);
                     held_since = Instant::now();
@@ -186,11 +255,16 @@ pub fn run(mut app: App) -> Result<()> {
         }
         let pending_gpu = surface.pending_texture_uploads();
         app.icons.set_gpu_backlog(pending_gpu);
+        prof.pre += frame_start.elapsed();
+        let t_tick = Instant::now();
         app.tick(&egui_ctx)?;
+        prof.tick += t_tick.elapsed();
         let text_target = if app.report_entry {
             Some(TextTarget::Report)
         } else if app.profile_rename.is_some() {
             Some(TextTarget::ProfileName)
+        } else if let Some(target) = app.auth_input_target {
+            Some(target)
         } else {
             None
         };
@@ -224,22 +298,31 @@ pub fn run(mut app: App) -> Result<()> {
             ..Default::default()
         };
         let mut ui_commands = Vec::new();
+        let t_run = Instant::now();
         let full_output = egui_ctx.run(raw_input, |ctx| {
             ui_commands = build_ui(ctx, &app);
         });
+        prof.run += t_run.elapsed();
         app.clear_one_shot_ui_state();
         for command in ui_commands {
             app.handle_command(command)?;
         }
+        let t_tess = Instant::now();
         let clipped_primitives =
             egui_ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
+        prof.tess += t_tess.elapsed();
         surface.set_common_dialog(ime.is_some());
+        let t_clear = Instant::now();
         surface.draw_scene();
+        prof.clear += t_clear.elapsed();
+        let t_paint = Instant::now();
         let paint_stats: FramePaintStats = surface.paint_egui(
             full_output.pixels_per_point,
             &clipped_primitives,
             &full_output.textures_delta,
         )?;
+        prof.paint += t_paint.elapsed();
+        prof.report(frame_start.elapsed());
         app.icons.set_gpu_backlog(surface.pending_texture_uploads());
         let mut dropped = surface.take_dropped_textures();
         if paint_stats.draw_calls == 0 && paint_stats.missing_textures == 0 {
@@ -269,15 +352,31 @@ pub fn run(mut app: App) -> Result<()> {
                 TextTarget::Comment => ime::ImePurpose::Comment,
                 TextTarget::Report => ime::ImePurpose::Report,
                 TextTarget::ProfileName => ime::ImePurpose::ProfileName,
+                TextTarget::AuthUsername => ime::ImePurpose::AuthUsername,
+                TextTarget::AuthPassword => ime::ImePurpose::AuthPassword,
+                TextTarget::AuthEmail => ime::ImePurpose::AuthEmail,
             };
             let query_before = match &app.state {
                 crate::app::AppState::Catalog(catalog) => catalog.search_query.clone(),
                 _ => String::new(),
             };
+            let initial_string;
             let initial = match target {
                 TextTarget::Search => query_before.as_str(),
                 TextTarget::Comment | TextTarget::Report => "",
                 TextTarget::ProfileName => app.profile_rename.as_deref().unwrap_or(""),
+                TextTarget::AuthUsername => {
+                    initial_string = app.auth_form.username.clone();
+                    initial_string.as_str()
+                }
+                TextTarget::AuthPassword => {
+                    initial_string = app.auth_form.password.clone();
+                    initial_string.as_str()
+                }
+                TextTarget::AuthEmail => {
+                    initial_string = app.auth_form.email.clone();
+                    initial_string.as_str()
+                }
             };
             if ime::open(&video, surface.window(), purpose, initial) {
                 ime = Some(ImeSession {
@@ -291,6 +390,9 @@ pub fn run(mut app: App) -> Result<()> {
                     TextTarget::Comment => app.handle_command(AppCommand::CloseCommentEntry)?,
                     TextTarget::Report => app.handle_command(AppCommand::CloseReportEntry)?,
                     TextTarget::ProfileName => app.handle_command(AppCommand::CloseProfileEntry)?,
+                    TextTarget::AuthUsername | TextTarget::AuthPassword | TextTarget::AuthEmail => {
+                        app.handle_command(AppCommand::CloseAuthInput)?
+                    }
                 }
             }
         }

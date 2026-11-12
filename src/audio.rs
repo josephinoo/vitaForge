@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -66,10 +67,11 @@ impl WavSound {
 
 pub struct AudioEngine {
     tx: mpsc::Sender<Sfx>,
+    enabled: AtomicBool,
 }
 
 impl AudioEngine {
-    pub fn new() -> Self {
+    pub fn new(enabled: bool) -> Self {
         let (tx, rx) = mpsc::channel::<Sfx>();
         std::thread::spawn(move || {
             let mut sounds = HashMap::new();
@@ -165,10 +167,24 @@ impl AudioEngine {
             }
             close_port(port);
         });
-        AudioEngine { tx }
+        AudioEngine {
+            tx,
+            enabled: AtomicBool::new(enabled),
+        }
+    }
+
+    pub fn set_enabled(&self, enabled: bool) {
+        self.enabled.store(enabled, Ordering::Relaxed);
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        self.enabled.load(Ordering::Relaxed)
     }
 
     pub fn play(&self, effect: Sfx) {
+        if !self.enabled.load(Ordering::Relaxed) {
+            return;
+        }
         let _ = self.tx.send(effect);
     }
 }

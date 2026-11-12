@@ -104,6 +104,7 @@ pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
                 *detail_focus,
                 app.report_modal,
                 app.report_choice,
+                app.is_dimmed(),
             )
         }
         AppState::Settings { nav, previous } => {
@@ -118,6 +119,7 @@ pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
                     stats: &app.cache_stats,
                     cache_notice: app.cache_notice.as_deref(),
                     install_notifications: app.install_notifications,
+                    sound_effects: app.audio.is_enabled(),
                     purge_armed: app.purge_armed,
                     plugins: settings::PluginsView {
                         tai: app.tai.as_ref(),
@@ -127,6 +129,9 @@ pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
                         armed: app.tai_armed,
                         notice: app.tai_notice.as_deref(),
                     },
+                    auth_form: &app.auth_form,
+                    auth_busy: app.auth_busy,
+                    auth_status: app.auth_status_message.as_ref(),
                     appear,
                 },
             ));
@@ -140,13 +145,14 @@ pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
     if app.self_update_prompt && let Some(info) = &app.self_update {
         self_update_modal(ctx, app.lang, &info.tag, &mut commands);
     } else if let Some(job) = app.install.as_ref().filter(|job| job.app_id == SELF_UPDATE_ID) {
-        crate::app::ui::detail::install_progress_modal(
+        crate::app::ui::detail::install_progress_modal_opt(
             ctx,
             app.lang,
             &job.title,
             &job.progress,
             job.progress.is_cancellable(),
             app.cancel_armed(),
+            app.is_dimmed(),
             &mut commands,
         );
     }
@@ -171,14 +177,14 @@ fn self_update_modal(
             let screen = ui.ctx().screen_rect();
             let (bg, _) = ui.allocate_exact_size(screen.size(), egui::Sense::click());
             ui.painter()
-                .rect_filled(bg, 0.0, egui::Color32::from_black_alpha(200));
+                .rect_filled(bg, 0.0, egui::Color32::from_black_alpha(175));
         });
     egui::Area::new(egui::Id::new("self_update_modal"))
         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
         .order(egui::Order::Foreground)
         .show(ctx, |ui| {
             egui::Frame::window(&ctx.style())
-                .fill(theme::pal().bg_card)
+                .fill(theme::glass_modal(theme::pal().bg_card))
                 .stroke(egui::Stroke::new(1.5_f32, theme::pal().accent))
                 .corner_radius(theme::RADIUS_LG)
                 .inner_margin(egui::vec2(28.0, 20.0))
@@ -386,7 +392,7 @@ fn catalog_screen(
                 }
 
                 ui.vertical(|ui| {
-                    if tab != StoreTab::Categories
+                    if tab == StoreTab::Categories
                         && content_type_group == ContentTypeGroup::Games
                     {
                         ui.horizontal(|ui| {

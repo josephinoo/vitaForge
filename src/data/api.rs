@@ -16,6 +16,34 @@ fn image_format_for(path: &str) -> &'static str {
         "jpeg" // Covers and screenshots use fast JPEG compression
     }
 }
+fn optimize_external_image(url: &str, max_side: u32, is_icon: bool) -> String {
+    let api_base = api_url().trim_end_matches('/');
+    if url.starts_with(api_base) || url.contains("wsrv.nl") {
+        return url.to_owned();
+    }
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return url.to_owned();
+    }
+    let output = if is_icon { "png" } else { "jpg" };
+    format!(
+        "http://wsrv.nl/?url={}&w={max_side}&h={max_side}&fit=cover&output={output}&q=82&maxage=1y",
+        urlencoding_encode(url)
+    )
+}
+
+fn urlencoding_encode(input: &str) -> String {
+    let mut out = String::with_capacity(input.len() + 16);
+    for b in input.bytes() {
+        if b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.' || b == b'~' {
+            out.push(b as char);
+        } else {
+            use std::fmt::Write;
+            let _ = write!(out, "%{b:02X}");
+        }
+    }
+    out
+}
+
 fn absolute(path: &str) -> String {
     if path.starts_with("http://") || path.starts_with("https://") {
         return path.to_owned();
@@ -223,18 +251,22 @@ fn slim_entry_strings(entry: &mut AppEntry) {
     if !entry.long_description.is_empty()
         && entry.long_description.trim() == entry.description.trim()
     {
-        entry.long_description.clear();
-        entry.long_description.shrink_to_fit();
+        entry.long_description = String::new();
     }
     if entry.screenshot_urls.len() > MAX_SCREENSHOTS_KEPT {
         entry.screenshot_urls.truncate(MAX_SCREENSHOTS_KEPT);
         entry.screenshot_urls.shrink_to_fit();
     }
+    entry.name.shrink_to_fit();
+    entry.author.shrink_to_fit();
+    entry.titleid.shrink_to_fit();
     entry.description.shrink_to_fit();
     entry.long_description.shrink_to_fit();
     entry.requirements.shrink_to_fit();
     entry.changelog.shrink_to_fit();
     entry.download_url.shrink_to_fit();
+    entry.genres.shrink_to_fit();
+    entry.overview.shrink_to_fit();
 }
 impl RawApp {
     
@@ -299,7 +331,10 @@ impl RawApp {
                 cover_url.map(|u| force_min_size(&u, "medium")),
             )
         } else {
-            (icon_url, cover_url)
+            (
+                icon_url.map(|u| optimize_external_image(&u, 128, true)),
+                cover_url.map(|u| optimize_external_image(&u, 480, false)),
+            )
         };
         let mut entry = AppEntry {
             id: self.id.to_string(),
@@ -400,7 +435,11 @@ pub struct Comment {
     pub content: String,
 }
 fn request(method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
-    crate::net::client().request(method, endpoint(path)).header("X-Client-ID", client_id::get())
+    let mut req = crate::net::client().request(method, endpoint(path)).header("X-Client-ID", client_id::get());
+    if let Some(token) = super::auth::token() {
+        req = req.header("Authorization", format!("Bearer {token}"));
+    }
+    req
 }
 #[derive(Debug, Deserialize)]
 struct AppsPage {
@@ -608,6 +647,128 @@ pub async fn post_comment(app_id: &str, author_name: &str, content: &str) -> any
         .error_for_status()?;
     Ok(())
 }
+
+fn auth_endpoint(path: &str) -> String {
+    let url = api_url();
+    let origin = url
+        .find("://")
+        .map(|scheme_end| scheme_end + 3)
+        .and_then(|host_start| url[host_start..].find('/').map(|slash| host_start + slash))
+        .map(|host_end| &url[..host_end])
+        .unwrap_or(url);
+    format!("{origin}{path}")
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AuthResponse {
+    pub id: i64,
+    pub username: String,
+    #[serde(default)]
+    pub role: String,
+    pub token: Option<String>,
+}
+
+pub async fn login_user(username: &str, password: &str) -> anyhow::Result<super::auth::AuthSession> {
+    let client = crate::net::client();
+    let url = auth_endpoint("/login");
+    let resp = client
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .json(&serde_json::json!({ "username": username, "password": password }))
+        .send()
+        .await?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        #[derive(Deserialize)]
+        struct ErrResp {
+            #[serde(default)]
+            error: String,
+        }
+        let err_text = resp.json::<ErrResp>().await.map(|e| e.error).unwrap_or_else(|_| format!("HTTP {status}"));
+        anyhow::bail!("{err_text}");
+    }
+
+    let mut cookie_token = None;
+    for header in resp.headers().get_all(reqwest::header::SET_COOKIE) {
+        if let Ok(cookie_str) = header.to_str() {
+            if let Some(pos) = cookie_str.find("vf_token=") {
+                let rest = &cookie_str[pos + 9..];
+                let val = rest.split(';').next().unwrap_or(rest).trim();
+                if !val.is_empty() {
+                    cookie_token = Some(val.to_owned());
+                    break;
+                }
+            }
+        }
+    }
+
+    let auth_data: AuthResponse = resp.json().await?;
+    let token = auth_data.token.or(cookie_token).ok_or_else(|| anyhow::anyhow!("No token in response"))?;
+
+    let session = super::auth::AuthSession {
+        user_id: auth_data.id,
+        username: auth_data.username,
+        token,
+    };
+    super::auth::save(session.clone());
+    Ok(session)
+}
+
+pub async fn register_user(username: &str, password: &str, email: Option<&str>) -> anyhow::Result<super::auth::AuthSession> {
+    let client = crate::net::client();
+    let url = auth_endpoint("/register");
+    let mut body = serde_json::json!({
+        "username": username,
+        "password": password
+    });
+    if let Some(em) = email.filter(|e| !e.is_empty()) {
+        body["email"] = serde_json::Value::String(em.to_owned());
+    }
+
+    let resp = client
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        #[derive(Deserialize)]
+        struct ErrResp {
+            #[serde(default)]
+            error: String,
+        }
+        let err_text = resp.json::<ErrResp>().await.map(|e| e.error).unwrap_or_else(|_| format!("HTTP {status}"));
+        anyhow::bail!("{err_text}");
+    }
+
+    let mut cookie_token = None;
+    for header in resp.headers().get_all(reqwest::header::SET_COOKIE) {
+        if let Ok(cookie_str) = header.to_str() {
+            if let Some(pos) = cookie_str.find("vf_token=") {
+                let rest = &cookie_str[pos + 9..];
+                let val = rest.split(';').next().unwrap_or(rest).trim();
+                if !val.is_empty() {
+                    cookie_token = Some(val.to_owned());
+                    break;
+                }
+            }
+        }
+    }
+
+    let auth_data: AuthResponse = resp.json().await?;
+    let token = auth_data.token.or(cookie_token).ok_or_else(|| anyhow::anyhow!("No token in response"))?;
+
+    let session = super::auth::AuthSession {
+        user_id: auth_data.id,
+        username: auth_data.username,
+        token,
+    };
+    super::auth::save(session.clone());
+    Ok(session)
+}
 /// shortcut: fixed copy of the server's report categories (GET /reports/categories), upgrade if it adds one.
 pub const REPORT_CATEGORIES: [(&str, &str); 11] = [
     ("vpk_download", "VPK download"),
@@ -813,7 +974,7 @@ mod tests {
         let entry = raw.into_app_entry().expect("has a download url");
         assert_eq!(
             entry.icon_url.as_deref(),
-            Some("https://raw.githubusercontent.com/example/icon.png")
+            Some("http://wsrv.nl/?url=https%3A%2F%2Fraw.githubusercontent.com%2Fexample%2Ficon.png&w=128&h=128&fit=cover&output=png&q=82&maxage=1y")
         );
     }
 

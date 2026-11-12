@@ -79,6 +79,7 @@ pub enum ThemeId {
     RosePine,
     Everforest,
     Kanagawa,
+    OledBlack,
 }
 
 impl<'de> serde::Deserialize<'de> for ThemeId {
@@ -99,10 +100,11 @@ impl<'de> serde::Deserialize<'de> for ThemeId {
 }
 
 impl ThemeId {
-    pub const ALL: [Self; 19] = [
+    pub const ALL: [Self; 20] = [
         Self::Midnight,
         Self::VitaClassic,
         Self::Obsidian,
+        Self::OledBlack,
         Self::Graphite,
         Self::Aurora,
         Self::Forest,
@@ -125,6 +127,7 @@ impl ThemeId {
         match self {
             Self::Midnight => &MIDNIGHT,
             Self::Obsidian => &OBSIDIAN,
+            Self::OledBlack => &OLED_BLACK,
             Self::Aurora => &AURORA,
             Self::Sunset => &SUNSET,
             Self::HighContrast => &HIGH_CONTRAST,
@@ -176,6 +179,30 @@ const OBSIDIAN: Palette = Palette {
     bg_card: rgb(0x1c1e24),
     bg_card_hover: rgb(0x2a2d35),
     separator: rgb(0x34373f),
+    text: rgb(0xf5f5f7),
+    text_dim: rgb(0xc8cad0),
+    text_faint: rgb(0x8f939c),
+    accent: rgb(0x4c8dff),
+    accent_soft: rgb(0x8ab4ff),
+    primary: rgb(0x1f6fe5),
+    primary_hover: rgb(0x3b82f6),
+    focus: rgb(0xffffff),
+    focus_glow: glow(0xffffff, 28),
+    success: SUCCESS,
+    success_hover: SUCCESS_HOVER,
+    warning: WARNING,
+    warning_hover: WARNING_HOVER,
+    danger: DANGER,
+    danger_bg: DANGER_BG,
+    glass_edge: glow(0x3a3d45, 0x66),
+};
+
+const OLED_BLACK: Palette = Palette {
+    bg_deep: rgb(0x000000),
+    bg_header: rgb(0x000000),
+    bg_card: rgb(0x0a0a0a),
+    bg_card_hover: rgb(0x1a1a1a),
+    separator: rgb(0x2d2d2d),
     text: rgb(0xf5f5f7),
     text_dim: rgb(0xc8cad0),
     text_faint: rgb(0x8f939c),
@@ -644,6 +671,10 @@ pub fn font(size: f32) -> egui::FontId {
 
 pub fn glass(color: egui::Color32) -> egui::Color32 {
     color.gamma_multiply(GLASS_ALPHA)
+}
+
+pub fn glass_modal(color: egui::Color32) -> egui::Color32 {
+    color.gamma_multiply(0.92)
 }
 
 pub const RADIUS_XS: f32 = 5.0;
