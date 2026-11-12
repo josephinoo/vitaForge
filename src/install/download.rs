@@ -251,6 +251,12 @@ async fn fetch_range_part(
         {
             Ok(r) if r.status() == reqwest::StatusCode::PARTIAL_CONTENT => r,
             Ok(r) => {
+                if r.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                    let wait = r.headers().get(reqwest::header::RETRY_AFTER)
+                        .and_then(|v| v.to_str().ok()).and_then(|s| s.parse::<u64>().ok())
+                        .unwrap_or(1).clamp(1, 10);
+                    tokio::time::sleep(Duration::from_secs(wait)).await;
+                }
                 last_err = anyhow::anyhow!("range server returned {}", r.status());
                 continue;
             }
