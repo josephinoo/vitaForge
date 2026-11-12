@@ -169,6 +169,9 @@ pub fn run(mut app: App) -> Result<()> {
                         TextTarget::ProfileName => {
                             app.handle_command(AppCommand::SubmitProfileName(text))?;
                         }
+                        TextTarget::AuthUsername | TextTarget::AuthPassword | TextTarget::AuthEmail => {
+                            app.handle_command(AppCommand::SubmitAuthInput(text))?;
+                        }
                     },
                     ime::ImeResult::Canceled if session.target == TextTarget::Search => {
                         app.handle_command(AppCommand::SetSearchQuery(session.query_before))?;
@@ -180,6 +183,9 @@ pub fn run(mut app: App) -> Result<()> {
                     TextTarget::Comment => app.handle_command(AppCommand::CloseCommentEntry)?,
                     TextTarget::Report => app.handle_command(AppCommand::CloseReportEntry)?,
                     TextTarget::ProfileName => app.handle_command(AppCommand::CloseProfileEntry)?,
+                    TextTarget::AuthUsername | TextTarget::AuthPassword | TextTarget::AuthEmail => {
+                        app.handle_command(AppCommand::CloseAuthInput)?
+                    }
                 }
                 held_direction = None;
                 held_since = Instant::now();
@@ -245,6 +251,8 @@ pub fn run(mut app: App) -> Result<()> {
             Some(TextTarget::Report)
         } else if app.profile_rename.is_some() {
             Some(TextTarget::ProfileName)
+        } else if let Some(target) = app.auth_input_target {
+            Some(target)
         } else {
             None
         };
@@ -332,15 +340,31 @@ pub fn run(mut app: App) -> Result<()> {
                 TextTarget::Comment => ime::ImePurpose::Comment,
                 TextTarget::Report => ime::ImePurpose::Report,
                 TextTarget::ProfileName => ime::ImePurpose::ProfileName,
+                TextTarget::AuthUsername => ime::ImePurpose::AuthUsername,
+                TextTarget::AuthPassword => ime::ImePurpose::AuthPassword,
+                TextTarget::AuthEmail => ime::ImePurpose::AuthEmail,
             };
             let query_before = match &app.state {
                 crate::app::AppState::Catalog(catalog) => catalog.search_query.clone(),
                 _ => String::new(),
             };
+            let initial_string;
             let initial = match target {
                 TextTarget::Search => query_before.as_str(),
                 TextTarget::Comment | TextTarget::Report => "",
                 TextTarget::ProfileName => app.profile_rename.as_deref().unwrap_or(""),
+                TextTarget::AuthUsername => {
+                    initial_string = app.auth_form.username.clone();
+                    initial_string.as_str()
+                }
+                TextTarget::AuthPassword => {
+                    initial_string = app.auth_form.password.clone();
+                    initial_string.as_str()
+                }
+                TextTarget::AuthEmail => {
+                    initial_string = app.auth_form.email.clone();
+                    initial_string.as_str()
+                }
             };
             if ime::open(&video, surface.window(), purpose, initial) {
                 ime = Some(ImeSession {
@@ -354,6 +378,9 @@ pub fn run(mut app: App) -> Result<()> {
                     TextTarget::Comment => app.handle_command(AppCommand::CloseCommentEntry)?,
                     TextTarget::Report => app.handle_command(AppCommand::CloseReportEntry)?,
                     TextTarget::ProfileName => app.handle_command(AppCommand::CloseProfileEntry)?,
+                    TextTarget::AuthUsername | TextTarget::AuthPassword | TextTarget::AuthEmail => {
+                        app.handle_command(AppCommand::CloseAuthInput)?
+                    }
                 }
             }
         }

@@ -15,6 +15,8 @@ pub(crate) fn catalog_header(
     commands: &mut Vec<AppCommand>,
 ) {
     let show_search_field = search_active || !search_query.trim().is_empty();
+    let auth = crate::data::auth::current();
+
     ui.allocate_ui_with_layout(
         egui::vec2(ui.available_width(), HEADER_HEIGHT),
         egui::Layout::left_to_right(egui::Align::Center),
@@ -63,7 +65,60 @@ pub(crate) fn catalog_header(
             }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let fill = ui.available_width().clamp(110.0, 200.0);
+                ui.spacing_mut().item_spacing = egui::vec2(8.0, 0.0);
+
+                // User Avatar button (circular, rightmost)
+                let avatar_size = egui::vec2(32.0, 32.0);
+                let (avatar_rect, avatar_resp) = ui.allocate_exact_size(avatar_size, egui::Sense::click());
+                let avatar_hover = avatar_resp.hovered();
+
+                if let Some(session) = &auth {
+                    let initial = session.username.chars().next().unwrap_or('U').to_ascii_uppercase().to_string();
+                    let bg_color = if avatar_hover {
+                        pal().primary_hover
+                    } else {
+                        pal().primary
+                    };
+                    ui.painter().circle_filled(avatar_rect.center(), 15.0, bg_color);
+                    ui.painter().circle_stroke(
+                        avatar_rect.center(),
+                        15.0,
+                        egui::Stroke::new(1.5_f32, pal().glass_edge),
+                    );
+                    ui.painter().text(
+                        avatar_rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        initial,
+                        font(FONT_BODY),
+                        egui::Color32::WHITE,
+                    );
+
+                    // Green online indicator dot at bottom right
+                    let dot_pos = egui::pos2(avatar_rect.right() - 3.0, avatar_rect.bottom() - 3.0);
+                    ui.painter().circle_filled(dot_pos, 4.5, pal().bg_header);
+                    ui.painter().circle_filled(dot_pos, 3.5, pal().success);
+                } else {
+                    let bg_color = if avatar_hover {
+                        pal().bg_card_hover
+                    } else {
+                        pal().bg_card
+                    };
+                    ui.painter().circle_filled(avatar_rect.center(), 15.0, bg_color);
+                    ui.painter().circle_stroke(
+                        avatar_rect.center(),
+                        15.0,
+                        egui::Stroke::new(1.0_f32, pal().separator),
+                    );
+                    let ic_rect = egui::Rect::from_center_size(avatar_rect.center(), egui::Vec2::splat(16.0));
+                    crate::app::ui::chrome_icons::paint(ui, ChromeIcon::User, ic_rect, pal().text_dim);
+                }
+
+                if avatar_resp.clicked() {
+                    commands.push(AppCommand::OpenSettings);
+                }
+
+                // Search field / button
+                let fill = ui.available_width().clamp(90.0, 150.0);
                 if show_search_field {
                     let field =
                         search_field(ui, search_query, lang.search_placeholder(), search_active);

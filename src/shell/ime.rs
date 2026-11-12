@@ -4,6 +4,9 @@ pub enum ImePurpose {
     Comment,
     Report,
     ProfileName,
+    AuthUsername,
+    AuthPassword,
+    AuthEmail,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

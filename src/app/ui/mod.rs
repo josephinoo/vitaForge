@@ -127,6 +127,9 @@ pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
                         armed: app.tai_armed,
                         notice: app.tai_notice.as_deref(),
                     },
+                    auth_form: &app.auth_form,
+                    auth_busy: app.auth_busy,
+                    auth_status: app.auth_status_message.as_ref(),
                     appear,
                 },
             ));

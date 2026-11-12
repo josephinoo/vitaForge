@@ -369,6 +369,9 @@ impl Language {
     pub fn theme_kanagawa(self) -> &'static str {
         self.strings(|s| s.theme_kanagawa)
     }
+    pub fn settings_account(self) -> &'static str {
+        self.strings(|s| s.settings_account)
+    }
     pub fn settings_general(self) -> &'static str {
         self.strings(|s| s.settings_general)
     }
@@ -847,6 +850,7 @@ struct LocalizedStrings {
     settings_credits: &'static str,
     credits_body: &'static str,
     language_label: &'static str,
+    settings_account: &'static str,
     settings_general: &'static str,
     theme_tokyo_night: &'static str,
     theme_catppuccin: &'static str,
@@ -1017,6 +1021,7 @@ impl LocalizedStrings {
             settings_credits: r("settings-credits"),
             credits_body: r("credits-body"),
             language_label: r("language-label"),
+            settings_account: r("settings-account"),
             settings_general: r("settings-general"),
             theme_tokyo_night: r("theme-tokyo-night"),
             theme_catppuccin: r("theme-catppuccin"),

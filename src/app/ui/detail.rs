@@ -440,12 +440,17 @@ pub(crate) fn detail_screen(
                                 .inner_margin(10.0)
                                 .show(ui, |ui| {
                                     ui.vertical(|ui| {
-                                        ui.label(
-                                            egui::RichText::new(&comment.author_name)
-                                                .size(FONT_SMALL)
-                                                .strong()
-                                                .color(pal().accent_soft),
-                                        );
+                                        ui.horizontal(|ui| {
+                                            let rect = egui::Rect::from_center_size(ui.cursor().center(), egui::Vec2::splat(14.0));
+                                            crate::app::ui::chrome_icons::paint(ui, crate::app::ui::chrome_icons::ChromeIcon::User, rect, pal().accent_soft);
+                                            ui.add_space(18.0);
+                                            ui.label(
+                                                egui::RichText::new(&comment.author_name)
+                                                    .size(FONT_SMALL)
+                                                    .strong()
+                                                    .color(pal().accent_soft),
+                                            );
+                                        });
                                         ui.add_space(2.0);
                                         ui.label(
                                             egui::RichText::new(&comment.content)
@@ -1358,9 +1363,14 @@ fn left_column(
                     commands.push(AppCommand::SetDetailFocus(DetailFocus::Author));
                     commands.push(AppCommand::MoreByAuthor(entry.author.clone()));
                 }
-                if !entry.version.trim().is_empty() {
+                let ver = entry
+                    .version
+                    .trim()
+                    .trim_start_matches(['v', 'V'])
+                    .trim_start_matches('.');
+                if !ver.is_empty() {
                     ui.label(
-                        egui::RichText::new(format!("v.{}", entry.version.trim()))
+                        egui::RichText::new(format!("v.{ver}"))
                             .size(FONT_SMALL)
                             .color(pal().text_faint),
                     );

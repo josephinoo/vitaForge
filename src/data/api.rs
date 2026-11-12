@@ -435,7 +435,11 @@ pub struct Comment {
     pub content: String,
 }
 fn request(method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
-    crate::net::client().request(method, endpoint(path)).header("X-Client-ID", client_id::get())
+    let mut req = crate::net::client().request(method, endpoint(path)).header("X-Client-ID", client_id::get());
+    if let Some(token) = super::auth::token() {
+        req = req.header("Authorization", format!("Bearer {token}"));
+    }
+    req
 }
 #[derive(Debug, Deserialize)]
 struct AppsPage {
@@ -643,6 +647,128 @@ pub async fn post_comment(app_id: &str, author_name: &str, content: &str) -> any
         .error_for_status()?;
     Ok(())
 }
+
+fn auth_endpoint(path: &str) -> String {
+    let url = api_url();
+    let origin = url
+        .find("://")
+        .map(|scheme_end| scheme_end + 3)
+        .and_then(|host_start| url[host_start..].find('/').map(|slash| host_start + slash))
+        .map(|host_end| &url[..host_end])
+        .unwrap_or(url);
+    format!("{origin}{path}")
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AuthResponse {
+    pub id: i64,
+    pub username: String,
+    #[serde(default)]
+    pub role: String,
+    pub token: Option<String>,
+}
+
+pub async fn login_user(username: &str, password: &str) -> anyhow::Result<super::auth::AuthSession> {
+    let client = crate::net::client();
+    let url = auth_endpoint("/login");
+    let resp = client
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .json(&serde_json::json!({ "username": username, "password": password }))
+        .send()
+        .await?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        #[derive(Deserialize)]
+        struct ErrResp {
+            #[serde(default)]
+            error: String,
+        }
+        let err_text = resp.json::<ErrResp>().await.map(|e| e.error).unwrap_or_else(|_| format!("HTTP {status}"));
+        anyhow::bail!("{err_text}");
+    }
+
+    let mut cookie_token = None;
+    for header in resp.headers().get_all(reqwest::header::SET_COOKIE) {
+        if let Ok(cookie_str) = header.to_str() {
+            if let Some(pos) = cookie_str.find("vf_token=") {
+                let rest = &cookie_str[pos + 9..];
+                let val = rest.split(';').next().unwrap_or(rest).trim();
+                if !val.is_empty() {
+                    cookie_token = Some(val.to_owned());
+                    break;
+                }
+            }
+        }
+    }
+
+    let auth_data: AuthResponse = resp.json().await?;
+    let token = auth_data.token.or(cookie_token).ok_or_else(|| anyhow::anyhow!("No token in response"))?;
+
+    let session = super::auth::AuthSession {
+        user_id: auth_data.id,
+        username: auth_data.username,
+        token,
+    };
+    super::auth::save(session.clone());
+    Ok(session)
+}
+
+pub async fn register_user(username: &str, password: &str, email: Option<&str>) -> anyhow::Result<super::auth::AuthSession> {
+    let client = crate::net::client();
+    let url = auth_endpoint("/register");
+    let mut body = serde_json::json!({
+        "username": username,
+        "password": password
+    });
+    if let Some(em) = email.filter(|e| !e.is_empty()) {
+        body["email"] = serde_json::Value::String(em.to_owned());
+    }
+
+    let resp = client
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        #[derive(Deserialize)]
+        struct ErrResp {
+            #[serde(default)]
+            error: String,
+        }
+        let err_text = resp.json::<ErrResp>().await.map(|e| e.error).unwrap_or_else(|_| format!("HTTP {status}"));
+        anyhow::bail!("{err_text}");
+    }
+
+    let mut cookie_token = None;
+    for header in resp.headers().get_all(reqwest::header::SET_COOKIE) {
+        if let Ok(cookie_str) = header.to_str() {
+            if let Some(pos) = cookie_str.find("vf_token=") {
+                let rest = &cookie_str[pos + 9..];
+                let val = rest.split(';').next().unwrap_or(rest).trim();
+                if !val.is_empty() {
+                    cookie_token = Some(val.to_owned());
+                    break;
+                }
+            }
+        }
+    }
+
+    let auth_data: AuthResponse = resp.json().await?;
+    let token = auth_data.token.or(cookie_token).ok_or_else(|| anyhow::anyhow!("No token in response"))?;
+
+    let session = super::auth::AuthSession {
+        user_id: auth_data.id,
+        username: auth_data.username,
+        token,
+    };
+    super::auth::save(session.clone());
+    Ok(session)
+}
 /// shortcut: fixed copy of the server's report categories (GET /reports/categories), upgrade if it adds one.
 pub const REPORT_CATEGORIES: [(&str, &str); 11] = [
     ("vpk_download", "VPK download"),
@@ -848,7 +974,7 @@ mod tests {
         let entry = raw.into_app_entry().expect("has a download url");
         assert_eq!(
             entry.icon_url.as_deref(),
-            Some("https://raw.githubusercontent.com/example/icon.png")
+            Some("http://wsrv.nl/?url=https%3A%2F%2Fraw.githubusercontent.com%2Fexample%2Ficon.png&w=128&h=128&fit=cover&output=png&q=82&maxage=1y")
         );
     }
 

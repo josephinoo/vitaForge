@@ -1,4 +1,5 @@
 pub mod api;
+pub mod auth;
 pub mod cache_manager;
 pub mod client_id;
 pub mod settings;

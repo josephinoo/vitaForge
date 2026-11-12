@@ -32,6 +32,9 @@ fn purpose_title(purpose: ImePurpose) -> &'static str {
         ImePurpose::Comment => "Comment",
         ImePurpose::Report => "Report",
         ImePurpose::ProfileName => "Profile name",
+        ImePurpose::AuthUsername => "Username",
+        ImePurpose::AuthPassword => "Password",
+        ImePurpose::AuthEmail => "Email",
     }
 }
 
@@ -41,6 +44,9 @@ fn purpose_max_len(purpose: ImePurpose) -> usize {
         ImePurpose::Comment => 256,
         ImePurpose::Report => 256,
         ImePurpose::ProfileName => 32,
+        ImePurpose::AuthUsername => 32,
+        ImePurpose::AuthPassword => 128,
+        ImePurpose::AuthEmail => 128,
     }
 }
 
@@ -75,6 +81,7 @@ pub fn open(
         ImePurpose::Search => SCE_IME_ENTER_LABEL_SEARCH,
         ImePurpose::Comment | ImePurpose::Report => SCE_IME_ENTER_LABEL_SEND,
         ImePurpose::ProfileName => SCE_IME_ENTER_LABEL_SEND,
+        ImePurpose::AuthUsername | ImePurpose::AuthPassword | ImePurpose::AuthEmail => SCE_IME_ENTER_LABEL_SEND,
     };
 
     let result = unsafe {

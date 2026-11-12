@@ -741,6 +741,14 @@ enum CatalogSource {
 const SELF_REPO_URL: &str = "https://github.com/josephinoo/vitaForge";
 const SELF_UPDATE_ID: &str = "vitaforge_self_update";
 
+#[derive(Debug, Clone, Default)]
+pub struct AuthForm {
+    pub is_register: bool,
+    pub username: String,
+    pub password: String,
+    pub email: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct SelfUpdateInfo {
     pub tag: String,
@@ -793,6 +801,11 @@ pub struct App {
     pub report_entry: bool,
     /// Name of the profile being renamed while the keyboard is open.
     pub profile_rename: Option<String>,
+    pub auth_input_target: Option<crate::input::TextTarget>,
+    pub auth_form: AuthForm,
+    pub auth_busy: bool,
+    pub auth_status_message: Option<(String, bool)>, // (message, is_error)
+    auth_rx: Option<oneshot::Receiver<Result<crate::data::auth::AuthSession, String>>>,
     restart_at: Option<std::time::Instant>,
     /// config.txt, the plugin registry and the backups, as Settings › Plugins shows them.
     pub tai: Option<crate::install::tai::Snapshot>,
@@ -892,6 +905,11 @@ impl App {
             report_choice: 0,
             report_entry: false,
             profile_rename: None,
+            auth_input_target: None,
+            auth_form: AuthForm::default(),
+            auth_busy: false,
+            auth_status_message: None,
+            auth_rx: None,
             restart_at: None,
             tai: None,
             tai_outdated: Vec::new(),
@@ -1211,6 +1229,24 @@ impl App {
                 ctx.request_repaint();
             }
         }
+        if let Some(rx) = &mut self.auth_rx
+            && let Ok(result) = rx.try_recv()
+        {
+            self.auth_rx = None;
+            self.auth_busy = false;
+            match result {
+                Ok(session) => {
+                    self.auth_status_message = Some((format!("Conectado como {}", session.username), false));
+                    self.auth_form.password.clear();
+                    self.audio.play(crate::audio::Sfx::Activation);
+                }
+                Err(err) => {
+                    self.auth_status_message = Some((err, true));
+                    self.audio.play(crate::audio::Sfx::HideModal);
+                }
+            }
+            ctx.request_repaint();
+        }
         if let Some(rx) = &mut self.comments_rx
             && let Ok((app_id, fetched)) = rx.try_recv()
         {
@@ -1392,6 +1428,13 @@ impl App {
             Some(Row::ClearIcons) => AppCommand::ClearIconCache,
             Some(Row::ClearCatalog) => AppCommand::ClearCatalogCache,
             Some(Row::PurgeAll) => AppCommand::PurgeAllCache,
+            Some(Row::AccountUsername) => AppCommand::RequestAuthInput(crate::input::TextTarget::AuthUsername),
+            Some(Row::AccountPassword) => AppCommand::RequestAuthInput(crate::input::TextTarget::AuthPassword),
+            Some(Row::AccountEmail) => AppCommand::RequestAuthInput(crate::input::TextTarget::AuthEmail),
+            Some(Row::AccountSubmit) => AppCommand::AuthSubmit,
+            Some(Row::AccountToggleMode) => AppCommand::AuthToggleMode,
+            Some(Row::AccountLogout) => AppCommand::AuthLogout,
+            Some(Row::AccountStatus) => return Ok(()),
             None => return Ok(()),
         };
         self.handle_command(command)
@@ -2925,7 +2968,7 @@ impl App {
                 if !content.is_empty()
                     && let AppState::Detail { app, comments, .. } = &mut self.state
                 {
-                    let author_name = data::client_id::display_name();
+                    let author_name = data::auth::username().unwrap_or_else(data::client_id::display_name);
                     comments.insert(
                         0,
                         data::api::Comment { author_name: author_name.clone(), content: content.clone() },
@@ -2938,6 +2981,68 @@ impl App {
                         }
                     });
                 }
+            }
+            AppCommand::RequestAuthInput(target) => {
+                self.auth_input_target = Some(target);
+                self.audio.play(crate::audio::Sfx::ShowModal);
+            }
+            AppCommand::CloseAuthInput => {
+                self.auth_input_target = None;
+                self.audio.play(crate::audio::Sfx::HideModal);
+            }
+            AppCommand::SubmitAuthInput(text) => {
+                if let Some(target) = self.auth_input_target.take() {
+                    match target {
+                        crate::input::TextTarget::AuthUsername => self.auth_form.username = text.trim().to_owned(),
+                        crate::input::TextTarget::AuthPassword => self.auth_form.password = text,
+                        crate::input::TextTarget::AuthEmail => self.auth_form.email = text.trim().to_owned(),
+                        _ => {}
+                    }
+                }
+            }
+            AppCommand::AuthToggleMode => {
+                self.auth_form.is_register = !self.auth_form.is_register;
+                self.auth_status_message = None;
+                self.audio.play(crate::audio::Sfx::Navigate);
+            }
+            AppCommand::AuthSubmit => {
+                if !self.auth_busy {
+                    let username = self.auth_form.username.trim().to_owned();
+                    let password = self.auth_form.password.clone();
+                    let email = if self.auth_form.email.trim().is_empty() {
+                        None
+                    } else {
+                        Some(self.auth_form.email.trim().to_owned())
+                    };
+                    let is_register = self.auth_form.is_register;
+
+                    if username.is_empty() || password.is_empty() {
+                        self.auth_status_message = Some((self.lang.tr("auth-error-empty"), true));
+                        self.audio.play(crate::audio::Sfx::HideModal);
+                        return Ok(());
+                    }
+
+                    self.auth_busy = true;
+                    self.auth_status_message = None;
+                    self.audio.play(crate::audio::Sfx::Activation);
+
+                    let (tx, rx) = oneshot::channel();
+                    self.auth_rx = Some(rx);
+
+                    tokio::spawn(async move {
+                        let res = if is_register {
+                            crate::data::api::register_user(&username, &password, email.as_deref()).await
+                        } else {
+                            crate::data::api::login_user(&username, &password).await
+                        };
+                        let _ = tx.send(res.map_err(|e| e.to_string()));
+                    });
+                }
+            }
+            AppCommand::AuthLogout => {
+                crate::data::auth::logout();
+                self.auth_status_message = Some((self.lang.tr("auth-logged-out"), false));
+                self.audio.play(crate::audio::Sfx::ToggleOff);
             }
         }
         Ok(())

@@ -9,6 +9,7 @@ use crate::install::tai::config::LineStyle;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Section {
+    Account,
     General,
     Appearance,
     Plugins,
@@ -18,6 +19,13 @@ pub enum Section {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Row {
+    AccountStatus,
+    AccountUsername,
+    AccountPassword,
+    AccountEmail,
+    AccountSubmit,
+    AccountToggleMode,
+    AccountLogout,
     Language,
     Notifications,
     Theme,
@@ -48,7 +56,19 @@ pub enum SubPage {
 }
 
 /// Sections in rail order with the focusable rows each one holds.
-pub const SECTIONS: [(Section, &[Row]); 5] = [
+pub const SECTIONS: [(Section, &[Row]); 6] = [
+    (
+        Section::Account,
+        &[
+            Row::AccountStatus,
+            Row::AccountUsername,
+            Row::AccountPassword,
+            Row::AccountEmail,
+            Row::AccountSubmit,
+            Row::AccountToggleMode,
+            Row::AccountLogout,
+        ],
+    ),
     (Section::General, &[Row::Language, Row::Notifications]),
     (Section::Appearance, &[Row::Theme]),
     (
@@ -120,6 +140,7 @@ impl SettingsNav {
 
 fn section_label(section: Section, lang: Language) -> &'static str {
     match section {
+        Section::Account => lang.settings_account(),
         Section::General => lang.settings_general(),
         Section::Appearance => lang.settings_appearance(),
         Section::Plugins => lang.settings_plugins(),
@@ -130,6 +151,7 @@ fn section_label(section: Section, lang: Language) -> &'static str {
 
 fn section_icon(section: Section) -> ChromeIcon {
     match section {
+        Section::Account => ChromeIcon::User,
         Section::General => ChromeIcon::Sliders,
         Section::Appearance => ChromeIcon::Palette,
         Section::Plugins => ChromeIcon::Plugins,
@@ -178,6 +200,9 @@ pub(crate) struct SettingsView<'a> {
     pub install_notifications: bool,
     pub purge_armed: bool,
     pub plugins: PluginsView<'a>,
+    pub auth_form: &'a crate::app::AuthForm,
+    pub auth_busy: bool,
+    pub auth_status: Option<&'a (String, bool)>,
     pub appear: f32,
 }
 
@@ -399,6 +424,10 @@ fn content(ui: &mut egui::Ui, view: &SettingsView, commands: &mut Vec<AppCommand
         about_card(ui, lang, view.catalog_count);
         return;
     }
+    if section == Section::Account {
+        account_section(ui, view, commands);
+        return;
+    }
     for (index, row) in nav.rows().iter().enumerate() {
         let focused = !nav.rail && index == nav.row;
         let clicked = match row {
@@ -493,11 +522,303 @@ fn content(ui: &mut egui::Ui, view: &SettingsView, commands: &mut Vec<AppCommand
                     }
                 })
             }
+            _ => false,
         };
         if clicked {
             commands.push(AppCommand::SettingsRow(index));
         }
     }
+}
+
+fn account_section(ui: &mut egui::Ui, view: &SettingsView, commands: &mut Vec<AppCommand>) {
+    let lang = view.lang;
+    let nav = view.nav;
+    let auth = crate::data::auth::current();
+
+    if let Some(status) = view.auth_status {
+        let (msg, is_err) = status;
+        let color = if *is_err { pal().danger } else { pal().success };
+        let icon = if *is_err { ChromeIcon::Alert } else { ChromeIcon::Check };
+        ui.horizontal(|ui| {
+            pill(ui, msg, color, Some(icon));
+        });
+        ui.add_space(4.0);
+    }
+
+    if let Some(session) = &auth {
+        // Logged in view card
+        let card_frame = egui::Frame::NONE
+            .fill(glass(pal().bg_header))
+            .corner_radius(RADIUS_MD)
+            .stroke(egui::Stroke::new(1.0_f32, pal().glass_edge))
+            .inner_margin(16.0);
+
+        card_frame.show(ui, |ui| {
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new("Connected Account").size(FONT_BODY).color(pal().text_dim));
+                ui.add_space(8.0);
+
+                ui.label(egui::RichText::new(&session.username).size(FONT_TITLE + 4.0).strong().color(pal().text));
+                ui.add_space(4.0);
+
+                ui.horizontal(|ui| {
+                    // Online green dot
+                    let (dot_rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+                    ui.painter().circle_filled(dot_rect.center(), 3.5, egui::Color32::from_rgb(34, 197, 94));
+                    ui.add_space(4.0);
+                    ui.label(egui::RichText::new("Online").size(FONT_SMALL).color(egui::Color32::from_rgb(34, 197, 94)).strong());
+                    ui.add_space(8.0);
+                    ui.label(egui::RichText::new("Connected to VitaForge").size(FONT_SMALL).color(pal().text_dim));
+                });
+
+                ui.add_space(3.0);
+                ui.label(egui::RichText::new(format!("User ID: {}", session.user_id)).size(FONT_SMALL).color(pal().text_faint));
+            });
+        });
+
+        ui.add_space(12.0);
+
+        // Red bordered "Log out" button
+        let focused = !nav.rail && nav.row == 6; // Logout row index
+        let logout_height = 54.0;
+        let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), logout_height), egui::Sense::click());
+        let bg_fill = if response.hovered() {
+            pal().danger.gamma_multiply(0.18)
+        } else {
+            pal().danger.gamma_multiply(0.10)
+        };
+        let stroke_color = if focused {
+            pal().focus
+        } else {
+            pal().danger.gamma_multiply(0.45)
+        };
+        ui.painter().rect_filled(rect, RADIUS_MD, bg_fill);
+        ui.painter().rect_stroke(rect, RADIUS_MD, egui::Stroke::new(1.0_f32, stroke_color), egui::StrokeKind::Inside);
+        if focused {
+            ui.painter().rect_stroke(rect.expand(2.0), RADIUS_MD + 2.0, egui::Stroke::new(2.0_f32, pal().focus), egui::StrokeKind::Inside);
+        }
+
+        // Center content: "Log out" + icon, subtitle "Disconnect your VitaForge account from this console"
+        ui.painter().text(
+            egui::pos2(rect.center().x, rect.center().y - 8.0),
+            egui::Align2::CENTER_CENTER,
+            "Log out",
+            font(FONT_BODY),
+            pal().danger,
+        );
+        let icon_rect = egui::Rect::from_center_size(egui::pos2(rect.center().x + 36.0, rect.center().y - 8.0), egui::Vec2::splat(15.0));
+        chrome_icons::paint(ui, ChromeIcon::Trash, icon_rect, pal().danger);
+
+        ui.painter().text(
+            egui::pos2(rect.center().x, rect.center().y + 10.0),
+            egui::Align2::CENTER_CENTER,
+            &lang.tr("auth-logout-hint"),
+            font(FONT_SMALL),
+            pal().text_dim,
+        );
+
+        if response.clicked() {
+            commands.push(AppCommand::AuthLogout);
+        }
+    } else {
+        // Form: username, password, email (if register), submit button, toggle mode
+        let form = view.auth_form;
+        let is_reg = form.is_register;
+
+        // Mode header / status
+        let mode_desc = if is_reg {
+            lang.tr("auth-register-desc")
+        } else {
+            lang.tr("auth-login-desc")
+        };
+        ui.label(egui::RichText::new(mode_desc).size(FONT_SMALL).color(pal().text_dim));
+        ui.add_space(4.0);
+
+        // Row 1: Username
+        let focused_u = !nav.rail && nav.row == 1;
+        let u_val = if form.username.is_empty() { lang.tr("auth-tap-to-enter") } else { form.username.clone() };
+        if auth_input_row(ui, ChromeIcon::User, &lang.tr("auth-username"), &lang.tr("auth-username-hint"), &u_val, focused_u) {
+            commands.push(AppCommand::RequestAuthInput(crate::input::TextTarget::AuthUsername));
+        }
+
+        ui.add_space(2.0);
+
+        // Row 2: Password
+        let focused_p = !nav.rail && nav.row == 2;
+        let p_val = if form.password.is_empty() {
+            lang.tr("auth-tap-to-enter")
+        } else {
+            "•".repeat(form.password.len().min(16))
+        };
+        if auth_input_row(ui, ChromeIcon::Alert, &lang.tr("auth-password"), &lang.tr("auth-password-hint"), &p_val, focused_p) {
+            commands.push(AppCommand::RequestAuthInput(crate::input::TextTarget::AuthPassword));
+        }
+
+        // Row 3: Email (only if register)
+        if is_reg {
+            ui.add_space(2.0);
+            let focused_e = !nav.rail && nav.row == 3;
+            let e_val = if form.email.is_empty() { lang.tr("auth-optional") } else { form.email.clone() };
+            if auth_input_row(ui, ChromeIcon::Info, &lang.tr("auth-email"), &lang.tr("auth-email-hint"), &e_val, focused_e) {
+                commands.push(AppCommand::RequestAuthInput(crate::input::TextTarget::AuthEmail));
+            }
+        }
+
+        ui.add_space(6.0);
+
+        // Row 4: Submit action (blue full-width button)
+        let focused_s = !nav.rail && nav.row == 4;
+        let submit_title = if view.auth_busy {
+            lang.tr("auth-connecting")
+        } else if is_reg {
+            lang.tr("auth-register-action")
+        } else {
+            lang.tr("auth-login-action")
+        };
+        if auth_button_row(ui, &submit_title, Some(ChromeIcon::Check), view.auth_busy, focused_s) {
+            commands.push(AppCommand::AuthSubmit);
+        }
+
+        ui.add_space(6.0);
+
+        // Row 5: Toggle login / register (footer link)
+        let focused_t = !nav.rail && nav.row == 5;
+        let toggle_title = if is_reg {
+            lang.tr("auth-switch-to-login")
+        } else {
+            lang.tr("auth-switch-to-register")
+        };
+        if auth_link_row(ui, ChromeIcon::User, &toggle_title, focused_t) {
+            commands.push(AppCommand::AuthToggleMode);
+        }
+    }
+}
+
+fn auth_input_row(
+    ui: &mut egui::Ui,
+    icon: ChromeIcon,
+    title: &str,
+    hint: &str,
+    value_text: &str,
+    focused: bool,
+) -> bool {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), ROW_HEIGHT), egui::Sense::click());
+    let lift = if focused { 0.12 } else if response.hovered() { 0.09 } else { 0.06 };
+    ui.painter().rect_filled(rect, RADIUS_MD, pal().text.gamma_multiply(lift));
+    if focused {
+        ui.painter().rect_stroke(rect.expand(2.0), RADIUS_MD + 2.0, egui::Stroke::new(2.0_f32, pal().focus), egui::StrokeKind::Inside);
+    }
+    let icon_rect = egui::Rect::from_center_size(egui::pos2(rect.left() + 28.0, rect.center().y), egui::Vec2::splat(18.0));
+    chrome_icons::paint(ui, icon, icon_rect, pal().text);
+
+    let text_x = rect.left() + 52.0;
+    ui.painter().text(
+        egui::pos2(text_x, rect.center().y - 9.0),
+        egui::Align2::LEFT_CENTER,
+        title,
+        font(FONT_BODY),
+        pal().text,
+    );
+    ui.painter().text(
+        egui::pos2(text_x, rect.center().y + 11.0),
+        egui::Align2::LEFT_CENTER,
+        hint,
+        font(FONT_SMALL),
+        pal().text_dim,
+    );
+
+    // Right-hand side: Tap to enter + rounded box with Chevron >
+    let chevron_box_size = egui::vec2(28.0, 28.0);
+    let chevron_box_rect = egui::Rect::from_min_size(
+        egui::pos2(rect.right() - 14.0 - chevron_box_size.x, rect.center().y - chevron_box_size.y * 0.5),
+        chevron_box_size,
+    );
+    ui.painter().rect_filled(chevron_box_rect, 6.0, pal().text.gamma_multiply(0.08));
+    chrome_icons::paint(
+        ui,
+        ChromeIcon::ChevronRight,
+        egui::Rect::from_center_size(chevron_box_rect.center(), egui::Vec2::splat(14.0)),
+        pal().text_dim,
+    );
+
+    ui.painter().text(
+        egui::pos2(chevron_box_rect.left() - 12.0, rect.center().y),
+        egui::Align2::RIGHT_CENTER,
+        value_text,
+        font(FONT_SMALL),
+        pal().text_dim,
+    );
+
+    response.clicked()
+}
+
+fn auth_button_row(
+    ui: &mut egui::Ui,
+    label: &str,
+    icon: Option<ChromeIcon>,
+    busy: bool,
+    focused: bool,
+) -> bool {
+    let height = 48.0;
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), height), egui::Sense::click());
+    let fill = if busy {
+        pal().primary.gamma_multiply(0.7)
+    } else if response.hovered() {
+        pal().primary.gamma_multiply(0.9)
+    } else {
+        pal().primary
+    };
+    let radius = height / 2.0;
+    ui.painter().rect_filled(rect, radius, fill);
+    ui.painter().rect_stroke(rect, radius, egui::Stroke::new(1.5_f32, pal().accent_soft), egui::StrokeKind::Inside);
+    if focused {
+        ui.painter().rect_stroke(rect.expand(2.5), radius + 2.5, egui::Stroke::new(2.0_f32, pal().focus), egui::StrokeKind::Inside);
+    }
+
+    let mut center_x = rect.center().x;
+    if let Some(ic) = icon {
+        let ic_size = 16.0;
+        let ic_rect = egui::Rect::from_center_size(egui::pos2(center_x - 38.0, rect.center().y), egui::Vec2::splat(ic_size));
+        chrome_icons::paint(ui, ic, ic_rect, egui::Color32::WHITE);
+        center_x += 8.0;
+    }
+    ui.painter().text(
+        egui::pos2(center_x, rect.center().y),
+        egui::Align2::CENTER_CENTER,
+        label,
+        font(FONT_BODY),
+        egui::Color32::WHITE,
+    );
+
+    response.clicked()
+}
+
+fn auth_link_row(
+    ui: &mut egui::Ui,
+    icon: ChromeIcon,
+    label: &str,
+    focused: bool,
+) -> bool {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 40.0), egui::Sense::click());
+    if focused {
+        ui.painter().rect_stroke(rect, RADIUS_MD, egui::Stroke::new(1.5_f32, pal().focus), egui::StrokeKind::Inside);
+    }
+    let icon_rect = egui::Rect::from_center_size(egui::pos2(rect.left() + 24.0, rect.center().y), egui::Vec2::splat(18.0));
+    let color = if response.hovered() || focused { pal().text } else { pal().text_dim };
+    chrome_icons::paint(ui, icon, icon_rect, color);
+
+    ui.painter().text(
+        egui::pos2(rect.left() + 48.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        font(FONT_BODY),
+        color,
+    );
+
+    let arrow_rect = egui::Rect::from_center_size(egui::pos2(rect.right() - 24.0, rect.center().y), egui::Vec2::splat(16.0));
+    chrome_icons::paint(ui, ChromeIcon::ChevronRight, arrow_rect, color);
+
+    response.clicked()
 }
 
 fn section_title(ui: &mut egui::Ui, title: &str) {
@@ -1076,6 +1397,9 @@ mod tests {
                                 notice: Some("ok"),
                             },
                             appear: 1.0,
+                            auth_form: &crate::app::AuthForm::default(),
+                            auth_busy: false,
+                            auth_status: None,
                         },
                     );
                 });
@@ -1120,6 +1444,9 @@ mod tests {
                         plugins: PluginsView { tai: Some(&snapshot), outdated: &[], pending_reboot: false,
                             reboot_armed: false, armed: false, notice: None },
                         appear: 1.0,
+                        auth_form: &crate::app::AuthForm::default(),
+                        auth_busy: false,
+                        auth_status: None,
                     });
                 });
             }
