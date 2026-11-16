@@ -765,6 +765,16 @@ pub struct SelfUpdateInfo {
     pub vpk_url: String,
 }
 
+/// Verifier modal draft: score kept as typed text so the field can be empty.
+#[derive(Debug, Clone)]
+pub struct VerifyDraft {
+    pub score: String,
+    pub note: String,
+    pub installs: bool,
+    pub works: bool,
+    pub focus: usize,
+}
+
 pub struct App {
     pub state: AppState,
     pub icons: IconCache,
@@ -786,6 +796,12 @@ pub struct App {
     load_started_at: std::time::Instant,
     self_update_rx: Option<oneshot::Receiver<SelfUpdateInfo>>,
     comments_rx: Option<oneshot::Receiver<(String, Vec<data::api::Comment>)>>,
+    /// Top-level comment id the OSK text will be posted under; None = new top-level comment.
+    comment_reply_to: Option<String>,
+    verification: Option<(String, data::api::Verification)>,
+    verification_rx: Option<oneshot::Receiver<(String, data::api::Verification)>>,
+    pub verify_modal: Option<VerifyDraft>,
+    pub verify_entry: Option<crate::input::TextTarget>,
     social_rx: Option<oneshot::Receiver<(String, data::api::Social)>>,
     cache_stats_rx: Option<oneshot::Receiver<data::cache_manager::CacheStats>>,
     audio: crate::audio::AudioEngine,
@@ -817,6 +833,9 @@ pub struct App {
     pub auth_busy: bool,
     pub auth_status_message: Option<(String, bool)>, // (message, is_error)
     auth_rx: Option<oneshot::Receiver<Result<crate::data::auth::AuthSession, String>>>,
+    /// Game Verifier application status (`unavailable` when the lookup failed); `None` = not fetched yet.
+    pub verifier_status: Option<String>,
+    verifier_rx: Option<oneshot::Receiver<Result<String, String>>>,
     restart_at: Option<std::time::Instant>,
     /// config.txt, the plugin registry and the backups, as Settings › Plugins shows them.
     pub tai: Option<crate::install::tai::Snapshot>,
@@ -896,6 +915,11 @@ impl App {
             load_started_at: std::time::Instant::now(),
             self_update_rx: Some(self_update_rx),
             comments_rx: None,
+            comment_reply_to: None,
+            verification: None,
+            verification_rx: None,
+            verify_modal: None,
+            verify_entry: None,
             social_rx: None,
             cache_stats_rx: None,
             audio: crate::audio::AudioEngine::new(settings.sound_effects),
@@ -922,6 +946,8 @@ impl App {
             auth_busy: false,
             auth_status_message: None,
             auth_rx: None,
+            verifier_status: None,
+            verifier_rx: None,
             restart_at: None,
             tai: None,
             tai_outdated: Vec::new(),
@@ -1262,6 +1288,37 @@ impl App {
             }
             ctx.request_repaint();
         }
+        if self.verifier_status.is_none()
+            && self.verifier_rx.is_none()
+            && crate::data::auth::is_logged_in()
+            && matches!(&self.state, AppState::Settings { .. })
+        {
+            let (tx, rx) = oneshot::channel();
+            self.verifier_rx = Some(rx);
+            tokio::spawn(async move {
+                let status = crate::data::api::verifier_application_status().await;
+                let _ = tx.send(Ok(status.unwrap_or_else(|_| "unavailable".to_owned())));
+            });
+        }
+        if let Some(rx) = &mut self.verifier_rx
+            && let Ok(result) = rx.try_recv()
+        {
+            self.verifier_rx = None;
+            match result {
+                Ok(status) => self.verifier_status = Some(status),
+                Err(err) => self.auth_status_message = Some((err, true)),
+            }
+            ctx.request_repaint();
+        }
+        if let Some(rx) = &mut self.verification_rx
+            && let Ok((app_id, v)) = rx.try_recv()
+        {
+            self.verification_rx = None;
+            if matches!(&self.state, AppState::Detail { app, .. } if app.id == app_id) {
+                self.verification = Some((app_id, v));
+                ctx.request_repaint();
+            }
+        }
         if let Some(rx) = &mut self.comments_rx
             && let Ok((app_id, fetched)) = rx.try_recv()
         {
@@ -1450,6 +1507,7 @@ impl App {
             Some(Row::AccountSubmit) => AppCommand::AuthSubmit,
             Some(Row::AccountToggleMode) => AppCommand::AuthToggleMode,
             Some(Row::AccountLogout) => AppCommand::AuthLogout,
+            Some(Row::AccountVerifier) => AppCommand::VerifierApply,
             Some(Row::AccountStatus) => return Ok(()),
             None => return Ok(()),
         };
@@ -1826,6 +1884,72 @@ impl App {
         }
     }
 
+    /// Rows: 0 score field, 1 note field, 2 installs, 3 works, 4 cancel, 5 submit.
+    fn handle_verify_modal(&mut self, command: AppCommand) {
+        const ROWS: usize = 6;
+        let Some(draft) = &mut self.verify_modal else { return };
+        match command {
+            AppCommand::SubmitVerifyText(text) => {
+                match self.verify_entry.take() {
+                    // Whole numbers 0-100 only: keep the digits, clamp.
+                    Some(crate::input::TextTarget::VerifyScore) => {
+                        let digits: String = text.chars().filter(char::is_ascii_digit).take(3).collect();
+                        draft.score = digits.parse::<u16>().map_or(String::new(), |n| n.min(100).to_string());
+                    }
+                    Some(crate::input::TextTarget::VerifyNote) => draft.note = text.trim().chars().take(500).collect(),
+                    _ => {}
+                }
+            }
+            AppCommand::CloseVerifyEntry => self.verify_entry = None,
+            _ if self.verify_entry.is_some() => {}
+            AppCommand::Input(InputCommand::MoveDown) => draft.focus = (draft.focus + 1) % ROWS,
+            AppCommand::Input(InputCommand::MoveUp) => draft.focus = (draft.focus + ROWS - 1) % ROWS,
+            AppCommand::Input(InputCommand::MoveLeft | InputCommand::MoveRight) if draft.focus >= 4 => {
+                draft.focus = if draft.focus == 4 { 5 } else { 4 };
+            }
+            AppCommand::Input(InputCommand::Back) | AppCommand::CloseVerifyModal => {
+                self.verify_modal = None;
+                self.audio.play(crate::audio::Sfx::HideModal);
+            }
+            AppCommand::Input(InputCommand::Confirm) => {
+                let row = draft.focus;
+                self.verify_activate(row);
+            }
+            AppCommand::VerifyActivate(row) if row < ROWS => {
+                draft.focus = row;
+                self.verify_activate(row);
+            }
+            _ => {}
+        }
+    }
+
+    fn verify_activate(&mut self, row: usize) {
+        let Some(draft) = &mut self.verify_modal else { return };
+        match row {
+            0 => self.verify_entry = Some(crate::input::TextTarget::VerifyScore),
+            1 => self.verify_entry = Some(crate::input::TextTarget::VerifyNote),
+            2 => draft.installs = !draft.installs,
+            3 => draft.works = !draft.works,
+            4 => {
+                self.verify_modal = None;
+                self.audio.play(crate::audio::Sfx::HideModal);
+            }
+            _ => {
+                // A score is required; an empty field just keeps the modal open.
+                if let Ok(score) = draft.score.parse::<i16>() {
+                    let command = AppCommand::SubmitVerification {
+                        score,
+                        installs_ok: draft.installs,
+                        works_ok: draft.works,
+                        note: draft.note.clone(),
+                    };
+                    self.verify_modal = None;
+                    let _ = self.handle_command(command);
+                }
+            }
+        }
+    }
+
     /// Focus runs over the categories (two columns), then Cancel, then Submit.
     fn handle_report_modal(&mut self, focus: usize, command: AppCommand) {
         let count = data::api::REPORT_CATEGORIES.len();
@@ -1919,6 +2043,10 @@ impl App {
                 }
                 _ => return Ok(()),
             }
+        }
+        if self.verify_modal.is_some() {
+            self.handle_verify_modal(command);
+            return Ok(());
         }
         if let Some(selected) = self.report_modal {
             self.handle_report_modal(selected, command);
@@ -2978,7 +3106,12 @@ impl App {
                     self.audio.play(crate::audio::Sfx::ShowModal);
                 }
             }
+            AppCommand::RequestCommentReply(parent_id) => {
+                self.comment_reply_to = Some(parent_id);
+                self.handle_command(AppCommand::RequestCommentEntry)?;
+            }
             AppCommand::CloseCommentEntry => {
+                self.comment_reply_to = None;
                 if let AppState::Detail { comment_entry_requested, .. } = &mut self.state {
                     *comment_entry_requested = false;
                     self.audio.play(crate::audio::Sfx::HideModal);
@@ -2990,15 +3123,71 @@ impl App {
                     && let AppState::Detail { app, comments, .. } = &mut self.state
                 {
                     let author_name = data::auth::username().unwrap_or_else(data::client_id::display_name);
+                    let parent_id = self.comment_reply_to.take();
                     comments.insert(
                         0,
-                        data::api::Comment { author_name: author_name.clone(), content: content.clone() },
+                        data::api::Comment {
+                            id: String::new(),
+                            parent_id: parent_id.clone(),
+                            verified: data::auth::is_verifier(),
+                            author_name: author_name.clone(),
+                            created_at: String::new(),
+                            content: content.clone(),
+                        },
                     );
                     app.comments_count = app.comments_count.saturating_add(1);
                     let app_id = app.id.clone();
+                    // Refetch after the post so the new comment gets its server id (needed to reply to it).
+                    let (tx, rx) = oneshot::channel();
+                    self.comments_rx = Some(rx);
                     tokio::spawn(async move {
-                        if let Err(err) = data::api::post_comment(&app_id, &author_name, &content).await {
+                        if let Err(err) =
+                            data::api::post_comment(&app_id, &author_name, &content, parent_id.as_deref()).await
+                        {
                             eprintln!("comment submit failed: {err:#}");
+                            return;
+                        }
+                        if let Ok(comments) = data::api::fetch_comments(&app_id).await {
+                            let _ = tx.send((app_id, comments));
+                        }
+                    });
+                }
+            }
+            AppCommand::OpenVerifyModal => {
+                if let Some((_, v)) = &self.verification
+                    && v.can_verify
+                    && matches!(self.state, AppState::Detail { lightbox: None, .. })
+                {
+                    let mine = v.mine.as_ref();
+                    self.verify_modal = Some(VerifyDraft {
+                        score: mine.map(|m| m.score.to_string()).unwrap_or_default(),
+                        note: mine.and_then(|m| m.note.clone()).unwrap_or_default(),
+                        installs: mine.is_none_or(|m| m.installs_ok),
+                        works: mine.is_none_or(|m| m.works_ok),
+                        focus: 0,
+                    });
+                    self.audio.play(crate::audio::Sfx::ShowModal);
+                }
+            }
+            AppCommand::VerifyActivate(_) | AppCommand::CloseVerifyModal | AppCommand::SubmitVerifyText(_) | AppCommand::CloseVerifyEntry => {}
+            AppCommand::SubmitVerification { score, installs_ok, works_ok, note } => {
+                if let AppState::Detail { app, .. } = &self.state
+                    && self.verification.as_ref().is_some_and(|(_, v)| v.can_verify)
+                {
+                    let app_id = app.id.clone();
+                    let (tx, rx) = oneshot::channel();
+                    self.verification_rx = Some(rx);
+                    let lang = self.lang;
+                    crate::install::log_file(&format!("verification: app={app_id} score={score} installs={installs_ok} works={works_ok}"));
+                    tokio::spawn(async move {
+                        if let Err(err) = data::api::put_verification(&app_id, score, installs_ok, works_ok, &note).await {
+                            crate::install::log_file(&format!("verification failed: {err:#}"));
+                            crate::install::notify::send(&lang.tr("verify-failed"));
+                            return;
+                        }
+                        crate::install::notify::send(&lang.tr("verify-saved").replace("%n", &score.to_string()));
+                        if let Ok(v) = data::api::fetch_verification(&app_id).await {
+                            let _ = tx.send((app_id, v));
                         }
                     });
                 }
@@ -3060,8 +3249,23 @@ impl App {
                     });
                 }
             }
+            AppCommand::VerifierApply => {
+                // The server enforces the rules; this only avoids pointless requests.
+                let can_apply = matches!(self.verifier_status.as_deref(), Some("not_applied" | "rejected"));
+                if crate::data::auth::is_logged_in() && can_apply && self.verifier_rx.is_none() {
+                    self.auth_status_message = None;
+                    self.audio.play(crate::audio::Sfx::Activation);
+                    let (tx, rx) = oneshot::channel();
+                    self.verifier_rx = Some(rx);
+                    tokio::spawn(async move {
+                        let _ = tx.send(crate::data::api::apply_verifier().await.map_err(|e| e.to_string()));
+                    });
+                }
+            }
             AppCommand::AuthLogout => {
                 crate::data::auth::logout();
+                self.verifier_status = None;
+                self.verifier_rx = None;
                 self.auth_status_message = Some((self.lang.tr("auth-logged-out"), false));
                 self.audio.play(crate::audio::Sfx::ToggleOff);
             }
@@ -3142,6 +3346,18 @@ impl App {
             .unwrap_or_default();
         Some(format!("{position}/{}{percent}", self.update_total))
     }
+    fn spawn_fetch_verification(&mut self, app_id: String) {
+        let (tx, rx) = oneshot::channel();
+        tokio::spawn(async move {
+            match data::api::fetch_verification(&app_id).await {
+                Ok(v) => {
+                    let _ = tx.send((app_id, v));
+                }
+                Err(err) => eprintln!("verification fetch failed: {err:#}"),
+            }
+        });
+        self.verification_rx = Some(rx);
+    }
     fn open_app(&mut self, filtered_index: usize) {
         let entry = match &self.state {
             AppState::Catalog(catalog) => catalog
@@ -3202,6 +3418,8 @@ impl App {
             }
         });
         self.comments_rx = Some(rx);
+        self.verification = None;
+        self.spawn_fetch_verification(entry.id.clone());
         let social_id = entry.id.clone();
         let (social_tx, social_rx) = oneshot::channel();
         tokio::spawn(async move {

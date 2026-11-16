@@ -89,6 +89,7 @@ pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
                 *scroll_delta,
                 comments,
                 *comments_loaded,
+                app.verification.as_ref().filter(|(id, _)| *id == entry.id).map(|(_, v)| v),
                 *comment_entry_requested,
                 *lightbox,
                 *data_prompt,
@@ -104,6 +105,7 @@ pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
                 *detail_focus,
                 app.report_modal,
                 app.report_choice,
+                app.verify_modal.as_ref(),
                 app.is_dimmed(),
             )
         }
@@ -132,6 +134,7 @@ pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
                     auth_form: &app.auth_form,
                     auth_busy: app.auth_busy,
                     auth_status: app.auth_status_message.as_ref(),
+                    verifier_status: app.verifier_status.as_deref(),
                     appear,
                 },
             ));

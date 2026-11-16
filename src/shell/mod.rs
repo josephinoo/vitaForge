@@ -179,6 +179,9 @@ pub fn run(mut app: App) -> Result<()> {
                         TextTarget::AuthUsername | TextTarget::AuthPassword | TextTarget::AuthEmail => {
                             app.handle_command(AppCommand::SubmitAuthInput(text))?;
                         }
+                        TextTarget::VerifyScore | TextTarget::VerifyNote => {
+                            app.handle_command(AppCommand::SubmitVerifyText(text))?;
+                        }
                     },
                     ime::ImeResult::Canceled if session.target == TextTarget::Search => {
                         app.handle_command(AppCommand::SetSearchQuery(session.query_before))?;
@@ -193,6 +196,7 @@ pub fn run(mut app: App) -> Result<()> {
                     TextTarget::AuthUsername | TextTarget::AuthPassword | TextTarget::AuthEmail => {
                         app.handle_command(AppCommand::CloseAuthInput)?
                     }
+                    TextTarget::VerifyScore | TextTarget::VerifyNote => app.handle_command(AppCommand::CloseVerifyEntry)?,
                 }
                 held_direction = None;
                 held_since = Instant::now();
@@ -264,6 +268,8 @@ pub fn run(mut app: App) -> Result<()> {
         } else if app.profile_rename.is_some() {
             Some(TextTarget::ProfileName)
         } else if let Some(target) = app.auth_input_target {
+            Some(target)
+        } else if let Some(target) = app.verify_entry {
             Some(target)
         } else {
             None
@@ -355,6 +361,8 @@ pub fn run(mut app: App) -> Result<()> {
                 TextTarget::AuthUsername => ime::ImePurpose::AuthUsername,
                 TextTarget::AuthPassword => ime::ImePurpose::AuthPassword,
                 TextTarget::AuthEmail => ime::ImePurpose::AuthEmail,
+                TextTarget::VerifyScore => ime::ImePurpose::VerifyScore,
+                TextTarget::VerifyNote => ime::ImePurpose::VerifyNote,
             };
             let query_before = match &app.state {
                 crate::app::AppState::Catalog(catalog) => catalog.search_query.clone(),
@@ -377,6 +385,14 @@ pub fn run(mut app: App) -> Result<()> {
                     initial_string = app.auth_form.email.clone();
                     initial_string.as_str()
                 }
+                TextTarget::VerifyScore => {
+                    initial_string = app.verify_modal.as_ref().map(|d| d.score.clone()).unwrap_or_default();
+                    initial_string.as_str()
+                }
+                TextTarget::VerifyNote => {
+                    initial_string = app.verify_modal.as_ref().map(|d| d.note.clone()).unwrap_or_default();
+                    initial_string.as_str()
+                }
             };
             if ime::open(&video, surface.window(), purpose, initial) {
                 ime = Some(ImeSession {
@@ -393,6 +409,7 @@ pub fn run(mut app: App) -> Result<()> {
                     TextTarget::AuthUsername | TextTarget::AuthPassword | TextTarget::AuthEmail => {
                         app.handle_command(AppCommand::CloseAuthInput)?
                     }
+                    TextTarget::VerifyScore | TextTarget::VerifyNote => app.handle_command(AppCommand::CloseVerifyEntry)?,
                 }
             }
         }

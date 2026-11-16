@@ -10,6 +10,9 @@ pub struct AuthSession {
     pub user_id: i64,
     pub username: String,
     pub token: String,
+    /// Server role at login ("verifier", "admin", ...); empty on sessions saved by older builds.
+    #[serde(default)]
+    pub role: String,
 }
 
 static CURRENT_AUTH: RwLock<Option<AuthSession>> = RwLock::new(None);
@@ -50,6 +53,11 @@ pub fn token() -> Option<String> {
 
 pub fn username() -> Option<String> {
     current().map(|s| s.username)
+}
+
+/// UI-only gate: the server re-checks the role on every PUT.
+pub fn is_verifier() -> bool {
+    current().is_some_and(|s| matches!(s.role.as_str(), "verifier" | "moderator" | "admin"))
 }
 
 pub fn is_logged_in() -> bool {

@@ -139,6 +139,26 @@ credits-body =
     psvt.ovh (redsquirrel87) — archivio PSVita Custom Themes, fonte della scheda Themes: https://psvt.ovh/
 
 add-comment = + Aggiungi commento
+reply-comment = Rispondi
+verify-add = Aggiungi verifica
+verify-score-field = Punteggio (0-100)
+verify-saved = Punteggio salvato: %n/100
+verify-failed = Impossibile salvare il punteggio
+verify-note-field = Commento (facoltativo)
+verify-yours = La tua verifica
+ago-now = adesso
+ago-min = %n min fa
+ago-hour = %n h fa
+ago-day = %n g fa
+tab-community = Community
+tab-verified = Verificati
+game-score = Punteggio
+verify-button = Verifica
+verify-submit = Invia
+verify-installs = Si installa
+verify-works = Funziona
+verifiers-count = verificatori
+no-verified-comments = Ancora nessun commento dei verificatori.
 btn-back = Indietro
 btn-category = Categorie
 btn-clear = Cancella
@@ -363,3 +383,15 @@ auth-switch-to-register = Non hai un account? Registrati
 auth-switch-to-register-hint = Passa al modulo di registrazione
 auth-error-empty = Inserisci nome utente e password
 auth-logged-out = Disconnesso con successo
+
+# Game Verifier application
+verifier-title = Diventa verificatore di giochi
+verifier-desc = I verificatori inviano punteggi e valutazioni di compatibilità. Un amministratore esamina ogni richiesta.
+verifier-status = Stato
+verifier-status-loading = Caricamento…
+verifier-status-none = Non richiesto
+verifier-status-pending = In attesa
+verifier-status-approved = Approvata
+verifier-status-rejected = Rifiutata
+verifier-status-unavailable = Non disponibile
+verifier-apply = Candidati come verificatore

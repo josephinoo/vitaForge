@@ -7,6 +7,8 @@ pub enum ImePurpose {
     AuthUsername,
     AuthPassword,
     AuthEmail,
+    VerifyScore,
+    VerifyNote,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

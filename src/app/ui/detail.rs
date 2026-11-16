@@ -22,6 +22,7 @@ pub(crate) fn detail_screen(
     scroll_delta: f32,
     comments: &[crate::data::api::Comment],
     comments_loaded: bool,
+    verification: Option<&crate::data::api::Verification>,
     comment_entry_requested: bool,
     lightbox: Option<usize>,
     data_prompt: bool,
@@ -34,6 +35,7 @@ pub(crate) fn detail_screen(
     detail_focus: DetailFocus,
     report_modal: Option<usize>,
     report_choice: usize,
+    verify_modal: Option<&crate::app::VerifyDraft>,
     dimmed: bool,
 ) -> Vec<AppCommand> {
     let mut commands = Vec::new();
@@ -115,6 +117,9 @@ pub(crate) fn detail_screen(
 
     if let Some(focus) = report_modal {
         report_modal_ui(ctx, lang, focus, report_choice, &mut commands);
+    }
+    if let Some(draft) = verify_modal {
+        verify_modal_ui(ctx, lang, draft, &mut commands);
     }
 
     if uninstall_prompt {
@@ -289,6 +294,7 @@ pub(crate) fn detail_screen(
                                     install,
                                     report_notice,
                                     detail_focus,
+                                    verification,
                                     &mut commands,
                                 );
                             },
@@ -420,47 +426,197 @@ pub(crate) fn detail_screen(
                         });
                     });
                     ui.add_space(8.0);
+                    // Tab state is UI-local: Community first, resets with the egui memory.
+                    let tab_id = egui::Id::new("comment_tab_verified");
+                    let mut verified_tab: bool = ui.data(|d| d.get_temp(tab_id)).unwrap_or(false);
+                    ui.horizontal(|ui| {
+                        if pill_button(ui, lang.tab_community(), !verified_tab) {
+                            verified_tab = false;
+                        }
+                        if pill_button(ui, lang.tab_verified(), verified_tab) {
+                            verified_tab = true;
+                        }
+                    });
+                    ui.data_mut(|d| d.insert_temp(tab_id, verified_tab));
+                    ui.add_space(8.0);
+                    if verified_tab {
+                        egui::Frame::NONE
+                            .fill(glass(pal().bg_header))
+                            .corner_radius(RADIUS_MD)
+                            .stroke(egui::Stroke::new(1.0_f32, pal().glass_edge))
+                            .inner_margin(12.0)
+                            .show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                if let Some(v) = verification {
+                                    ui.horizontal(|ui| {
+                                        ui.label(
+                                            egui::RichText::new(if v.count > 0 { format!("{:.0}", v.average_score) } else { "-".to_owned() })
+                                                .size(FONT_TITLE)
+                                                .strong()
+                                                .color(pal().text),
+                                        );
+                                        ui.vertical(|ui| {
+                                            ui.label(egui::RichText::new(format!("{} /100", lang.game_score())).size(FONT_SMALL).color(pal().text_faint));
+                                            ui.label(
+                                                egui::RichText::new(format!(
+                                                    "{} {}  |  {} {}/{}  |  {} {}/{}",
+                                                    v.count,
+                                                    lang.verifiers_count(),
+                                                    lang.verify_installs(),
+                                                    v.installs_ok_count,
+                                                    v.count,
+                                                    lang.verify_works(),
+                                                    v.works_ok_count,
+                                                    v.count,
+                                                ))
+                                                .size(FONT_SMALL)
+                                                .color(pal().text),
+                                            );
+                                        });
+                                    });
+                                }
+                                // Only a logged-in verifier sees the form; the server enforces the role again.
+                                if verification.is_some_and(|v| v.can_verify) || crate::data::auth::is_verifier() {
+                                    ui.add_space(8.0);
+                                    ui.horizontal(|ui| {
+                                        if let Some(m) = verification.and_then(|v| v.mine.as_ref()) {
+                                            ui.label(
+                                                egui::RichText::new(format!("{}: {}/100", lang.verify_yours(), m.score))
+                                                    .size(FONT_SMALL)
+                                                    .color(pal().text_dim),
+                                            );
+                                        }
+                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                            if pill_button(ui, lang.verify_add(), true) {
+                                                commands.push(AppCommand::OpenVerifyModal);
+                                            }
+                                        });
+                                    });
+                                }
+                            });
+                        ui.add_space(8.0);
+                    }
                     if !comments_loaded {
                         ui.label(
                             egui::RichText::new(lang.loading_comments())
                                 .size(FONT_SMALL)
                                 .color(pal().text_faint),
                         );
-                    } else if comments.is_empty() {
+                    } else if comments.is_empty() && !verified_tab {
                         ui.label(
                             egui::RichText::new(lang.no_comments_yet())
                                 .size(FONT_SMALL)
                                 .color(pal().text_faint),
                         );
                     } else {
-                        for comment in comments {
-                            egui::Frame::NONE
-                                .fill(glass(pal().bg_header))
-                                .corner_radius(RADIUS_MD)
-                                .stroke(egui::Stroke::new(1.0_f32, pal().glass_edge))
-                                .inner_margin(10.0)
-                                .show(ui, |ui| {
-                                    ui.vertical(|ui| {
-                                        ui.horizontal(|ui| {
-                                            ui.spacing_mut().item_spacing.x = 4.0;
-                                            let (icon_rect, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
-                                            crate::app::ui::chrome_icons::paint(ui, crate::app::ui::chrome_icons::ChromeIcon::User, icon_rect, pal().accent_soft);
-                                            ui.label(
-                                                egui::RichText::new(&comment.author_name)
-                                                    .size(FONT_SMALL)
-                                                    .strong()
-                                                    .color(pal().accent_soft),
-                                            );
+                        // Two levels: top-level comments, each followed by its replies (server order, newest first).
+                        let mut rows: Vec<(&crate::data::api::Comment, bool)> = Vec::new();
+                        for top in comments.iter().filter(|c| c.parent_id.is_none() && c.verified == verified_tab) {
+                            rows.push((top, false));
+                            rows.extend(
+                                comments
+                                    .iter()
+                                    .rev()
+                                    .filter(|c| !top.id.is_empty() && c.parent_id.as_deref() == Some(top.id.as_str()))
+                                    .map(|c| (c, true)),
+                            );
+                        }
+                        if rows.is_empty() {
+                            ui.label(
+                                egui::RichText::new(if verified_tab { lang.no_verified_comments() } else { lang.no_comments_yet() })
+                                    .size(FONT_SMALL)
+                                    .color(pal().text_faint),
+                            );
+                        }
+                        // Thread line: from the parent's avatar down and into each reply's avatar.
+                        let mut parent_anchor: Option<egui::Pos2> = None;
+                        const AVATARS: [egui::Color32; 6] = [
+                            egui::Color32::from_rgb(59, 130, 246),
+                            egui::Color32::from_rgb(168, 85, 247),
+                            egui::Color32::from_rgb(236, 72, 153),
+                            egui::Color32::from_rgb(249, 115, 22),
+                            egui::Color32::from_rgb(20, 184, 166),
+                            egui::Color32::from_rgb(234, 179, 8),
+                        ];
+                        for (comment, is_reply) in rows {
+                            let avatar = if is_reply { 30.0 } else { 36.0 };
+                            let hue = AVATARS[comment.author_name.bytes().fold(0usize, |a, b| a.wrapping_add(b as usize)) % AVATARS.len()];
+                            ui.horizontal_top(|ui| {
+                                ui.spacing_mut().item_spacing.x = 10.0;
+                                if is_reply {
+                                    ui.add_space(46.0);
+                                }
+                                let (rect, _) = ui.allocate_exact_size(egui::vec2(avatar, avatar), egui::Sense::hover());
+                                ui.painter().circle_filled(rect.center(), avatar / 2.0, hue);
+                                ui.painter().text(
+                                    rect.center(),
+                                    egui::Align2::CENTER_CENTER,
+                                    comment.author_name.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_default(),
+                                    egui::FontId::proportional(avatar * 0.5),
+                                    egui::Color32::WHITE,
+                                );
+                                if is_reply {
+                                    if let Some(from) = parent_anchor {
+                                        let end = egui::pos2(rect.left() - 2.0, rect.center().y);
+                                        let r = 10.0;
+                                        let stroke = egui::Stroke::new(1.5_f32, pal().glass_edge);
+                                        let corner = egui::pos2(from.x, end.y);
+                                        ui.painter().line_segment([from, egui::pos2(from.x, end.y - r)], stroke);
+                                        ui.painter().line_segment([egui::pos2(corner.x + r, end.y), end], stroke);
+                                        ui.painter().line_segment([egui::pos2(from.x, end.y - r), egui::pos2(corner.x + r, end.y)], stroke);
+                                    }
+                                } else {
+                                    parent_anchor = Some(egui::pos2(rect.center().x, rect.bottom() + 2.0));
+                                }
+                                ui.vertical(|ui| {
+                                    egui::Frame::NONE
+                                        .fill(glass(pal().bg_header))
+                                        .corner_radius(16.0)
+                                        .inner_margin(egui::Margin::symmetric(14, 8))
+                                        .show(ui, |ui| {
+                                            ui.set_width((ui.available_width() - 4.0).max(80.0));
+                                            ui.horizontal(|ui| {
+                                                ui.label(
+                                                    egui::RichText::new(&comment.author_name)
+                                                        .size(FONT_BODY)
+                                                        .strong()
+                                                        .color(pal().text),
+                                                );
+                                                if let Some(secs) = crate::data::api::age_secs(&comment.created_at) {
+                                                    let ago = if secs < 60 {
+                                                        lang.ago_now().to_owned()
+                                                    } else if secs < 3600 {
+                                                        lang.ago_min().replace("%n", &(secs / 60).to_string())
+                                                    } else if secs < 86400 {
+                                                        lang.ago_hour().replace("%n", &(secs / 3600).to_string())
+                                                    } else {
+                                                        lang.ago_day().replace("%n", &(secs / 86400).to_string())
+                                                    };
+                                                    ui.label(egui::RichText::new(ago).size(FONT_SMALL).color(pal().text_faint));
+                                                }
+                                            });
+                                            ui.label(egui::RichText::new(&comment.content).size(FONT_BODY).color(pal().text));
+                                            // Replies of replies are rejected by the server; an id-less comment is not posted yet.
+                                            if !is_reply && !comment.id.is_empty() && !comment_entry_requested {
+                                                ui.add_space(4.0);
+                                                if ui
+                                                    .add(
+                                                        egui::Button::new(
+                                                            egui::RichText::new(lang.reply_comment()).size(FONT_SMALL).color(pal().accent_soft),
+                                                        )
+                                                        .fill(egui::Color32::TRANSPARENT)
+                                                        .stroke(egui::Stroke::new(1.0_f32, pal().accent_soft))
+                                                        .corner_radius(14.0),
+                                                    )
+                                                    .clicked()
+                                                {
+                                                    commands.push(AppCommand::RequestCommentReply(comment.id.clone()));
+                                                }
+                                            }
                                         });
-                                        ui.add_space(2.0);
-                                        ui.label(
-                                            egui::RichText::new(&comment.content)
-                                                .size(FONT_BODY)
-                                                .color(pal().text),
-                                        );
-                                    });
                                 });
-                            ui.add_space(6.0);
+                            });
+                            ui.add_space(8.0);
                         }
                     }
                     ui.add_space(20.0);
@@ -584,6 +740,69 @@ fn report_modal_ui(ctx: &egui::Context, lang: Language, focus: usize, choice: us
                         }
                         if report_button(ui, egui::vec2(112.0, REPORT_BTN_H), &lang.tr("bugreport-submit"), false, focus == submit, true) {
                             commands.push(AppCommand::ReportSubmit);
+                        }
+                    });
+                });
+        });
+}
+
+/// Field button: caption on the left, current value (or a placeholder) filling the rest.
+fn verify_field(ui: &mut egui::Ui, caption: &str, value: &str, focused: bool) -> bool {
+    let size = egui::vec2(ui.available_width(), 38.0);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    let fill = if response.hovered() { pal().bg_card_hover } else { pal().bg_deep };
+    ui.painter().rect_filled(rect, RADIUS_MD, fill);
+    let edge = if focused { pal().focus } else { pal().glass_edge };
+    ui.painter().rect_stroke(rect, RADIUS_MD, egui::Stroke::new(if focused { FOCUS_STROKE } else { 1.0 }, edge), egui::StrokeKind::Inside);
+    ui.painter().text(rect.left_center() + egui::vec2(12.0, 0.0), egui::Align2::LEFT_CENTER, caption, font(FONT_SMALL), pal().text_faint);
+    let shown = if value.is_empty() { "-" } else { value };
+    let clipped: String = shown.chars().take(28).collect();
+    ui.painter().text(rect.right_center() - egui::vec2(12.0, 0.0), egui::Align2::RIGHT_CENTER, clipped, font(FONT_BODY), pal().text);
+    response.clicked()
+}
+
+/// Verifier modal: score typed as a whole number, installs/works toggles, optional comment.
+/// Rows match `App::handle_verify_modal`: 0 score, 1 note, 2 installs, 3 works, 4 cancel, 5 submit.
+fn verify_modal_ui(ctx: &egui::Context, lang: Language, draft: &crate::app::VerifyDraft, commands: &mut Vec<AppCommand>) {
+    egui::Area::new(egui::Id::new("verify_modal"))
+        .order(egui::Order::Foreground)
+        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+        .show(ctx, |ui| {
+            egui::Frame::window(&ctx.style())
+                .fill(glass_modal(pal().bg_card))
+                .stroke(egui::Stroke::new(1.5_f32, pal().accent_soft))
+                .corner_radius(RADIUS_LG)
+                .inner_margin(egui::vec2(20.0, 14.0))
+                .show(ui, |ui| {
+                    ui.set_width(420.0);
+                    ui.vertical_centered(|ui| {
+                        ui.label(egui::RichText::new(lang.verify_add()).size(FONT_LARGE).strong().color(pal().text));
+                    });
+                    ui.add_space(10.0);
+                    ui.spacing_mut().item_spacing.y = 8.0;
+                    if verify_field(ui, lang.verify_score_field(), &draft.score, draft.focus == 0) {
+                        commands.push(AppCommand::VerifyActivate(0));
+                    }
+                    if verify_field(ui, lang.verify_note_field(), &draft.note, draft.focus == 1) {
+                        commands.push(AppCommand::VerifyActivate(1));
+                    }
+                    ui.horizontal(|ui| {
+                        let half = (ui.available_width() - 8.0) / 2.0;
+                        if report_button(ui, egui::vec2(half, REPORT_BTN_H), lang.verify_installs(), draft.installs, draft.focus == 2, false) {
+                            commands.push(AppCommand::VerifyActivate(2));
+                        }
+                        if report_button(ui, egui::vec2(half, REPORT_BTN_H), lang.verify_works(), draft.works, draft.focus == 3, false) {
+                            commands.push(AppCommand::VerifyActivate(3));
+                        }
+                    });
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.add_space(ui.available_width() - 2.0 * 112.0 - 8.0);
+                        if report_button(ui, egui::vec2(112.0, REPORT_BTN_H), &lang.cancel_btn().to_uppercase(), false, draft.focus == 4, false) {
+                            commands.push(AppCommand::VerifyActivate(4));
+                        }
+                        if report_button(ui, egui::vec2(112.0, REPORT_BTN_H), &lang.verify_submit().to_uppercase(), false, draft.focus == 5, true) {
+                            commands.push(AppCommand::VerifyActivate(5));
                         }
                     });
                 });
@@ -1138,7 +1357,7 @@ fn short_count(n: u64) -> String {
     }
 }
 
-fn stats_row(ui: &mut egui::Ui, lang: Language, entry: &crate::data::AppEntry) {
+fn stats_row(ui: &mut egui::Ui, lang: Language, entry: &crate::data::AppEntry, verification: Option<&crate::data::api::Verification>) {
     let version = if entry.version.trim().is_empty() {
         "-".to_owned()
     } else {
@@ -1157,11 +1376,16 @@ fn stats_row(ui: &mut egui::Ui, lang: Language, entry: &crate::data::AppEntry) {
     } else {
         (lang.size().to_owned(), pal().text)
     };
-    let cells: [(&str, String, egui::Color32); 3] = [
+    let mut cells: Vec<(&str, String, egui::Color32)> = vec![
         (&dl_count, lang.downloads().to_owned(), pal().text),
         (&size_label, size_cap, size_color),
         (&version, lang.version().to_owned(), pal().text),
     ];
+    // Average of the verifiers' scores, only once someone has verified.
+    let score_label = verification.filter(|v| v.count > 0).map(|v| format!("{:.0}", v.average_score));
+    if let Some(label) = &score_label {
+        cells.push((label, lang.game_score().to_owned(), pal().success));
+    }
     let width = ui.available_width();
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 34.0), egui::Sense::hover());
     let cell_w = width / cells.len() as f32;
@@ -1376,6 +1600,7 @@ fn left_column(
     install: Option<&crate::install::Progress>,
     report_notice: Option<&str>,
     detail_focus: DetailFocus,
+    verification: Option<&crate::data::api::Verification>,
     commands: &mut Vec<AppCommand>,
 ) {
     ui.vertical_centered(|ui| {
@@ -1478,7 +1703,7 @@ fn left_column(
         });
     });
     ui.add_space(12.0);
-    stats_row(ui, lang, entry);
+    stats_row(ui, lang, entry, verification);
     ui.add_space(12.0);
     // A running install is represented by the modal above the detail view.
     // Do not replace this action with a progress bar in the background.

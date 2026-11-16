@@ -33,6 +33,8 @@ pub enum TextTarget {
     AuthUsername,
     AuthPassword,
     AuthEmail,
+    VerifyScore,
+    VerifyNote,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DetailFocus {
@@ -166,6 +168,14 @@ pub enum AppCommand {
     ToggleLike,
     RateCurrent(u8),
     RequestCommentEntry,
+    RequestCommentReply(String),
+    OpenVerifyModal,
+    /// Touch on a modal row, or Cross on the focused one.
+    VerifyActivate(usize),
+    CloseVerifyModal,
+    SubmitVerifyText(String),
+    CloseVerifyEntry,
+    SubmitVerification { score: i16, installs_ok: bool, works_ok: bool, note: String },
     RequestReport,
     ReportPick(usize),
     CloseReport,
@@ -182,6 +192,7 @@ pub enum AppCommand {
     AuthToggleMode,
     AuthSubmit,
     AuthLogout,
+    VerifierApply,
     SelfUpdate,
     LaunchCurrent,
     UninstallCurrent,

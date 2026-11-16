@@ -255,6 +255,60 @@ impl Language {
     pub fn comments(self) -> &'static str {
         self.strings(|s| s.comments)
     }
+    pub fn tab_community(self) -> &'static str {
+        self.strings(|s| s.tab_community)
+    }
+    pub fn tab_verified(self) -> &'static str {
+        self.strings(|s| s.tab_verified)
+    }
+    pub fn game_score(self) -> &'static str {
+        self.strings(|s| s.game_score)
+    }
+    pub fn verify_button(self) -> &'static str {
+        self.strings(|s| s.verify_button)
+    }
+    pub fn verify_submit(self) -> &'static str {
+        self.strings(|s| s.verify_submit)
+    }
+    pub fn verify_installs(self) -> &'static str {
+        self.strings(|s| s.verify_installs)
+    }
+    pub fn verify_works(self) -> &'static str {
+        self.strings(|s| s.verify_works)
+    }
+    pub fn verifiers_count(self) -> &'static str {
+        self.strings(|s| s.verifiers_count)
+    }
+    pub fn no_verified_comments(self) -> &'static str {
+        self.strings(|s| s.no_verified_comments)
+    }
+    pub fn ago_now(self) -> &'static str {
+        self.strings(|s| s.ago_now)
+    }
+    pub fn ago_min(self) -> &'static str {
+        self.strings(|s| s.ago_min)
+    }
+    pub fn ago_hour(self) -> &'static str {
+        self.strings(|s| s.ago_hour)
+    }
+    pub fn ago_day(self) -> &'static str {
+        self.strings(|s| s.ago_day)
+    }
+    pub fn verify_add(self) -> &'static str {
+        self.strings(|s| s.verify_add)
+    }
+    pub fn verify_score_field(self) -> &'static str {
+        self.strings(|s| s.verify_score_field)
+    }
+    pub fn verify_note_field(self) -> &'static str {
+        self.strings(|s| s.verify_note_field)
+    }
+    pub fn verify_yours(self) -> &'static str {
+        self.strings(|s| s.verify_yours)
+    }
+    pub fn reply_comment(self) -> &'static str {
+        self.strings(|s| s.reply_comment)
+    }
     pub fn add_comment(self) -> &'static str {
         self.strings(|s| s.add_comment)
     }
@@ -815,6 +869,24 @@ struct LocalizedStrings {
     ratings_count: &'static str,
     comments: &'static str,
     add_comment: &'static str,
+    ago_now: &'static str,
+    ago_min: &'static str,
+    ago_hour: &'static str,
+    ago_day: &'static str,
+    verify_add: &'static str,
+    verify_score_field: &'static str,
+    verify_note_field: &'static str,
+    verify_yours: &'static str,
+    reply_comment: &'static str,
+    no_verified_comments: &'static str,
+    tab_community: &'static str,
+    tab_verified: &'static str,
+    game_score: &'static str,
+    verify_button: &'static str,
+    verify_submit: &'static str,
+    verify_installs: &'static str,
+    verify_works: &'static str,
+    verifiers_count: &'static str,
     loading_comments: &'static str,
     no_comments_yet: &'static str,
     back: &'static str,
@@ -989,6 +1061,24 @@ impl LocalizedStrings {
             ratings_count: r("ratings-count"),
             comments: r("comments-label"),
             add_comment: r("add-comment"),
+            ago_now: r("ago-now"),
+            ago_min: r("ago-min"),
+            ago_hour: r("ago-hour"),
+            ago_day: r("ago-day"),
+            verify_add: r("verify-add"),
+            verify_score_field: r("verify-score-field"),
+            verify_note_field: r("verify-note-field"),
+            verify_yours: r("verify-yours"),
+            reply_comment: r("reply-comment"),
+            no_verified_comments: r("no-verified-comments"),
+            tab_community: r("tab-community"),
+            tab_verified: r("tab-verified"),
+            game_score: r("game-score"),
+            verify_button: r("verify-button"),
+            verify_submit: r("verify-submit"),
+            verify_installs: r("verify-installs"),
+            verify_works: r("verify-works"),
+            verifiers_count: r("verifiers-count"),
             loading_comments: r("loading-comments"),
             no_comments_yet: r("no-comments-yet"),
             back: r("back-label"),

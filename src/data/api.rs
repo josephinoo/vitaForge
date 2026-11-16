@@ -1,7 +1,8 @@
 use super::client_id;
 use super::{AppEntry, Category, Platform};
 use serde::{Deserialize, Deserializer};
-const DEFAULT_API_URL: &str = "https://vitaforge.josephinoo.dev/api/v1";
+// The real server URL comes from SERVER_URL (.env, git-ignored) at build time; none lives in the source.
+const DEFAULT_API_URL: &str = "http://127.0.0.1:3000/api/v1";
 pub fn api_url() -> &'static str {
     option_env!("SERVER_URL").unwrap_or(DEFAULT_API_URL)
 }
@@ -431,8 +432,33 @@ impl RawApp {
 }
 #[derive(Debug, Clone, Deserialize)]
 pub struct Comment {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub parent_id: Option<String>,
+    #[serde(default)]
+    pub verified: bool,
     pub author_name: String,
     pub content: String,
+    /// RFC 3339 UTC from the server; empty for a comment just posted locally.
+    #[serde(default)]
+    pub created_at: String,
+}
+
+/// Seconds since now for an RFC 3339 UTC stamp (`2026-11-15T13:20:22.8Z`); None if unparsable.
+pub fn age_secs(stamp: &str) -> Option<u64> {
+    let n = |r: std::ops::Range<usize>| stamp.get(r)?.parse::<i64>().ok();
+    let (y, m, d, h, mi, s) = (n(0..4)?, n(5..7)?, n(8..10)?, n(11..13)?, n(14..16)?, n(17..19)?);
+    // days-from-civil (Howard Hinnant)
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146097 + doe - 719468;
+    let then = days * 86400 + h * 3600 + mi * 60 + s;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?.as_secs() as i64;
+    Some((now - then).max(0) as u64)
 }
 fn request(method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
     let mut req = crate::net::client().request(method, endpoint(path)).header("X-Client-ID", client_id::get());
@@ -639,13 +665,79 @@ pub async fn fetch_comments(app_id: &str) -> anyhow::Result<Vec<Comment>> {
     }
     Ok(comments)
 }
-pub async fn post_comment(app_id: &str, author_name: &str, content: &str) -> anyhow::Result<()> {
-    request(reqwest::Method::POST, &format!("/apps/{app_id}/comments"))
-        .json(&serde_json::json!({ "author_name": author_name, "content": content }))
+#[derive(Debug, Clone, Deserialize)]
+pub struct Verification {
+    pub average_score: f64,
+    pub count: i64,
+    pub installs_ok_count: i64,
+    pub works_ok_count: i64,
+    #[serde(default)]
+    pub mine: Option<MyVerification>,
+    /// Server-side role check for this session; stays correct when a saved login predates the role field.
+    #[serde(default)]
+    pub can_verify: bool,
+}
+#[derive(Debug, Clone, Deserialize)]
+pub struct MyVerification {
+    pub installs_ok: bool,
+    pub works_ok: bool,
+    pub score: i16,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+pub async fn fetch_verification(app_id: &str) -> anyhow::Result<Verification> {
+    Ok(request(reqwest::Method::GET, &format!("/apps/{app_id}/verification")).send().await?.error_for_status()?.json().await?)
+}
+pub async fn put_verification(app_id: &str, score: i16, installs_ok: bool, works_ok: bool, note: &str) -> anyhow::Result<()> {
+    request(reqwest::Method::PUT, &format!("/apps/{app_id}/verification"))
+        .json(&serde_json::json!({ "score": score, "installs_ok": installs_ok, "works_ok": works_ok, "note": (!note.is_empty()).then_some(note) }))
         .send()
         .await?
         .error_for_status()?;
     Ok(())
+}
+pub async fn post_comment(app_id: &str, author_name: &str, content: &str, parent_id: Option<&str>) -> anyhow::Result<()> {
+    request(reqwest::Method::POST, &format!("/apps/{app_id}/comments"))
+        .json(&serde_json::json!({ "author_name": author_name, "content": content, "parent_id": parent_id }))
+        .send()
+        .await?
+        .error_for_status()?;
+    Ok(())
+}
+
+/// Verifier application status of the logged-in user:
+/// `not_applied` | `pending` | `approved` | `rejected`.
+pub async fn verifier_application_status() -> anyhow::Result<String> {
+    #[derive(Deserialize)]
+    struct S {
+        status: String,
+    }
+    let s: S = request(reqwest::Method::GET, "/me/verifier-application")
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    Ok(s.status)
+}
+
+/// Submits a verifier application; the admin decides. Returns the new status (`pending`).
+pub async fn apply_verifier() -> anyhow::Result<String> {
+    let resp = request(reqwest::Method::POST, "/me/verifier-application")
+        .json(&serde_json::json!({}))
+        .send()
+        .await?;
+    let status = resp.status();
+    if !status.is_success() {
+        #[derive(Deserialize)]
+        struct ErrResp {
+            #[serde(default)]
+            error: String,
+        }
+        let msg = resp.json::<ErrResp>().await.map(|e| e.error).unwrap_or_else(|_| format!("HTTP {status}"));
+        anyhow::bail!("{msg}");
+    }
+    Ok("pending".to_owned())
 }
 
 fn auth_endpoint(path: &str) -> String {
@@ -710,6 +802,7 @@ pub async fn login_user(username: &str, password: &str) -> anyhow::Result<super:
         user_id: auth_data.id,
         username: auth_data.username,
         token,
+        role: auth_data.role,
     };
     super::auth::save(session.clone());
     Ok(session)
@@ -765,6 +858,7 @@ pub async fn register_user(username: &str, password: &str, email: Option<&str>) 
         user_id: auth_data.id,
         username: auth_data.username,
         token,
+        role: auth_data.role,
     };
     super::auth::save(session.clone());
     Ok(session)
@@ -875,6 +969,14 @@ pub async fn fetch_discover_rails(source: Option<&str>) -> (Vec<String>, Vec<Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn age_secs_parses_rfc3339() {
+        // 2020-01-01T00:00:00Z is 1577836800; anything parsed must be far in the past, garbage is None.
+        let secs = age_secs("2020-01-01T00:00:00.123Z").unwrap();
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        assert!(secs.abs_diff(now - 1_577_836_800) <= 2);
+        assert!(age_secs("").is_none() && age_secs("nope").is_none());
+    }
     fn parse(json: &str) -> AppEntry {
         serde_json::from_str::<RawApp>(json).unwrap().into_app_entry().unwrap()
     }

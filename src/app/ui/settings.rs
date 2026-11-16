@@ -26,6 +26,7 @@ pub enum Row {
     AccountSubmit,
     AccountToggleMode,
     AccountLogout,
+    AccountVerifier,
     Language,
     Notifications,
     SoundEffects,
@@ -68,6 +69,7 @@ pub const SECTIONS: [(Section, &[Row]); 6] = [
             Row::AccountSubmit,
             Row::AccountToggleMode,
             Row::AccountLogout,
+            Row::AccountVerifier,
         ],
     ),
     (Section::General, &[Row::Language, Row::Notifications, Row::SoundEffects]),
@@ -206,6 +208,7 @@ pub(crate) struct SettingsView<'a> {
     pub auth_form: &'a crate::app::AuthForm,
     pub auth_busy: bool,
     pub auth_status: Option<&'a (String, bool)>,
+    pub verifier_status: Option<&'a str>,
     pub appear: f32,
 }
 
@@ -626,6 +629,8 @@ fn account_section(ui: &mut egui::Ui, view: &SettingsView, commands: &mut Vec<Ap
         if response.clicked() {
             commands.push(AppCommand::AuthLogout);
         }
+
+        verifier_card(ui, view, commands);
     } else {
         // Form: username, password, email (if register), submit button, toggle mode
         let form = view.auth_form;
@@ -696,6 +701,35 @@ fn account_section(ui: &mut egui::Ui, view: &SettingsView, commands: &mut Vec<Ap
         };
         if auth_link_row(ui, ChromeIcon::User, &toggle_title, focused_t) {
             commands.push(AppCommand::AuthToggleMode);
+        }
+    }
+}
+
+/// "Become a Game Verifier": status plus the apply button (only while applying makes sense).
+fn verifier_card(ui: &mut egui::Ui, view: &SettingsView, commands: &mut Vec<AppCommand>) {
+    let lang = view.lang;
+    let status = view.verifier_status;
+    ui.add_space(12.0);
+    section_title(ui, &lang.tr("verifier-title"));
+    glyph_text(ui, &lang.tr("verifier-desc"), FONT_SMALL, pal().text_faint, false);
+    ui.add_space(6.0);
+    let (key, color) = match status {
+        Some("pending") => ("verifier-status-pending", pal().text_dim),
+        Some("approved") => ("verifier-status-approved", pal().success),
+        Some("rejected") => ("verifier-status-rejected", pal().danger),
+        Some("not_applied") => ("verifier-status-none", pal().text_dim),
+        Some(_) => ("verifier-status-unavailable", pal().danger),
+        None => ("verifier-status-loading", pal().text_dim),
+    };
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(lang.tr("verifier-status")).size(FONT_SMALL).color(pal().text_dim));
+        pill(ui, &lang.tr(key), color, None);
+    });
+    if matches!(status, Some("not_applied" | "rejected")) {
+        ui.add_space(8.0);
+        let focused = !view.nav.rail && view.nav.row == 7; // AccountVerifier row index
+        if auth_button_row(ui, &lang.tr("verifier-apply"), Some(ChromeIcon::Check), false, focused) {
+            commands.push(AppCommand::VerifierApply);
         }
     }
 }
@@ -1407,6 +1441,7 @@ mod tests {
                             auth_form: &crate::app::AuthForm::default(),
                             auth_busy: false,
                             auth_status: None,
+                            verifier_status: None,
                         },
                     );
                 });
@@ -1454,6 +1489,7 @@ mod tests {
                         auth_form: &crate::app::AuthForm::default(),
                         auth_busy: false,
                         auth_status: None,
+                        verifier_status: None,
                     });
                 });
             }
@@ -1482,6 +1518,7 @@ mod tests {
             Row::SafeMode,
             Row::MigrateConfig,
             Row::Reboot,
+            Row::AccountVerifier,
         ] {
             let homes = SECTIONS.iter().filter(|(_, rows)| rows.contains(&row)).count();
             assert_eq!(homes, 1, "{row:?}");
