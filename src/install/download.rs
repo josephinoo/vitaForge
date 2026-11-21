@@ -350,39 +350,43 @@ async fn fastest_archive_node(url: &str) -> Option<(String, Option<String>)> {
             hosts.push(host);
         }
     }
-    let mut best: Option<(f64, String)> = None;
-    for host in hosts {
-        // shortcut: plain http only when the md5 can vouch for the bytes.
-        let scheme = if md5.is_some() { "http" } else { "https" };
-        let candidate = format!("{scheme}://{host}{dir}/{file}");
-        let started = Instant::now();
-        let probe = async {
-            let resp = crate::net::client()
-                .get(&candidate)
-                .header("Range", format!("bytes=0-{}", PROBE_BYTES - 1))
-                .send()
-                .await
-                .ok()?;
-            if resp.status() != reqwest::StatusCode::PARTIAL_CONTENT {
+    // shortcut: plain http only when the md5 can vouch for the bytes.
+    let scheme = if md5.is_some() { "http" } else { "https" };
+    // Batches of 3 probes at once: more would split the Vita's bandwidth and skew the timings.
+    let (dir, file) = (&dir, &file);
+    let mut results: Vec<Option<(f64, String)>> = Vec::new();
+    for batch in hosts.chunks(3) {
+        results.extend(futures_util::future::join_all(batch.iter().map(|&host| async move {
+            let candidate = format!("{scheme}://{host}{dir}/{file}");
+            let started = Instant::now();
+            let probe = async {
+                let resp = crate::net::client()
+                    .get(&candidate)
+                    .header("Range", format!("bytes=0-{}", PROBE_BYTES - 1))
+                    .send()
+                    .await
+                    .ok()?;
+                if resp.status() != reqwest::StatusCode::PARTIAL_CONTENT {
+                    return None;
+                }
+                let mut got = 0usize;
+                let mut stream = resp.bytes_stream();
+                while let Some(chunk) = stream.next().await {
+                    got += chunk.ok()?.len();
+                }
+                (got > 0).then_some(got)
+            };
+            let Ok(Some(got)) = tokio::time::timeout(Duration::from_secs(12), probe).await else {
+                crate::install::log_file(&format!("archive node {host}: probe failed"));
                 return None;
-            }
-            let mut got = 0usize;
-            let mut stream = resp.bytes_stream();
-            while let Some(chunk) = stream.next().await {
-                got += chunk.ok()?.len();
-            }
-            (got > 0).then_some(got)
-        };
-        let Ok(Some(got)) = tokio::time::timeout(Duration::from_secs(12), probe).await else {
-            crate::install::log_file(&format!("archive node {host}: probe failed"));
-            continue;
-        };
-        let speed = got as f64 / started.elapsed().as_secs_f64().max(0.001);
-        crate::install::log_file(&format!("archive node {host}: {:.0} KB/s", speed / 1024.0));
-        if best.as_ref().is_none_or(|(s, _)| speed > *s) {
-            best = Some((speed, candidate));
-        }
+            };
+            let speed = got as f64 / started.elapsed().as_secs_f64().max(0.001);
+            crate::install::log_file(&format!("archive node {host}: {:.0} KB/s", speed / 1024.0));
+            Some((speed, candidate))
+        }))
+        .await);
     }
+    let best = results.into_iter().flatten().max_by(|a, b| a.0.total_cmp(&b.0));
     best.map(|(_, u)| (u, md5))
 }
 

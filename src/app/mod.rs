@@ -3251,7 +3251,7 @@ impl App {
             }
             AppCommand::VerifierApply => {
                 // The server enforces the rules; this only avoids pointless requests.
-                let can_apply = matches!(self.verifier_status.as_deref(), Some("not_applied" | "rejected"));
+                let can_apply = matches!(self.verifier_status.as_deref(), Some("not_applied" | "rejected" | "unavailable"));
                 if crate::data::auth::is_logged_in() && can_apply && self.verifier_rx.is_none() {
                     self.auth_status_message = None;
                     self.audio.play(crate::audio::Sfx::Activation);

@@ -711,7 +711,7 @@ fn verifier_card(ui: &mut egui::Ui, view: &SettingsView, commands: &mut Vec<AppC
     let status = view.verifier_status;
     ui.add_space(12.0);
     section_title(ui, &lang.tr("verifier-title"));
-    glyph_text(ui, &lang.tr("verifier-desc"), FONT_SMALL, pal().text_faint, false);
+    ui.add(egui::Label::new(egui::RichText::new(lang.tr("verifier-desc")).size(FONT_SMALL).color(pal().text_faint)).wrap());
     ui.add_space(6.0);
     let (key, color) = match status {
         Some("pending") => ("verifier-status-pending", pal().text_dim),
@@ -725,7 +725,7 @@ fn verifier_card(ui: &mut egui::Ui, view: &SettingsView, commands: &mut Vec<AppC
         ui.label(egui::RichText::new(lang.tr("verifier-status")).size(FONT_SMALL).color(pal().text_dim));
         pill(ui, &lang.tr(key), color, None);
     });
-    if matches!(status, Some("not_applied" | "rejected")) {
+    if matches!(status, Some("not_applied" | "rejected" | "unavailable")) {
         ui.add_space(8.0);
         let focused = !view.nav.rail && view.nav.row == 7; // AccountVerifier row index
         if auth_button_row(ui, &lang.tr("verifier-apply"), Some(ChromeIcon::Check), false, focused) {
@@ -815,20 +815,21 @@ fn auth_button_row(
         ui.painter().rect_stroke(rect.expand(2.5), radius + 2.5, egui::Stroke::new(2.0_f32, pal().focus), egui::StrokeKind::Inside);
     }
 
-    let mut center_x = rect.center().x;
+    let galley = ui.painter().layout_no_wrap(label.to_owned(), font(FONT_BODY), egui::Color32::WHITE);
+    let text_w = galley.size().x;
     if let Some(ic) = icon {
         let ic_size = 16.0;
-        let ic_rect = egui::Rect::from_center_size(egui::pos2(center_x - 38.0, rect.center().y), egui::Vec2::splat(ic_size));
+        let gap = 8.0;
+        let start_x = rect.center().x - (ic_size + gap + text_w) / 2.0;
+        let ic_rect = egui::Rect::from_center_size(egui::pos2(start_x + ic_size / 2.0, rect.center().y), egui::Vec2::splat(ic_size));
         chrome_icons::paint(ui, ic, ic_rect, egui::Color32::WHITE);
-        center_x += 8.0;
+        ui.painter().galley(egui::pos2(start_x + ic_size + gap, rect.center().y - galley.size().y / 2.0), galley, egui::Color32::WHITE);
+    } else {
+        ui.painter().galley(egui::pos2(rect.center().x - text_w / 2.0, rect.center().y - galley.size().y / 2.0), galley, egui::Color32::WHITE);
     }
-    ui.painter().text(
-        egui::pos2(center_x, rect.center().y),
-        egui::Align2::CENTER_CENTER,
-        label,
-        font(FONT_BODY),
-        egui::Color32::WHITE,
-    );
+    if focused {
+        scroll_on_focus_change(ui, &response);
+    }
 
     response.clicked()
 }
