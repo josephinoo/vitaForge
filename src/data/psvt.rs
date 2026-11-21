@@ -112,10 +112,10 @@ pub fn parse(html: &str) -> Vec<AppEntry> {
                 // Grid tiles are JPEG so the Vita's hardware decoder takes them. 192x192 is a multiple of the
                 // 16px JPEG block in both directions, which is what that decoder mangled on odd sizes (the
                 // old 192x109). The proxy crops and scales to the tile, a Lanczos downscale beats GPU stretching.
-                "icon_url": format!("https://wsrv.nl/?url=psvt.ovh/themes/{hash}.png&w=192&h=192&fit=cover&output=jpg&q=90&maxage=1y"),
-                // Detail covers stay PNG (one image, any size): software decode is fine for a single picture.
-                "cover_url": format!("https://wsrv.nl/?url=psvt.ovh/themes/{hash}.png&w=480&output=png&maxage=1y"),
-                "screenshot_urls": [format!("https://wsrv.nl/?url=psvt.ovh/themes/{hash}.png&w=720&output=png&maxage=1y")],
+                "icon_url": format!("http://wsrv.nl/?url=psvt.ovh/themes/{hash}.png&w=192&h=192&fit=cover&output=jpg&q=82&maxage=1y"),
+                // Detail covers and screenshots use JPEG through wsrv to enable hardware decoding and save bandwidth
+                "cover_url": format!("http://wsrv.nl/?url=psvt.ovh/themes/{hash}.png&w=480&output=jpg&q=82&maxage=1y"),
+                "screenshot_urls": [format!("http://wsrv.nl/?url=psvt.ovh/themes/{hash}.png&w=720&output=jpg&q=82&maxage=1y")],
                 "download_url": format!("{BASE}/download.php?id={hash}"),
                 "hash": hash,
                 "version": "",

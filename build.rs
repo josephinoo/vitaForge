@@ -14,11 +14,16 @@ fn main() {
     println!("cargo:rerun-if-changed=src/install/zrif.h");
     println!("cargo:rerun-if-changed=src/media/vita_hw_img.c");
     println!("cargo:rerun-if-changed=src/media/vita_hw_img.h");
-    cc::Build::new()
+    let mut build = cc::Build::new();
+    build
+        .opt_level(3)
         .file("src/install/puff.c")
         .file("src/install/zrif.c")
-        .file("src/media/vita_hw_img.c")
-        .compile("zrif_c");
+        .file("src/media/vita_hw_img.c");
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("vita") {
+        build.flag_if_supported("-mfpu=neon");
+    }
+    build.compile("zrif_c");
     let seconds = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())

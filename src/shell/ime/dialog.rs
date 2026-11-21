@@ -32,6 +32,11 @@ fn purpose_title(purpose: ImePurpose) -> &'static str {
         ImePurpose::Comment => "Comment",
         ImePurpose::Report => "Report",
         ImePurpose::ProfileName => "Profile name",
+        ImePurpose::AuthUsername => "Username",
+        ImePurpose::AuthPassword => "Password",
+        ImePurpose::AuthEmail => "Email",
+        ImePurpose::VerifyScore => "Game Score (0-100)",
+        ImePurpose::VerifyNote => "Comment",
     }
 }
 
@@ -41,6 +46,11 @@ fn purpose_max_len(purpose: ImePurpose) -> usize {
         ImePurpose::Comment => 256,
         ImePurpose::Report => 256,
         ImePurpose::ProfileName => 32,
+        ImePurpose::AuthUsername => 32,
+        ImePurpose::AuthPassword => 128,
+        ImePurpose::AuthEmail => 128,
+        ImePurpose::VerifyScore => 3,
+        ImePurpose::VerifyNote => 256,
     }
 }
 
@@ -74,7 +84,8 @@ pub fn open(
     let enter_label = match purpose {
         ImePurpose::Search => SCE_IME_ENTER_LABEL_SEARCH,
         ImePurpose::Comment | ImePurpose::Report => SCE_IME_ENTER_LABEL_SEND,
-        ImePurpose::ProfileName => SCE_IME_ENTER_LABEL_SEND,
+        ImePurpose::ProfileName | ImePurpose::VerifyScore | ImePurpose::VerifyNote => SCE_IME_ENTER_LABEL_SEND,
+        ImePurpose::AuthUsername | ImePurpose::AuthPassword | ImePurpose::AuthEmail => SCE_IME_ENTER_LABEL_SEND,
     };
 
     let result = unsafe {
@@ -88,8 +99,14 @@ pub fn open(
         param.maxTextLength = max_len as u32;
         param.initialText = state.buffer.as_mut_ptr();
         param.inputTextBuffer = state.buffer.as_mut_ptr();
-        param.type_ = SCE_IME_TYPE_BASIC_LATIN as u32;
-        param.supportedLanguages = u64::from(SCE_IME_LANGUAGE_ENGLISH | SCE_IME_LANGUAGE_SPANISH);
+        param.type_ = if purpose == ImePurpose::VerifyScore { SCE_IME_TYPE_NUMBER } else { SCE_IME_TYPE_BASIC_LATIN } as u32;
+        param.supportedLanguages = u64::from(
+            SCE_IME_LANGUAGE_ENGLISH
+                | SCE_IME_LANGUAGE_SPANISH
+                | SCE_IME_LANGUAGE_FRENCH
+                | SCE_IME_LANGUAGE_ITALIAN
+                | SCE_IME_LANGUAGE_PORTUGUESE,
+        );
         param.languagesForced = 0;
         param.dialogMode = SCE_IME_DIALOG_DIALOG_MODE_WITH_CANCEL;
         param.textBoxMode = SCE_IME_DIALOG_TEXTBOX_MODE_WITH_CLEAR;

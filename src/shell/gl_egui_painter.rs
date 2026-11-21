@@ -8,8 +8,8 @@ use crate::shell::vgl::*;
 const MAX_UPLOAD_ATTEMPTS: u32 = 8;
 const BACKOFF_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_millis(150);
 const NEW_TEXTURES_PER_FRAME: usize = 2;
-const MAX_UPLOAD_BYTES_PER_FRAME: usize = 128 * 1024;
-const MAX_PENDING_SERVICED_PER_FRAME: usize = 2;
+const MAX_UPLOAD_BYTES_PER_FRAME: usize = 256 * 1024;
+const MAX_PENDING_SERVICED_PER_FRAME: usize = 4;
 pub const INITIAL_ICON_POOL_SIZE: usize = 24;
 pub const ICON_FREE_POOL_CAP: usize = 32;
 pub const ICON_FREE_POOL_WARM_LOW: usize = 8;
@@ -333,9 +333,26 @@ impl GlEguiPainter {
                 current_texture_id = Some(mesh.texture_id);
             }
             let base_index = (self.vertices.len() / VERTEX_STRIDE) as u32;
+            let max_u = if uv_scale.x < 1.0 {
+                (uv_scale.x - 0.5 / crate::app::icons::MAX_ICON_SIDE as f32).max(0.0)
+            } else {
+                1.0
+            };
+            let max_v = if uv_scale.y < 1.0 {
+                (uv_scale.y - 0.5 / crate::app::icons::MAX_ICON_SIDE as f32).max(0.0)
+            } else {
+                1.0
+            };
+            let frame_alpha = self.frame_alpha;
             for vertex in &mesh.vertices {
-                self.vertices
-                    .extend(Self::gl_vertex(vertex, pixels_per_point, uv_scale, self.frame_alpha));
+                self.vertices.extend(Self::gl_vertex_fast(
+                    vertex,
+                    pixels_per_point,
+                    uv_scale,
+                    max_u,
+                    max_v,
+                    frame_alpha,
+                ));
             }
             self.indices
                 .extend(mesh.indices.iter().map(|&i| base_index + i));
@@ -1010,28 +1027,31 @@ impl GlEguiPainter {
             }
             egui::ImageData::Font(image) => {
                 for pixel in image.srgba_pixels(None) {
-                    out.extend_from_slice(&pixel.to_srgba_unmultiplied());
+                    out.extend_from_slice(&pixel.to_array());
                 }
             }
         }
     }
 
-    fn gl_vertex(
+    fn gl_vertex_fast(
         vertex: &egui::epaint::Vertex,
         pixels_per_point: f32,
         uv_scale: egui::Vec2,
+        max_u: f32,
+        max_v: f32,
         frame_alpha: f32,
     ) -> [f32; VERTEX_STRIDE] {
         let [r, g, b, a] = vertex.color.to_array();
-        let a_norm = a as f32 / 255.0 * frame_alpha;
-        let r_premult = r as f32 / 255.0 * frame_alpha;
-        let g_premult = g as f32 / 255.0 * frame_alpha;
-        let b_premult = b as f32 / 255.0 * frame_alpha;
+        let inv255 = frame_alpha / 255.0;
+        let a_norm = a as f32 * inv255;
+        let r_premult = r as f32 * inv255;
+        let g_premult = g as f32 * inv255;
+        let b_premult = b as f32 * inv255;
         [
             vertex.pos.x * pixels_per_point,
             vertex.pos.y * pixels_per_point,
-            (vertex.uv.x * uv_scale.x).clamp(0.0, 1.0),
-            (vertex.uv.y * uv_scale.y).clamp(0.0, 1.0),
+            (vertex.uv.x * uv_scale.x).clamp(0.0, max_u),
+            (vertex.uv.y * uv_scale.y).clamp(0.0, max_v),
             r_premult,
             g_premult,
             b_premult,

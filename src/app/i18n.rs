@@ -255,6 +255,60 @@ impl Language {
     pub fn comments(self) -> &'static str {
         self.strings(|s| s.comments)
     }
+    pub fn tab_community(self) -> &'static str {
+        self.strings(|s| s.tab_community)
+    }
+    pub fn tab_verified(self) -> &'static str {
+        self.strings(|s| s.tab_verified)
+    }
+    pub fn game_score(self) -> &'static str {
+        self.strings(|s| s.game_score)
+    }
+    pub fn verify_button(self) -> &'static str {
+        self.strings(|s| s.verify_button)
+    }
+    pub fn verify_submit(self) -> &'static str {
+        self.strings(|s| s.verify_submit)
+    }
+    pub fn verify_installs(self) -> &'static str {
+        self.strings(|s| s.verify_installs)
+    }
+    pub fn verify_works(self) -> &'static str {
+        self.strings(|s| s.verify_works)
+    }
+    pub fn verifiers_count(self) -> &'static str {
+        self.strings(|s| s.verifiers_count)
+    }
+    pub fn no_verified_comments(self) -> &'static str {
+        self.strings(|s| s.no_verified_comments)
+    }
+    pub fn ago_now(self) -> &'static str {
+        self.strings(|s| s.ago_now)
+    }
+    pub fn ago_min(self) -> &'static str {
+        self.strings(|s| s.ago_min)
+    }
+    pub fn ago_hour(self) -> &'static str {
+        self.strings(|s| s.ago_hour)
+    }
+    pub fn ago_day(self) -> &'static str {
+        self.strings(|s| s.ago_day)
+    }
+    pub fn verify_add(self) -> &'static str {
+        self.strings(|s| s.verify_add)
+    }
+    pub fn verify_score_field(self) -> &'static str {
+        self.strings(|s| s.verify_score_field)
+    }
+    pub fn verify_note_field(self) -> &'static str {
+        self.strings(|s| s.verify_note_field)
+    }
+    pub fn verify_yours(self) -> &'static str {
+        self.strings(|s| s.verify_yours)
+    }
+    pub fn reply_comment(self) -> &'static str {
+        self.strings(|s| s.reply_comment)
+    }
     pub fn add_comment(self) -> &'static str {
         self.strings(|s| s.add_comment)
     }
@@ -318,6 +372,9 @@ impl Language {
     pub fn theme_obsidian(self) -> &'static str {
         self.strings(|s| s.theme_obsidian)
     }
+    pub fn theme_oled_black(self) -> &'static str {
+        self.strings(|s| s.theme_oled_black)
+    }
     pub fn theme_aurora(self) -> &'static str {
         self.strings(|s| s.theme_aurora)
     }
@@ -369,6 +426,9 @@ impl Language {
     pub fn theme_kanagawa(self) -> &'static str {
         self.strings(|s| s.theme_kanagawa)
     }
+    pub fn settings_account(self) -> &'static str {
+        self.strings(|s| s.settings_account)
+    }
     pub fn settings_general(self) -> &'static str {
         self.strings(|s| s.settings_general)
     }
@@ -398,6 +458,12 @@ impl Language {
     }
     pub fn settings_install_notifications(self) -> &'static str {
         self.strings(|s| s.settings_install_notifications)
+    }
+    pub fn settings_sound_effects(self) -> &'static str {
+        self.strings(|s| s.settings_sound_effects)
+    }
+    pub fn settings_sound_effects_hint(self) -> &'static str {
+        self.strings(|s| s.settings_sound_effects_hint)
     }
     pub fn enabled(self) -> &'static str {
         self.strings(|s| s.enabled)
@@ -803,6 +869,24 @@ struct LocalizedStrings {
     ratings_count: &'static str,
     comments: &'static str,
     add_comment: &'static str,
+    ago_now: &'static str,
+    ago_min: &'static str,
+    ago_hour: &'static str,
+    ago_day: &'static str,
+    verify_add: &'static str,
+    verify_score_field: &'static str,
+    verify_note_field: &'static str,
+    verify_yours: &'static str,
+    reply_comment: &'static str,
+    no_verified_comments: &'static str,
+    tab_community: &'static str,
+    tab_verified: &'static str,
+    game_score: &'static str,
+    verify_button: &'static str,
+    verify_submit: &'static str,
+    verify_installs: &'static str,
+    verify_works: &'static str,
+    verifiers_count: &'static str,
     loading_comments: &'static str,
     no_comments_yet: &'static str,
     back: &'static str,
@@ -847,6 +931,7 @@ struct LocalizedStrings {
     settings_credits: &'static str,
     credits_body: &'static str,
     language_label: &'static str,
+    settings_account: &'static str,
     settings_general: &'static str,
     theme_tokyo_night: &'static str,
     theme_catppuccin: &'static str,
@@ -875,6 +960,7 @@ struct LocalizedStrings {
     settings_purge_hint: &'static str,
     theme_midnight: &'static str,
     theme_obsidian: &'static str,
+    theme_oled_black: &'static str,
     theme_aurora: &'static str,
     theme_sunset: &'static str,
     theme_high_contrast: &'static str,
@@ -887,6 +973,8 @@ struct LocalizedStrings {
     settings_storage: &'static str,
     settings_plugins: &'static str,
     settings_install_notifications: &'static str,
+    settings_sound_effects: &'static str,
+    settings_sound_effects_hint: &'static str,
     enabled: &'static str,
     disabled: &'static str,
     settings_version: &'static str,
@@ -973,6 +1061,24 @@ impl LocalizedStrings {
             ratings_count: r("ratings-count"),
             comments: r("comments-label"),
             add_comment: r("add-comment"),
+            ago_now: r("ago-now"),
+            ago_min: r("ago-min"),
+            ago_hour: r("ago-hour"),
+            ago_day: r("ago-day"),
+            verify_add: r("verify-add"),
+            verify_score_field: r("verify-score-field"),
+            verify_note_field: r("verify-note-field"),
+            verify_yours: r("verify-yours"),
+            reply_comment: r("reply-comment"),
+            no_verified_comments: r("no-verified-comments"),
+            tab_community: r("tab-community"),
+            tab_verified: r("tab-verified"),
+            game_score: r("game-score"),
+            verify_button: r("verify-button"),
+            verify_submit: r("verify-submit"),
+            verify_installs: r("verify-installs"),
+            verify_works: r("verify-works"),
+            verifiers_count: r("verifiers-count"),
             loading_comments: r("loading-comments"),
             no_comments_yet: r("no-comments-yet"),
             back: r("back-label"),
@@ -1017,6 +1123,7 @@ impl LocalizedStrings {
             settings_credits: r("settings-credits"),
             credits_body: r("credits-body"),
             language_label: r("language-label"),
+            settings_account: r("settings-account"),
             settings_general: r("settings-general"),
             theme_tokyo_night: r("theme-tokyo-night"),
             theme_catppuccin: r("theme-catppuccin"),
@@ -1045,6 +1152,7 @@ impl LocalizedStrings {
             settings_purge_hint: r("settings-purge-hint"),
             theme_midnight: r("theme-midnight"),
             theme_obsidian: r("theme-obsidian"),
+            theme_oled_black: r("theme-oled-black"),
             theme_aurora: r("theme-aurora"),
             theme_sunset: r("theme-sunset"),
             theme_high_contrast: r("theme-high-contrast"),
@@ -1057,6 +1165,8 @@ impl LocalizedStrings {
             settings_storage: r("settings-storage"),
             settings_plugins: r("settings-plugins"),
             settings_install_notifications: r("settings-install-notifications"),
+            settings_sound_effects: r("settings-sound-effects"),
+            settings_sound_effects_hint: r("settings-sound-effects-hint"),
             enabled: r("enabled"),
             disabled: r("disabled"),
             settings_version: r("settings-version"),

@@ -1,4 +1,5 @@
 pub mod api;
+pub mod auth;
 pub mod cache_manager;
 pub mod client_id;
 pub mod settings;
@@ -351,9 +352,17 @@ impl AppEntry {
             text::sanitize(value);
         }
         self.name_lower = self.name.to_lowercase();
+        self.name_lower.shrink_to_fit();
         self.author_lower = self.author.to_lowercase();
-        self.description_lower = self.description.to_lowercase();
+        self.author_lower.shrink_to_fit();
+        if self.platform == Platform::Theme {
+            self.description_lower = self.description.to_lowercase();
+            self.description_lower.shrink_to_fit();
+        } else {
+            self.description_lower = String::new();
+        }
         self.titleid_lower = self.titleid.to_lowercase();
+        self.titleid_lower.shrink_to_fit();
     }
     pub fn size_label(&self) -> String {
         format_size(self.size_bytes)

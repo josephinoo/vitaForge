@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := vpk
-.PHONY: vpk livearea ftp eboot upload-vpk run-vita vpk2 vitagl-nosplash
+.PHONY: vpk ftp eboot upload-vpk run-vita vpk2 vitagl-nosplash
 # Without this the build never sees SERVER_URL and silently falls back to the
 # default catalog url baked into the source.
 -include .env
@@ -35,10 +35,7 @@ VITASDK ?= /usr/local/vitasdk
 vpk2:
 	cd $(POCKETJS_DIR) && VITASDK="$(VITASDK)" PATH="$(VITASDK)/bin:$$PATH" bun run vita $(POCKETJS_APP) --release
 	@ls -lh $(POCKETJS_DIR)/dist/vita/$(POCKETJS_APP)-main.vpk
-# bg0.png is a baked picture; this stamps the Cargo.toml version into it.
-livearea:
-	python3 -I scripts/stamp_livearea.py
-vpk: livearea
+vpk:
 	RUSTFLAGS="$(RUSTFLAGS)" $(CARGO_VITA) build vpk --release
 ftp: vpk
 ifndef VITA_IP

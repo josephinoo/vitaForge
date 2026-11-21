@@ -1,6 +1,7 @@
 use crate::data::{SortDirection, SortOrder};
 use serde::{Deserialize, Serialize};
 
+#[cfg(not(test))]
 const SETTINGS_PATH: &str = "ux0:data/vitaforge/settings.json";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -13,11 +14,14 @@ pub struct Settings {
     pub language: Option<crate::app::i18n::Language>,
     #[serde(default = "default_install_notifications")]
     pub install_notifications: bool,
+    #[serde(default = "default_sound_effects")]
+    pub sound_effects: bool,
     #[serde(default)]
     pub theme: crate::app::ui::theme::ThemeId,
 }
 
 const fn default_install_notifications() -> bool { true }
+const fn default_sound_effects() -> bool { true }
 
 impl Default for Settings {
     fn default() -> Self {
@@ -26,6 +30,7 @@ impl Default for Settings {
             sort_direction: SortDirection::default(),
             language: None,
             install_notifications: true,
+            sound_effects: true,
             theme: Default::default(),
         }
     }
@@ -49,11 +54,29 @@ pub fn set_install_notifications(enabled: bool) {
     save(&settings);
 }
 
+pub fn set_sound_effects(enabled: bool) {
+    let mut settings = load();
+    settings.sound_effects = enabled;
+    save(&settings);
+}
+
 static SETTINGS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn settings_path() -> std::path::PathBuf {
+    #[cfg(test)]
+    {
+        std::env::temp_dir().join(format!("vitaforge-settings-test-{}.json", std::process::id()))
+    }
+    #[cfg(not(test))]
+    {
+        std::path::PathBuf::from(SETTINGS_PATH)
+    }
+}
 
 pub fn load() -> Settings {
     let _guard = SETTINGS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    match std::fs::read(SETTINGS_PATH) {
+    let path = settings_path();
+    match std::fs::read(&path) {
         Ok(bytes) => match serde_json::from_slice::<Settings>(&bytes) {
             Ok(settings) => {
                 crate::install::log_file(&format!("settings loaded: theme={:?}", settings.theme));
@@ -65,7 +88,7 @@ pub fn load() -> Settings {
             }
         },
         Err(err) => {
-            crate::install::log_file(&format!("settings read failed from {SETTINGS_PATH}: {err}"));
+            crate::install::log_file(&format!("settings read failed from {}: {err}", path.display()));
             Settings::default()
         }
     }
@@ -73,12 +96,13 @@ pub fn load() -> Settings {
 
 pub fn save(settings: &Settings) {
     let _guard = SETTINGS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(parent) = std::path::Path::new(SETTINGS_PATH).parent() {
+    let path = settings_path();
+    if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
     match serde_json::to_vec_pretty(settings) {
         Ok(bytes) => {
-            let tmp_path = format!("{SETTINGS_PATH}.tmp");
+            let tmp_path = path.with_extension("json.tmp");
             match std::fs::OpenOptions::new()
                 .write(true)
                 .create(true)
@@ -93,7 +117,7 @@ pub fn save(settings: &Settings) {
                         crate::install::log_file(&format!("settings sync error: {err}"));
                     } else {
                         drop(file);
-                        if let Err(err) = std::fs::rename(&tmp_path, SETTINGS_PATH) {
+                        if let Err(err) = std::fs::rename(&tmp_path, &path) {
                             crate::install::log_file(&format!("settings rename error: {err}"));
                         } else {
                             crate::install::log_file(&format!("settings saved: theme={:?}", settings.theme));
@@ -118,6 +142,11 @@ mod tests {
     #[test]
     fn install_notifications_default_to_enabled() {
         assert!(Settings::default().install_notifications);
+    }
+
+    #[test]
+    fn sound_effects_default_to_enabled() {
+        assert!(Settings::default().sound_effects);
     }
 
     #[test]
