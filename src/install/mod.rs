@@ -7,6 +7,7 @@ pub mod lifecycle;
 mod licensing;
 pub mod notify;
 mod pbp;
+pub mod pending;
 pub mod pkg;
 mod promoter;
 pub mod requirements;

@@ -34,6 +34,7 @@ pub enum Row {
     ClearIcons,
     ClearCatalog,
     PurgeAll,
+    UsbMode,
     PluginManager,
     ConfigViewer,
     ConfigBackups,
@@ -78,7 +79,7 @@ pub const SECTIONS: [(Section, &[Row]); 6] = [
         Section::Plugins,
         &[Row::PluginManager, Row::ConfigViewer, Row::ConfigBackups, Row::Profiles, Row::SafeMode, Row::MigrateConfig, Row::Reboot],
     ),
-    (Section::Storage, &[Row::ClearIcons, Row::ClearCatalog, Row::PurgeAll]),
+    (Section::Storage, &[Row::UsbMode, Row::ClearIcons, Row::ClearCatalog, Row::PurgeAll]),
     (Section::About, &[]),
 ];
 
@@ -452,6 +453,20 @@ fn content(ui: &mut egui::Ui, view: &SettingsView, commands: &mut Vec<AppCommand
                 value(ui, theme_label(active_theme(), lang));
                 swatch(ui, active_theme().palette(), egui::vec2(34.0, 22.0));
             }),
+            Row::UsbMode => {
+                let active = crate::usb::is_active();
+                let hint = if active {
+                    "USB connected — open vitaForge-client on PC, then toggle off to install"
+                } else {
+                    "Mount ux0: over USB for vitaForge-client (no VitaShell needed)"
+                };
+                setting_row(ui, ChromeIcon::HardDrive, "USB Mode (PC Client)", hint, focused, false, |ui| {
+                    toggle(ui, active);
+                    if let Some(notice) = view.cache_notice.filter(|_| focused) {
+                        pill(ui, notice, pal().success, Some(ChromeIcon::Check));
+                    }
+                })
+            }
             Row::ClearIcons | Row::ClearCatalog | Row::PurgeAll => {
                 let (icon, label, hint) = match row {
                     Row::ClearIcons => (ChromeIcon::Image, lang.settings_clear_icons(), lang.settings_clear_icons_hint()),
@@ -1509,6 +1524,7 @@ mod tests {
             Row::Notifications,
             Row::SoundEffects,
             Row::Theme,
+            Row::UsbMode,
             Row::ClearIcons,
             Row::ClearCatalog,
             Row::PurgeAll,

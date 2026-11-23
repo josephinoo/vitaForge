@@ -1498,6 +1498,7 @@ impl App {
             }
             Some(Row::Notifications) => AppCommand::ToggleInstallNotifications,
             Some(Row::SoundEffects) => AppCommand::ToggleSoundEffects,
+            Some(Row::UsbMode) => AppCommand::ToggleUsbMode,
             Some(Row::ClearIcons) => AppCommand::ClearIconCache,
             Some(Row::ClearCatalog) => AppCommand::ClearCatalogCache,
             Some(Row::PurgeAll) => AppCommand::PurgeAllCache,
@@ -3061,6 +3062,22 @@ impl App {
                 self.refresh_cache_stats();
                 self.cache_notice =
                     Some(self.lang.settings_purged_all(&data::cache_manager::format_bytes(freed)));
+            }
+            AppCommand::ToggleUsbMode => {
+                if crate::usb::is_active() {
+                    let _ = crate::usb::stop();
+                    let installed = crate::install::pending::process_all();
+                    self.cache_notice = Some(if installed > 0 {
+                        format!("USB off · installed {installed}")
+                    } else {
+                        "USB disconnected".to_owned()
+                    });
+                } else {
+                    match crate::usb::start() {
+                        Ok(()) => self.cache_notice = Some("USB active".to_owned()),
+                        Err(err) => self.cache_notice = Some(format!("USB error: {err}")),
+                    }
+                }
             }
             AppCommand::ToggleLike => {
                 if let AppState::Detail { app, .. } = &mut self.state {

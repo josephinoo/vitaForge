@@ -7,6 +7,7 @@ mod input;
 mod install;
 mod net;
 mod shell;
+mod usb;
 use app::App;
 #[cfg(target_os = "vita")]
 mod vita_runtime {
@@ -92,6 +93,8 @@ fn run() -> anyhow::Result<()> {
         .on_thread_start(lower_background_priority)
         .build()?;
     let _guard = runtime.enter();
+    install::log_file("boot: checking pending USB installs");
+    let _ = install::pending::process_all();
     install::log_file("boot: creating app");
     let app = App::new()?;
     install::log_file("boot: entering shell");

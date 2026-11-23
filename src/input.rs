@@ -165,6 +165,7 @@ pub enum AppCommand {
     ClearIconCache,
     ClearCatalogCache,
     PurgeAllCache,
+    ToggleUsbMode,
     ToggleLike,
     RateCurrent(u8),
     RequestCommentEntry,
