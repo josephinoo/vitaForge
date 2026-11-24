@@ -73,6 +73,8 @@ pub enum Progress {
     Done,
     RebootRequired,
     Restarting,
+    /// Shown by the UI between the confirmed cancel and the worker's end; never sent by it.
+    Cancelling,
     Failed(String),
 }
 pub const CANCELLED_MESSAGE: &str = "cancelled";
@@ -142,6 +144,7 @@ impl Progress {
             Self::Done => text("progress-done"),
             Self::RebootRequired => text("progress-reboot"),
             Self::Restarting => text("progress-restarting"),
+            Self::Cancelling => text("progress-cancelling"),
             Self::Failed(err) if err == CANCELLED_MESSAGE => text("progress-cancelled"),
             Self::Failed(err) if err == PLUGIN_PENDING_MESSAGE => lang.plugin_pending().to_owned(),
             Self::Failed(err) => format!("{}: {err}", text("progress-failed")),
@@ -175,7 +178,7 @@ impl Progress {
         )
     }
     pub fn is_cancellable(&self) -> bool {
-        !self.is_finished() && !matches!(self, Progress::Installing { .. })
+        !self.is_finished() && !matches!(self, Progress::Installing { .. } | Progress::Cancelling)
     }
 }
 
@@ -224,6 +227,10 @@ pub fn process_pending_bgdl() {
         let Some(pending) = PENDING_BGDL.lock().unwrap().pop_front() else {
             return;
         };
+        // The waiter was cancelled: don't queue what the user backed out of.
+        if pending.done.is_closed() {
+            continue;
+        }
         #[cfg(target_os = "vita")]
         let result = bgdl::start_bgdl(
             &pending.title,
@@ -536,7 +543,7 @@ async fn run(
         crate::data::Platform::Psp => run_psp(entry, tx, cancel).await,
         crate::data::Platform::Plugin => run_plugin(entry, tx, cancel).await,
         crate::data::Platform::Theme => theme::run(entry, tx, cancel).await,
-        crate::data::Platform::NpsVita => run_nps_vita(entry, tx).await,
+        crate::data::Platform::NpsVita => download::or_cancelled(cancel, run_nps_vita(entry, tx)).await,
         crate::data::Platform::NpsPsp | crate::data::Platform::NpsPsx => {
             bail!("PSP/PS1 installs are temporarily unavailable")
         }
@@ -1087,7 +1094,7 @@ async fn run_vita(
     let _ = tx.send(Progress::Resolving);
     let resolving = std::time::Instant::now();
     let url = match entry.source.as_deref() {
-        Some(repo) => match github::latest_release(repo).await {
+        Some(repo) => match download::or_cancelled(cancel, async { Ok(github::latest_release(repo).await) }).await? {
             Some(release) => {
                 println!("using github release {} for {}", release.tag, entry.name);
                 release.vpk_url

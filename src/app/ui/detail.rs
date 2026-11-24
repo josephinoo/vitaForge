@@ -93,6 +93,9 @@ pub(crate) fn detail_screen(
             DetailFocus::Requirements => {
                 hints.push((Glyph::Cross, lang.get_btn()));
             }
+            DetailFocus::Like | DetailFocus::Report | DetailFocus::Comment | DetailFocus::Verify => {
+                hints.push((Glyph::Cross, lang.btn_choose()));
+            }
             DetailFocus::Primary => {
                 hints.push((Glyph::Cross, action_label(lang, primary)));
                 if let Some(action) = detail_actions::secondary(entry, state) {
@@ -624,6 +627,7 @@ pub(crate) fn detail_screen(
             // egui clamps what it draws; hand the real limit back so the stored offset cannot run past the content.
             let max_scroll = (scroll_output.content_size.y - scroll_output.inner_rect.height()).max(0.0);
             ui.ctx().data_mut(|d| d.insert_temp(max_id, max_scroll));
+            commands.push(AppCommand::SetDetailMaxScroll(max_scroll));
             if scroll_delta > max_scroll + 0.5 {
                 commands.push(AppCommand::SetDetailScroll(max_scroll));
             }
@@ -943,7 +947,7 @@ pub(crate) fn install_progress_modal_opt(
                                 .color(pal().text),
                         );
                         ui.add_space(16.0);
-                        if !matches!(job, crate::install::Progress::Failed(_)) {
+                        if !matches!(job, crate::install::Progress::Failed(_) | crate::install::Progress::Cancelling) {
                             install_stepper(ui, job, lang);
                         }
                         ui.add_space(16.0);
@@ -994,6 +998,7 @@ fn install_stepper(ui: &mut egui::Ui, progress: &crate::install::Progress, lang:
     let failed = matches!(progress, Progress::Failed(_));
     let current = match progress {
         Progress::Resolving
+        | Progress::Cancelling
         | Progress::DownloadingData { .. }
         | Progress::Downloading { .. } => 1,
         Progress::Finishing { .. } => 2,
@@ -1675,25 +1680,47 @@ fn left_column(
                     }
                 });
                 ui.add_space(4.0);
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     rating_stars(ui, entry.rating);
                     ui.add_space(8.0);
-                    if like_button(ui, entry.user_liked, entry.likes_count) {
+                    let ring = |ui: &egui::Ui, rect: egui::Rect, on: bool| {
+                        if on {
+                            ui.painter().rect_stroke(
+                                rect.expand(2.0),
+                                RADIUS_XS,
+                                egui::Stroke::new(FOCUS_STROKE, pal().focus),
+                                egui::StrokeKind::Outside,
+                            );
+                        }
+                    };
+                    // like_button only reports clicks, so take its rect from the cursor.
+                    let like = ui.scope(|ui| like_button(ui, entry.user_liked, entry.likes_count));
+                    ring(ui, like.response.rect, detail_focus == DetailFocus::Like);
+                    if like.inner {
                         commands.push(AppCommand::ToggleLike);
                     }
                     ui.add_space(8.0);
-                    if ui
-                        .add(
-                            egui::Button::new(
-                                egui::RichText::new(lang.tr("bugreport-btn"))
-                                    .size(FONT_SMALL)
-                                    .color(pal().text_dim),
-                            )
-                            .frame(false),
-                        )
-                        .clicked()
-                    {
+                    let link = |ui: &mut egui::Ui, text: String| {
+                        ui.add(egui::Button::new(egui::RichText::new(text).size(FONT_SMALL).color(pal().text_dim)).frame(false))
+                    };
+                    let report = link(ui, lang.tr("bugreport-btn").to_string());
+                    ring(ui, report.rect, detail_focus == DetailFocus::Report);
+                    if report.clicked() {
                         commands.push(AppCommand::RequestReport);
+                    }
+                    ui.add_space(8.0);
+                    let comment = link(ui, lang.add_comment().to_string());
+                    ring(ui, comment.rect, detail_focus == DetailFocus::Comment);
+                    if comment.clicked() {
+                        commands.push(AppCommand::RequestCommentEntry);
+                    }
+                    if verification.is_some_and(|v| v.can_verify) {
+                        ui.add_space(8.0);
+                        let verify = link(ui, lang.verify_add().to_string());
+                        ring(ui, verify.rect, detail_focus == DetailFocus::Verify);
+                        if verify.clicked() {
+                            commands.push(AppCommand::OpenVerifyModal);
+                        }
                     }
                 });
                 if state != InstallState::Absent {

@@ -232,6 +232,7 @@ progress-queued = In coda — controlla le notifiche
 progress-done = Installato
 progress-reboot = Installato — riavvia la Vita per attivarlo
 progress-restarting = Aggiornato — riavvio…
+progress-cancelling = Annullamento…
 progress-cancelled = Annullato
 progress-failed = Errore
 step-download = Download

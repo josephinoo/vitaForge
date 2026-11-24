@@ -658,6 +658,20 @@ async fn resolve_vitadb(url: &str) -> Option<String> {
     (link.starts_with("http://") || link.starts_with("https://")).then(|| link.to_owned())
 }
 
+/// Ends a network wait as soon as ○ is confirmed: connect, probe and backoff
+/// never look at the flag themselves. Only wrap futures with no blocking worker.
+pub async fn or_cancelled<T>(cancel: &AtomicBool, work: impl std::future::Future<Output = Result<T>>) -> Result<T> {
+    let watch = async {
+        while !cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    };
+    match futures_util::future::select(std::pin::pin!(work), std::pin::pin!(watch)).await {
+        futures_util::future::Either::Left((result, _)) => result,
+        futures_util::future::Either::Right(_) => Err(anyhow::anyhow!(crate::install::CANCELLED_MESSAGE)),
+    }
+}
+
 pub async fn fetch_file(
     url: &str,
     dest: &Path,
@@ -665,9 +679,9 @@ pub async fn fetch_file(
     make: fn(u64, Option<u64>, u32) -> crate::install::Progress,
     cancel: &AtomicBool,
 ) -> Result<()> {
-    let resolved = resolve_vitadb(url).await;
+    let resolved = or_cancelled(cancel, async { Ok(resolve_vitadb(url).await) }).await?;
     let url = resolved.as_deref().unwrap_or(url);
-    let Some((node_url, md5)) = fastest_archive_node(url).await else {
+    let Some((node_url, md5)) = or_cancelled(cancel, async { Ok(fastest_archive_node(url).await) }).await? else {
         return fetch_file_from(url, dest, tx, make, cancel, true).await;
     };
     fetch_file_from(&node_url, dest, tx, make, cancel, true).await?;
@@ -714,7 +728,7 @@ pub async fn fetch_parts(
     make: fn(u64, Option<u64>, u32) -> crate::install::Progress,
     cancel: &AtomicBool,
 ) -> Result<Option<String>> {
-    let Some((node_url, md5)) = fastest_archive_node(url).await else {
+    let Some((node_url, md5)) = or_cancelled(cancel, async { Ok(fastest_archive_node(url).await) }).await? else {
         fetch_file_from(url, dest, tx, make, cancel, false).await?;
         return Ok(None);
     };
@@ -730,7 +744,7 @@ async fn fetch_file_from(
     cancel: &AtomicBool,
     join: bool,
 ) -> Result<()> {
-    let probe = probe_parallel(url).await;
+    let probe = or_cancelled(cancel, async { Ok(probe_parallel(url).await) }).await?;
     if probe.is_none() {
         crate::install::log_file("parallel: range probe failed, using one connection");
     }
@@ -790,7 +804,7 @@ async fn fetch_file_from(
             )
         });
         // Parts are kept on error so the next try resumes each one.
-        futures_util::future::try_join_all(futs).await?;
+        or_cancelled(cancel, futures_util::future::try_join_all(futs)).await?;
         if !join {
             crate::install::log_file("parallel: all parts done");
             let elapsed = eta_elapsed(started_at.elapsed().as_secs_f64(), probe.total, base);
@@ -815,7 +829,7 @@ async fn fetch_file_from(
     remove_parts(dest);
     let mut sink = FileSink::open(dest)?;
     let mut reporter = ProgressReporter::new(tx, make);
-    fetch_to(url, &mut sink, &mut reporter, cancel).await
+    or_cancelled(cancel, fetch_to(url, &mut sink, &mut reporter, cancel)).await
 }
 
 pub async fn fetch_to(
@@ -913,6 +927,13 @@ pub async fn fetch_to(
 }
 #[cfg(test)]
 mod vitadb_tests {
+    #[tokio::test]
+    async fn cancel_ends_a_hung_wait() {
+        let cancel = std::sync::atomic::AtomicBool::new(true);
+        let err = super::or_cancelled(&cancel, std::future::pending::<anyhow::Result<()>>()).await.unwrap_err();
+        assert_eq!(err.to_string(), crate::install::CANCELLED_MESSAGE);
+    }
+
     #[test]
     fn only_vitadb_redirector_links_are_resolved() {
         assert!(super::is_vitadb_link("https://www.rinnegatamante.eu/vitadb/get_hb_url.php?id=245"));

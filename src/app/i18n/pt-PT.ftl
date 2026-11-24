@@ -232,6 +232,7 @@ progress-queued = Em fila — veja as notificações
 progress-done = Instalado
 progress-reboot = Instalado — reinicie a Vita para ativar
 progress-restarting = Atualizado — a reiniciar…
+progress-cancelling = A cancelar…
 progress-cancelled = Cancelado
 progress-failed = Erro
 step-download = Transferência

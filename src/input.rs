@@ -44,6 +44,11 @@ pub enum DetailFocus {
     Author,
     Screenshots,
     Requirements,
+    /// The like / report / comment row under the title.
+    Like,
+    Report,
+    Comment,
+    Verify,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum StoreTab {
@@ -216,6 +221,7 @@ pub enum AppCommand {
     SetDetailFocus(DetailFocus),
     AnalogScroll(f32),
     SetDetailScroll(f32),
+    SetDetailMaxScroll(f32),
     PageStep(i32),
     LetterJump(bool),
     SecondaryAction,
@@ -262,11 +268,18 @@ pub fn map_controller_button_event(event: &Event) -> Option<AppCommand> {
         Button::Back => return Some(AppCommand::RequestSearch),
         Button::LeftShoulder => InputCommand::CategoryPrev,
         Button::RightShoulder => InputCommand::CategoryNext,
+        // First press comes from the event so a tap shorter than a slow frame isn't lost; polling only repeats.
+        Button::DPadUp => InputCommand::MoveUp,
+        Button::DPadDown => InputCommand::MoveDown,
+        Button::DPadLeft => InputCommand::MoveLeft,
+        Button::DPadRight => InputCommand::MoveRight,
         _ => return None,
     };
     Some(command.into())
 }
 const STICK_DEADZONE: f32 = 0.6;
+const STICK_RELEASE: f32 = 0.35;
+const STICK_AXIS_BIAS: f32 = 1.3;
 pub fn right_stick_axes(controller: Option<&GameController>) -> (f32, f32) {
     let Some(controller) = controller else {
         return (0.0, 0.0);
@@ -278,24 +291,39 @@ pub fn right_stick_axes(controller: Option<&GameController>) -> (f32, f32) {
         if y.abs() >= STICK_DEADZONE { y } else { 0.0 },
     )
 }
-pub fn held_stick_direction(controller: Option<&GameController>) -> Option<InputCommand> {
+/// Left stick as a direction. `held` is last frame's answer: it keeps the axis
+/// until clearly released or overtaken, so jitter and diagonals don't re-press.
+pub fn stick_direction(x: f32, y: f32, held: Option<InputCommand>) -> Option<InputCommand> {
+    use InputCommand::*;
+    if let Some(dir) = held {
+        let (along, across) = match dir {
+            MoveUp => (-y, x),
+            MoveDown => (y, x),
+            MoveLeft => (-x, y),
+            MoveRight => (x, y),
+            _ => (0.0, 0.0),
+        };
+        if along >= STICK_RELEASE && across.abs() < along * STICK_AXIS_BIAS {
+            return held;
+        }
+    }
+    if x.abs().max(y.abs()) < STICK_DEADZONE {
+        None
+    } else if y.abs() >= x.abs() {
+        Some(if y < 0.0 { MoveUp } else { MoveDown })
+    } else {
+        Some(if x < 0.0 { MoveLeft } else { MoveRight })
+    }
+}
+/// `(direction, from_dpad)`. The D-pad wins so a drifting stick can't block it.
+pub fn held_direction_of(controller: Option<&GameController>, held: Option<InputCommand>) -> Option<(InputCommand, bool)> {
     let controller = controller?;
+    if let Some(dir) = held_dpad_direction(controller) {
+        return Some((dir, true));
+    }
     let x = controller.axis(Axis::LeftX) as f32 / i16::MAX as f32;
     let y = controller.axis(Axis::LeftY) as f32 / i16::MAX as f32;
-    let from_stick = if y.abs() >= x.abs() {
-        match y {
-            y if y <= -STICK_DEADZONE => Some(InputCommand::MoveUp),
-            y if y >= STICK_DEADZONE => Some(InputCommand::MoveDown),
-            _ => None,
-        }
-    } else {
-        match x {
-            x if x <= -STICK_DEADZONE => Some(InputCommand::MoveLeft),
-            x if x >= STICK_DEADZONE => Some(InputCommand::MoveRight),
-            _ => None,
-        }
-    };
-    from_stick.or_else(|| held_dpad_direction(controller))
+    stick_direction(x, y, held).map(|dir| (dir, false))
 }
 fn held_dpad_direction(controller: &GameController) -> Option<InputCommand> {
     if controller.button(Button::DPadUp) {
@@ -544,5 +572,20 @@ mod tests {
         assert!(!drain(&mut pointer, &real).is_empty());
         drain(&mut pointer, &finger(0, 1, 0.5, 0.5));
         assert!(drain(&mut pointer, &real).is_empty()); // real fingers are in play now
+    }
+}
+
+#[cfg(test)]
+mod stick_tests {
+    use super::InputCommand::*;
+    use super::stick_direction;
+    #[test]
+    fn hysteresis_and_diagonals() {
+        assert_eq!(stick_direction(0.0, 0.5, None), None);
+        assert_eq!(stick_direction(0.0, 0.7, None), Some(MoveDown));
+        assert_eq!(stick_direction(0.0, 0.5, Some(MoveDown)), Some(MoveDown));
+        assert_eq!(stick_direction(0.0, 0.3, Some(MoveDown)), None);
+        assert_eq!(stick_direction(0.75, 0.7, Some(MoveDown)), Some(MoveDown));
+        assert_eq!(stick_direction(0.95, 0.4, Some(MoveDown)), Some(MoveRight));
     }
 }

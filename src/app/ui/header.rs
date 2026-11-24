@@ -44,6 +44,12 @@ pub(crate) fn catalog_header(
                 commands.push(AppCommand::SetStoreTab(StoreTab::Roms));
             }
 
+            // Reached with L/R (or the footer chips): shown while active so L/R never lands on an invisible stop.
+            if matches!(tab, StoreTab::Library | StoreTab::Updates) {
+                let label = lang.tr(if tab == StoreTab::Library { "tab-library" } else { "tab-updates" });
+                top_nav_button(ui, ChromeIcon::for_store_tab(tab), &label, true);
+            }
+
             if let crate::app::ui::UpdateAllUi::Running(label) = update_all {
                 ui.add_space(6.0);
                 ui.label(

@@ -23,7 +23,7 @@ mod surface;
 use crate::app::App;
 use crate::app::ui::build_ui;
 use crate::input::{
-    AppCommand, Pointer, TextTarget, held_stick_direction, map_controller_button_event,
+    AppCommand, Pointer, TextTarget, held_direction_of, map_controller_button_event,
     map_keyboard_event, open_first_controller, register_vita_controller_mapping, right_stick_axes,
 };
 use anyhow::Result;
@@ -234,8 +234,8 @@ pub fn run(mut app: App) -> Result<()> {
                 last_right_jump = Instant::now();
             }
 
-            match held_stick_direction(controller.as_ref()) {
-                Some(direction) if held_direction == Some(direction) => {
+            match held_direction_of(controller.as_ref(), held_direction) {
+                Some((direction, _)) if held_direction == Some(direction) => {
                     app.last_input_at = Instant::now();
                     if held_since.elapsed() >= STICK_REPEAT_DELAY
                         && last_repeat_at.elapsed() >= STICK_REPEAT_INTERVAL
@@ -244,9 +244,11 @@ pub fn run(mut app: App) -> Result<()> {
                         last_repeat_at = Instant::now();
                     }
                 }
-                Some(direction) => {
+                Some((direction, from_dpad)) => {
                     app.last_input_at = Instant::now();
-                    direct_commands.push(direction.into());
+                    if !from_dpad {
+                        direct_commands.push(direction.into());
+                    }
                     held_direction = Some(direction);
                     held_since = Instant::now();
                     last_repeat_at = Instant::now();

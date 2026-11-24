@@ -77,7 +77,7 @@ pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
                 .install
                 .as_ref()
                 .filter(|job| job.app_id == entry.id)
-                .map(|job| &job.progress);
+                .map(shown_progress);
             detail_screen(
                 ctx,
                 &app.icons,
@@ -154,14 +154,23 @@ pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
             ctx,
             app.lang,
             &job.title,
-            &job.progress,
-            job.progress.is_cancellable(),
+            shown_progress(job),
+            shown_progress(job).is_cancellable(),
             app.cancel_armed(),
             app.is_dimmed(),
             &mut commands,
         );
     }
     commands
+}
+
+/// The job's progress, or "cancelling" while the worker is still winding down.
+fn shown_progress(job: &crate::app::InstallJob) -> &crate::install::Progress {
+    if job.progress.is_cancellable() && job.cancel.load(std::sync::atomic::Ordering::Relaxed) {
+        &crate::install::Progress::Cancelling
+    } else {
+        &job.progress
+    }
 }
 
 fn self_update_modal(

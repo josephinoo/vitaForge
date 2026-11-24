@@ -540,11 +540,14 @@ impl CatalogState {
         self.focus_pane = FocusPane::Sidebar;
     }
 
-    fn leave_sidebar(&mut self) {
-        self.focus_pane = FocusPane::Grid;
-        if !self.filtered_indices.is_empty() {
-            self.selection_active = true;
+    /// False when the grid is empty: focus stays put so something is always highlighted.
+    fn leave_sidebar(&mut self) -> bool {
+        if self.filtered_indices.is_empty() {
+            return false;
         }
+        self.focus_pane = FocusPane::Grid;
+        self.selection_active = true;
+        true
     }
 
     fn move_sidebar_cursor(&mut self, delta: isize) -> bool {
@@ -661,6 +664,22 @@ impl CatalogState {
     }
 }
 
+
+/// L/R walk the header left to right and wrap.
+fn ring_step(current: usize, len: usize, forward: bool) -> usize {
+    (current + if forward { 1 } else { len - 1 }) % len
+}
+
+#[cfg(test)]
+mod ring_tests {
+    use super::ring_step;
+    #[test]
+    fn wraps_and_is_symmetric() {
+        assert_eq!(ring_step(8, 9, true), 0);
+        assert_eq!(ring_step(0, 9, false), 8);
+        assert_eq!(ring_step(ring_step(3, 9, true), 9, false), 3);
+    }
+}
 
 fn is_collapsible_homebrew(app: &AppEntry) -> bool {
     !app.titleid_lower.is_empty() && !app.platform.is_commercial()
@@ -816,6 +835,8 @@ pub struct App {
     pub purge_armed: bool,
     /// Set by the first ○ during a download; a second ○ within 3 s cancels it.
     pub cancel_armed_at: Option<std::time::Instant>,
+    /// Scroll limit of the detail page as last drawn.
+    detail_max_scroll: f32,
     install_notifications: bool,
     pub roms_3ds_dir: String,
     update_queue: std::collections::VecDeque<AppEntry>,
@@ -1062,6 +1083,7 @@ impl App {
             cache_notice: None,
             purge_armed: false,
             cancel_armed_at: None,
+            detail_max_scroll: 0.0,
             icons_need_clear: false,
             install_notifications: settings.install_notifications,
             roms_3ds_dir: settings.roms_3ds_dir,
@@ -2214,6 +2236,9 @@ impl App {
                     && !self.update_active
                     && self.install.as_ref().is_some_and(|job| job.progress.is_cancellable())
                 {
+                    if self.install.as_ref().is_some_and(|job| job.cancel.load(std::sync::atomic::Ordering::Relaxed)) {
+                        return Ok(());
+                    }
                     // ○ means "back" everywhere else, so one press must not throw away a download.
                     if !self.cancel_armed() {
                         self.cancel_armed_at = Some(std::time::Instant::now());
@@ -2231,8 +2256,9 @@ impl App {
                 }
                 if let AppState::Catalog(catalog) = &mut self.state {
                     if catalog.focus_pane == FocusPane::Sidebar {
-                        catalog.leave_sidebar();
-                        self.audio.play(crate::audio::Sfx::Navigate);
+                        if catalog.leave_sidebar() {
+                            self.audio.play(crate::audio::Sfx::Navigate);
+                        }
                         return Ok(());
                     }
                     if catalog.tab == StoreTab::Categories
@@ -2340,6 +2366,19 @@ impl App {
                 }
                 if matches!(&self.state, AppState::Catalog(catalog) if catalog.tab == StoreTab::Updates) {
                     return self.handle_command(AppCommand::UpdateAll);
+                }
+                // Games: the sidebar already walks categories, so △ walks the genre dropdown.
+                if let AppState::Catalog(catalog) = &self.state
+                    && catalog.tab == StoreTab::Categories
+                    && catalog.content_type_group == ContentTypeGroup::Games
+                    && !catalog.genre_counts.is_empty()
+                {
+                    let next = match &catalog.genre_filter {
+                        None => 0,
+                        Some(current) => catalog.genre_counts.iter().position(|(g, _)| g == current).map_or(0, |i| i + 1),
+                    };
+                    let genre = catalog.genre_counts.get(next).map(|(g, _)| g.clone());
+                    return self.handle_command(AppCommand::SetGenreFilter(genre));
                 }
                 if let AppState::Catalog(catalog) = &mut self.state {
                     if catalog.tab != StoreTab::Categories {
@@ -2569,6 +2608,7 @@ impl App {
                     *detail_focus = focus;
                 }
             }
+            AppCommand::SetDetailMaxScroll(max) => self.detail_max_scroll = max,
             AppCommand::AnalogScroll(delta) => {
                 if let AppState::Detail { scroll_delta, .. } = &mut self.state {
                     *scroll_delta = (*scroll_delta + delta).max(0.0);
@@ -2686,6 +2726,10 @@ impl App {
                                 });
                             }
                         }
+                        DetailFocus::Like => return self.handle_command(AppCommand::ToggleLike),
+                        DetailFocus::Report => return self.handle_command(AppCommand::RequestReport),
+                        DetailFocus::Comment => return self.handle_command(AppCommand::RequestCommentEntry),
+                        DetailFocus::Verify => return self.handle_command(AppCommand::OpenVerifyModal),
                         DetailFocus::Primary => {
                             let primary = detail_actions::primary(app, self.installed.state(app));
                             return match &self.install {
@@ -2703,8 +2747,9 @@ impl App {
                 }
                 if let AppState::Catalog(catalog) = &mut self.state {
                     if catalog.focus_pane == FocusPane::Sidebar {
-                        catalog.leave_sidebar();
-                        self.audio.play(crate::audio::Sfx::Navigate);
+                        if catalog.leave_sidebar() {
+                            self.audio.play(crate::audio::Sfx::Navigate);
+                        }
                         return Ok(());
                     }
                 }
@@ -2762,66 +2807,30 @@ impl App {
                     nav.sub = None;
                 }
             }
-            AppCommand::Input(InputCommand::CategoryPrev) => {
+            AppCommand::Input(step @ (InputCommand::CategoryPrev | InputCommand::CategoryNext)) => {
+                let AppState::Catalog(catalog) = &self.state else { return Ok(()) };
+                let groups = ContentTypeGroup::ALL;
+                let current = match catalog.tab {
+                    StoreTab::Categories => groups.iter().position(|&g| g == catalog.content_type_group).unwrap_or(0),
+                    StoreTab::Roms => groups.len(),
+                    StoreTab::Library => groups.len() + 1,
+                    StoreTab::Updates => groups.len() + 2,
+                };
+                let next = ring_step(current, groups.len() + 3, step == InputCommand::CategoryNext);
+                let command = match groups.get(next) {
+                    Some(&group) => AppCommand::SetContentTypeGroup(group),
+                    None => AppCommand::SetStoreTab(
+                        [StoreTab::Roms, StoreTab::Library, StoreTab::Updates][next - groups.len()],
+                    ),
+                };
+                self.handle_command(command)?;
+                // Moving by buttons must leave something highlighted.
                 if let AppState::Catalog(catalog) = &mut self.state {
-                    match catalog.tab {
-                        StoreTab::Categories => {
-                            let groups = ContentTypeGroup::ALL;
-                            let idx = groups
-                                .iter()
-                                .position(|&g| g == catalog.content_type_group)
-                                .unwrap_or(0);
-                            if idx == 0 {
-                                return self.handle_command(AppCommand::SetStoreTab(StoreTab::Updates));
-                            }
-                            catalog.set_content_type_group(groups[idx - 1]);
-                            self.audio.play(crate::audio::Sfx::TabTransition);
-                            return Ok(());
-                        }
-                        StoreTab::Library => {
-                            let last = ContentTypeGroup::ALL[ContentTypeGroup::ALL.len() - 1];
-                            catalog.tab = StoreTab::Categories;
-                            catalog.set_content_type_group(last);
-                            self.audio.play(crate::audio::Sfx::TabTransition);
-                            return Ok(());
-                        }
-                        StoreTab::Updates => {
-                            return self.handle_command(AppCommand::SetStoreTab(StoreTab::Library));
-                        }
-                        StoreTab::Roms => {
-                            return self.handle_command(AppCommand::SetStoreTab(StoreTab::Updates));
-                        }
-                    }
-                }
-            }
-            AppCommand::Input(InputCommand::CategoryNext) => {
-                if let AppState::Catalog(catalog) = &mut self.state {
-                    match catalog.tab {
-                        StoreTab::Categories => {
-                            let groups = ContentTypeGroup::ALL;
-                            let idx = groups
-                                .iter()
-                                .position(|&g| g == catalog.content_type_group)
-                                .unwrap_or(0);
-                            if idx + 1 >= groups.len() {
-                                return self.handle_command(AppCommand::SetStoreTab(StoreTab::Library));
-                            }
-                            catalog.set_content_type_group(groups[idx + 1]);
-                            self.audio.play(crate::audio::Sfx::TabTransition);
-                            return Ok(());
-                        }
-                        StoreTab::Library => {
-                            return self.handle_command(AppCommand::SetStoreTab(StoreTab::Updates));
-                        }
-                        StoreTab::Updates => {
-                            return self.handle_command(AppCommand::SetStoreTab(StoreTab::Roms));
-                        }
-                        StoreTab::Roms => {
-                            catalog.tab = StoreTab::Categories;
-                            catalog.set_content_type_group(ContentTypeGroup::Home);
-                            self.audio.play(crate::audio::Sfx::TabTransition);
-                            return Ok(());
-                        }
+                    if catalog.filtered_indices.is_empty() {
+                        catalog.enter_sidebar();
+                    } else {
+                        catalog.selection_active = true;
+                        catalog.selected = 0;
                     }
                 }
             }
@@ -2844,7 +2853,7 @@ impl App {
                                         self.audio.play(crate::audio::Sfx::Navigate);
                                     }
                                 }
-                                InputCommand::MoveRight => {
+                                InputCommand::MoveRight if filtered_len > 0 => {
                                     self.roms.sidebar_focus = false;
                                     self.audio.play(crate::audio::Sfx::Navigate);
                                 }
@@ -2853,10 +2862,9 @@ impl App {
                             return Ok(());
                         }
                         if filtered_len == 0 {
-                            if matches!(direction, InputCommand::MoveLeft) {
-                                self.roms.sidebar_focus = true;
-                                self.audio.play(crate::audio::Sfx::Navigate);
-                            }
+                            // Nothing to select here: hand the cursor back to the console list.
+                            self.roms.sidebar_focus = true;
+                            self.audio.play(crate::audio::Sfx::Navigate);
                             return Ok(());
                         }
                         let cur = self.roms.selected.min(filtered_len - 1);
@@ -2912,8 +2920,9 @@ impl App {
                                     }
                                 }
                                 InputCommand::MoveRight => {
-                                    catalog.leave_sidebar();
-                                    self.audio.play(crate::audio::Sfx::Navigate);
+                                    if catalog.leave_sidebar() {
+                                        self.audio.play(crate::audio::Sfx::Navigate);
+                                    }
                                 }
                                 InputCommand::MoveLeft => {}
                                 _ => {}
@@ -2925,8 +2934,8 @@ impl App {
                         let columns = grid_columns as isize;
                         let at_left_edge = !catalog.selection_active
                             || catalog.selected % grid_columns == 0;
-                        if matches!(direction, InputCommand::MoveLeft)
-                            && at_left_edge
+                        if (catalog.filtered_indices.is_empty()
+                            || (matches!(direction, InputCommand::MoveLeft) && at_left_edge))
                             && catalog.shows_sidebar()
                         {
                             catalog.enter_sidebar();
@@ -2949,65 +2958,63 @@ impl App {
                         scroll_delta,
                         detail_focus,
                         app,
+                        previous,
                         lightbox: None,
                         data_prompt: false,
                         uninstall_prompt: false,
                         ..
                     } => {
+                        // Only move to things that are actually on screen.
                         let has_shots = !app.screenshot_urls.is_empty();
-                        match direction {
-                            InputCommand::MoveRight => {
-                                if *detail_focus == DetailFocus::Primary || *detail_focus == DetailFocus::Author {
-                                    *detail_focus = if has_shots {
-                                        DetailFocus::Screenshots
-                                    } else {
-                                        DetailFocus::Requirements
-                                    };
-                                    self.audio.play(crate::audio::Sfx::Navigate);
-                                }
+                        let has_dep = crate::install::requirements::cached_missing_dependency(&app.id, &previous.apps).is_some();
+                        let has_social = app.platform != data::Platform::Theme && app.source_catalog != "roms";
+                        let side = if has_shots {
+                            Some(DetailFocus::Screenshots)
+                        } else {
+                            has_dep.then_some(DetailFocus::Requirements)
+                        };
+                        let can_verify = self.verification.as_ref().is_some_and(|(id, v)| *id == app.id && v.can_verify);
+                        let max = self.detail_max_scroll;
+                        use DetailFocus as F;
+                        use InputCommand as I;
+                        let next = match (direction, *detail_focus) {
+                            (I::MoveRight, F::Like) => Some(F::Report),
+                            (I::MoveRight, F::Report) => Some(F::Comment),
+                            (I::MoveRight, F::Comment) if can_verify => Some(F::Verify),
+                            (I::MoveRight, F::Primary | F::Author | F::Comment | F::Verify) => side,
+                            (I::MoveLeft, F::Verify) => Some(F::Comment),
+                            (I::MoveLeft, F::Comment) => Some(F::Report),
+                            (I::MoveLeft, F::Report) => Some(F::Like),
+                            (I::MoveLeft, F::Screenshots | F::Requirements) => Some(F::Primary),
+                            (I::MoveUp, F::Primary) if *scroll_delta > 0.0 => {
+                                *scroll_delta = (scroll_delta.min(max) - 60.0).max(0.0);
+                                self.audio.play(crate::audio::Sfx::Navigate);
+                                None
                             }
-                            InputCommand::MoveLeft => {
-                                if *detail_focus == DetailFocus::Screenshots
-                                    || *detail_focus == DetailFocus::Requirements
-                                {
-                                    *detail_focus = DetailFocus::Primary;
-                                    self.audio.play(crate::audio::Sfx::Navigate);
-                                }
+                            (I::MoveUp, F::Primary) => Some(if has_social { F::Like } else { F::Author }),
+                            (I::MoveUp, F::Like | F::Report | F::Comment | F::Verify) => Some(F::Author),
+                            (I::MoveUp, F::Requirements) => Some(if has_shots { F::Screenshots } else { F::Primary }),
+                            (I::MoveUp, F::Screenshots) => Some(F::Primary),
+                            (I::MoveDown, F::Author) => Some(if has_social { F::Like } else { F::Primary }),
+                            (I::MoveDown, F::Like | F::Report | F::Comment | F::Verify) => Some(F::Primary),
+                            (I::MoveDown, F::Primary) if *scroll_delta < max - 0.5 => {
+                                *scroll_delta = (*scroll_delta + 60.0).min(max);
+                                self.audio.play(crate::audio::Sfx::Navigate);
+                                None
                             }
-                            InputCommand::MoveUp => match *detail_focus {
-                                DetailFocus::Primary => {
-                                    if *scroll_delta <= 0.0 {
-                                        *detail_focus = DetailFocus::Author;
-                                        self.audio.play(crate::audio::Sfx::Navigate);
-                                    } else {
-                                    *scroll_delta = (*scroll_delta - 60.0).max(0.0);
-                                    self.audio.play(crate::audio::Sfx::Navigate);
-                                    }
+                            (I::MoveDown, F::Primary) => {
+                                // Bottom of the page: carry on to the right column, which sits at the top.
+                                if side.is_some() {
+                                    *scroll_delta = 0.0;
                                 }
-                                DetailFocus::Requirements => {
-                                    if has_shots {
-                                        *detail_focus = DetailFocus::Screenshots;
-                                        self.audio.play(crate::audio::Sfx::Navigate);
-                                    }
-                                }
-                                _ => {}
-                            },
-                            InputCommand::MoveDown => match *detail_focus {
-                                DetailFocus::Author => {
-                                    *detail_focus = DetailFocus::Primary;
-                                    self.audio.play(crate::audio::Sfx::Navigate);
-                                }
-                                DetailFocus::Primary => {
-                                    *scroll_delta += 60.0;
-                                    self.audio.play(crate::audio::Sfx::Navigate);
-                                }
-                                DetailFocus::Screenshots => {
-                                    *detail_focus = DetailFocus::Requirements;
-                                    self.audio.play(crate::audio::Sfx::Navigate);
-                                }
-                                _ => {}
-                            },
-                            _ => {}
+                                side
+                            }
+                            (I::MoveDown, F::Screenshots) => has_dep.then_some(F::Requirements),
+                            _ => None,
+                        };
+                        if let Some(next) = next {
+                            *detail_focus = next;
+                            self.audio.play(crate::audio::Sfx::Navigate);
                         }
                     }
                     AppState::Settings { nav, .. } => {
