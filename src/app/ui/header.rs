@@ -21,7 +21,7 @@ pub(crate) fn catalog_header(
         egui::vec2(ui.available_width(), HEADER_HEIGHT),
         egui::Layout::left_to_right(egui::Align::Center),
         |ui| {
-            ui.spacing_mut().item_spacing = egui::vec2(1.0, 0.0);
+            ui.spacing_mut().item_spacing = egui::vec2(4.0, 0.0);
 
             for group in ContentTypeGroup::ALL {
                 let active = tab == StoreTab::Categories && content_type_group == group;
@@ -35,23 +35,13 @@ pub(crate) fn catalog_header(
                 }
             }
 
-            ui.add_space(3.0);
-
             if top_nav_button(
                 ui,
-                ChromeIcon::for_store_tab(StoreTab::Library),
-                lang.tab_library(),
-                tab == StoreTab::Library,
+                ChromeIcon::for_store_tab(StoreTab::Roms),
+                "ROMs",
+                tab == StoreTab::Roms,
             ) {
-                commands.push(AppCommand::SetStoreTab(StoreTab::Library));
-            }
-            if top_nav_button(
-                ui,
-                ChromeIcon::for_store_tab(StoreTab::Updates),
-                lang.tab_updates(),
-                tab == StoreTab::Updates,
-            ) {
-                commands.push(AppCommand::SetStoreTab(StoreTab::Updates));
+                commands.push(AppCommand::SetStoreTab(StoreTab::Roms));
             }
 
             if let crate::app::ui::UpdateAllUi::Running(label) = update_all {
@@ -118,7 +108,7 @@ pub(crate) fn catalog_header(
                 }
 
                 // Search field / button
-                let fill = ui.available_width().clamp(90.0, 150.0);
+                let fill = ui.available_width().clamp(70.0, 140.0);
                 if show_search_field {
                     let field =
                         search_field(ui, search_query, lang.search_placeholder(), search_active);

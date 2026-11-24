@@ -272,7 +272,7 @@ pub(crate) fn detail_screen(
                 .show(ui, |ui| {
                     ui.set_max_width(viewport_w);
                     ui.multiply_opacity(enter_t);
-                    if entry.platform == Platform::Theme {
+                    if entry.platform == Platform::Theme || entry.source_catalog == "roms" {
                         theme_detail(ui, icons, lang, entry, state, install, viewport_w, &mut commands);
                         return;
                     }

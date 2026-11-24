@@ -6,6 +6,7 @@ mod data;
 mod input;
 mod install;
 mod net;
+pub mod roms;
 mod shell;
 use app::App;
 #[cfg(target_os = "vita")]

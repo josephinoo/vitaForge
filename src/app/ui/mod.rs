@@ -4,6 +4,7 @@ pub mod footer;
 pub mod grid;
 pub mod header;
 pub mod loading;
+pub mod roms;
 pub mod settings;
 pub mod sidebar;
 pub mod theme;
@@ -122,6 +123,7 @@ pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
                     cache_notice: app.cache_notice.as_deref(),
                     install_notifications: app.install_notifications,
                     sound_effects: app.audio.is_enabled(),
+                    roms_3ds_dir: &app.roms_3ds_dir,
                     purge_armed: app.purge_armed,
                     plugins: settings::PluginsView {
                         tai: app.tai.as_ref(),
@@ -277,6 +279,7 @@ fn catalog_view(
         &update_all,
         matches!(app.state, crate::app::AppState::Settings { .. }),
         app.self_update_prompt,
+        app.roms.view(),
     )
 }
 
@@ -310,6 +313,7 @@ fn catalog_screen(
     update_all: &UpdateAllUi,
     settings_open: bool,
     self_update_prompt: bool,
+    roms_view_data: self::roms::RomsView<'_>,
 ) -> Vec<AppCommand> {
     let mut commands = Vec::new();
     let update_all_hint = match update_all {
@@ -418,7 +422,9 @@ fn catalog_screen(
                         ui.add_space(6.0);
                     }
 
-                    if filtered_indices.is_empty()
+                    if tab == StoreTab::Roms {
+                        self::roms::roms_view(ui, icons, search_query, roms_view_data, &mut commands);
+                    } else if filtered_indices.is_empty()
                         && content_type_group == ContentTypeGroup::Themes
                         && crate::data::psvt::searching()
                     {

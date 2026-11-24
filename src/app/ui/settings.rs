@@ -31,6 +31,7 @@ pub enum Row {
     Notifications,
     SoundEffects,
     Theme,
+    Roms3dsDir,
     ClearIcons,
     ClearCatalog,
     PurgeAll,
@@ -78,7 +79,7 @@ pub const SECTIONS: [(Section, &[Row]); 6] = [
         Section::Plugins,
         &[Row::PluginManager, Row::ConfigViewer, Row::ConfigBackups, Row::Profiles, Row::SafeMode, Row::MigrateConfig, Row::Reboot],
     ),
-    (Section::Storage, &[Row::ClearIcons, Row::ClearCatalog, Row::PurgeAll]),
+    (Section::Storage, &[Row::Roms3dsDir, Row::ClearIcons, Row::ClearCatalog, Row::PurgeAll]),
     (Section::About, &[]),
 ];
 
@@ -203,6 +204,7 @@ pub(crate) struct SettingsView<'a> {
     pub cache_notice: Option<&'a str>,
     pub install_notifications: bool,
     pub sound_effects: bool,
+    pub roms_3ds_dir: &'a str,
     pub purge_armed: bool,
     pub plugins: PluginsView<'a>,
     pub auth_form: &'a crate::app::AuthForm,
@@ -452,6 +454,18 @@ fn content(ui: &mut egui::Ui, view: &SettingsView, commands: &mut Vec<AppCommand
                 value(ui, theme_label(active_theme(), lang));
                 swatch(ui, active_theme().palette(), egui::vec2(34.0, 22.0));
             }),
+            Row::Roms3dsDir => setting_row(
+                ui,
+                ChromeIcon::Games,
+                "3DS ROMs folder",
+                "Default: ux0:data/azahar/roms",
+                focused,
+                false,
+                |ui| {
+                    chevron(ui);
+                    value(ui, view.roms_3ds_dir);
+                },
+            ),
             Row::ClearIcons | Row::ClearCatalog | Row::PurgeAll => {
                 let (icon, label, hint) = match row {
                     Row::ClearIcons => (ChromeIcon::Image, lang.settings_clear_icons(), lang.settings_clear_icons_hint()),
@@ -1429,6 +1443,7 @@ mod tests {
                             cache_notice: None,
                             install_notifications: true,
                             sound_effects: true,
+                            roms_3ds_dir: "ux0:data/azahar/roms",
                             purge_armed: false,
                             plugins: PluginsView {
                                 tai: Some(&snapshot),
@@ -1483,7 +1498,7 @@ mod tests {
                     egui::TopBottomPanel::bottom("hints").exact_height(47.0).show(ctx, |_| {});
                     settings_page(ctx, SettingsView {
                         lang: Language::English, nav: &nav, catalog_count: 0, stats: &stats,
-                        cache_notice: None, install_notifications: true, sound_effects: true, purge_armed: false,
+                        cache_notice: None, install_notifications: true, sound_effects: true, roms_3ds_dir: "ux0:data/azahar/roms", purge_armed: false,
                         plugins: PluginsView { tai: Some(&snapshot), outdated: &[], pending_reboot: false,
                             reboot_armed: false, armed: false, notice: None },
                         appear: 1.0,

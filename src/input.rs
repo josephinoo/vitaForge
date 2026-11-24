@@ -35,6 +35,7 @@ pub enum TextTarget {
     AuthEmail,
     VerifyScore,
     VerifyNote,
+    Roms3dsDir,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DetailFocus {
@@ -50,6 +51,7 @@ pub enum StoreTab {
     Categories,
     Library,
     Updates,
+    Roms,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -137,6 +139,14 @@ pub enum AppCommand {
     SelectApp { index: usize },
     SelectAppById(String),
     SetStoreTab(StoreTab),
+    RomsSetQuery(String),
+    RomsLoadCatalog,
+    RomsSelectConsole(String),
+    RomsSetGenre(Option<String>),
+    SetRoms3dsDir(String),
+    RomsOpen(usize),
+    RomsDownload(usize),
+    RomsCancelDownload,
     MoreByAuthor(String),
     OpenScreenshot(usize),
     CloseScreenshot,
