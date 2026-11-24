@@ -1,0 +1,23 @@
+modules:
+  QuickMenuReborn:
+    libraries:
+      QuickMenuReborn:
+        nid: 0x6642F554
+        functions:
+          QuickMenuRebornRegisterWidget: 0x77BD7806
+          QuickMenuRebornUnregisterWidget: 0xAD586CDF
+          QuickMenuRebornRegisterEventHanlder: 0x0863AF23
+          QuickMenuRebornSeparator: 0x554D28CD
+          QuickMenuRebornRemoveSeparator: 0x7550C9BF
+          QuickMenuRebornSetWidgetSize: 0xB49B464C
+          QuickMenuRebornSetWidgetPosition: 0x979759AE
+          QuickMenuRebornSetWidgetColor: 0x72BF9D2A
+          QuickMenuRebornSetWidgetLabel: 0x2CD65CA6
+          QuickMenuRebornGetCheckboxValue: 0x3DACB8A6
+          QuickMenuRebornAssignOnLoadHandler: 0x3DF0A41F
+          QuickMenuRebornAssignDefaultCheckBoxSave: 0xF9A7F16C
+          QuickMenuRebornAssignDefaultCheckBoxRecall: 0xA29C7517
+          QuickMenuRebornSaveCheckBoxState: 0x7C987BD7
+          QuickMenuRebornRegisterTexture: 0x474BBCDF
+          QuickMenuRebornUnregisterTexture: 0x7F595FCA
+          QuickMenuRebornSetWidgetTexture: 0x8475801A

@@ -1,4 +1,5 @@
 mod bgdl;
+pub mod bg_jobs;
 pub mod download;
 pub mod github;
 mod head;

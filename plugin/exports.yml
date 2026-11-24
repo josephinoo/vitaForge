@@ -1,0 +1,10 @@
+vitaforge_bg:
+  attributes: 0
+  process_image: false
+  imagemodule: false
+  version:
+    major: 1
+    minor: 0
+  main:
+    start: module_start
+    stop: module_stop
