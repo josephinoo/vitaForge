@@ -199,6 +199,11 @@ impl CatalogState {
                 self.category_filter = None;
                 self.apply_install_filter(installed, true);
             }
+            StoreTab::Roms => {
+                self.search_query.clear();
+                self.search_requested = false;
+                self.category_filter = None;
+            }
         }
     }
     fn apply_install_filter(&mut self, installed: &crate::install::installed::InstalledIndex, updates_only: bool) {
@@ -812,6 +817,7 @@ pub struct App {
     /// Set by the first ○ during a download; a second ○ within 3 s cancels it.
     pub cancel_armed_at: Option<std::time::Instant>,
     install_notifications: bool,
+    pub roms_3ds_dir: String,
     update_queue: std::collections::VecDeque<AppEntry>,
     pub update_active: bool,
     pub update_total: usize,
@@ -851,6 +857,135 @@ pub struct App {
     tai_move_base: Option<String>,
     refresh_due_at: std::time::Instant,
     updatable_cache: std::sync::Mutex<Option<((usize, usize, usize), usize)>>,
+    pub roms: RomsUiState,
+}
+
+pub struct RomsUiState {
+    pub rom_type: String,
+    pub genre_filter: Option<String>,
+    pub query: String,
+    pub loading: bool,
+    pub status: Option<String>,
+    pub entries: Vec<crate::roms::RomEntry>,
+    pub genre_counts: Vec<(String, usize)>,
+    pub selected: usize,
+    pub scroll_to_selected: bool,
+    pub sidebar_focus: bool,
+    pub sidebar_cursor: usize,
+    etag: Option<String>,
+    catalog_rx: Option<oneshot::Receiver<Result<crate::roms::SnapshotFetch>>>,
+    download_title: Option<String>,
+    download_rx: Option<watch::Receiver<crate::install::Progress>>,
+    download_progress: crate::install::Progress,
+    download_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+}
+
+impl RomsUiState {
+    fn new() -> Self {
+        Self {
+            rom_type: crate::roms::DEFAULT_ROM_TYPE.to_owned(),
+            genre_filter: None,
+            query: String::new(),
+            loading: false,
+            status: None,
+            entries: Vec::new(),
+            genre_counts: Vec::new(),
+            selected: 0,
+            scroll_to_selected: false,
+            sidebar_focus: false,
+            sidebar_cursor: 0,
+            etag: None,
+            catalog_rx: None,
+            download_title: None,
+            download_rx: None,
+            download_progress: crate::install::Progress::Resolving,
+            download_cancel: None,
+        }
+    }
+
+    pub fn view(&self) -> ui::roms::RomsView<'_> {
+        ui::roms::RomsView {
+            rom_type: &self.rom_type,
+            genre_filter: self.genre_filter.as_deref(),
+            loading: self.loading,
+            status: self.status.as_deref(),
+            entries: &self.entries,
+            genre_counts: &self.genre_counts,
+            selected: self.selected,
+            scroll_to_selected: self.scroll_to_selected,
+            sidebar_focus: self.sidebar_focus,
+            sidebar_cursor: self.sidebar_cursor,
+        }
+    }
+
+    fn filtered_indices(&self, search_query: &str) -> Vec<usize> {
+        let needle = search_query.trim().to_lowercase();
+        self.entries
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| needle.is_empty() || e.title.to_lowercase().contains(&needle))
+            .filter(|(_, e)| {
+                self.genre_filter
+                    .as_deref()
+                    .is_none_or(|g| e.genres.iter().any(|eg| eg == g))
+            })
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    fn load_catalog(&mut self) {
+        if self.loading {
+            return;
+        }
+        let (tx, rx) = oneshot::channel();
+        let etag = self.etag.clone();
+        let rom_type = self.rom_type.clone();
+        self.catalog_rx = Some(rx);
+        self.loading = true;
+        self.status = Some(format!("Loading {} ROMs snapshot...", rom_type.to_uppercase()));
+        tokio::spawn(async move {
+            let _ = tx.send(crate::roms::fetch_snapshot(&rom_type, etag.as_deref()).await);
+        });
+    }
+
+    fn poll(&mut self) {
+        if let Some(rx) = &mut self.catalog_rx {
+            if let Ok(res) = rx.try_recv() {
+                self.catalog_rx = None;
+                self.loading = false;
+                match res {
+                    Ok(crate::roms::SnapshotFetch::NotModified) => {
+                        self.status = None;
+                    }
+                    Ok(crate::roms::SnapshotFetch::Updated { entries, etag }) => {
+                        self.status = None;
+                        let mut counts = std::collections::BTreeMap::<String, usize>::new();
+                        for e in &entries {
+                            for g in &e.genres {
+                                *counts.entry(g.clone()).or_insert(0) += 1;
+                            }
+                        }
+                        self.genre_counts = counts.into_iter().collect();
+                        self.entries = entries;
+                        if etag.is_some() {
+                            self.etag = etag;
+                        }
+                    }
+                    Err(err) => self.status = Some(format!("Catalog error: {err:#}")),
+                }
+            }
+        }
+        if let Some(rx) = &mut self.download_rx {
+            self.download_progress = rx.borrow_and_update().clone();
+            if matches!(
+                self.download_progress,
+                crate::install::Progress::Done | crate::install::Progress::Failed(_)
+            ) {
+                self.download_rx = None;
+                self.download_cancel = None;
+            }
+        }
+    }
 }
 const LOAD_WATCHDOG: std::time::Duration = std::time::Duration::from_secs(60);
 pub struct InstallJob {
@@ -929,6 +1064,7 @@ impl App {
             cancel_armed_at: None,
             icons_need_clear: false,
             install_notifications: settings.install_notifications,
+            roms_3ds_dir: settings.roms_3ds_dir,
             update_queue: std::collections::VecDeque::new(),
             update_active: false,
             update_total: 0,
@@ -958,6 +1094,7 @@ impl App {
             tai_move_base: None,
             refresh_due_at: std::time::Instant::now() + CATALOG_REFRESH_EVERY,
             updatable_cache: std::sync::Mutex::new(None),
+            roms: RomsUiState::new(),
         })
     }
     fn spawn_catalog_fetch(&mut self) {
@@ -1135,6 +1272,7 @@ impl App {
             self.icons_need_clear = false;
         }
         self.icons.publish_completed(ctx);
+        self.roms.poll();
         if self.needs_installed_rescan {
             let entries: &[AppEntry] = match &self.state {
                 AppState::Catalog(catalog) => &catalog.apps,
@@ -1454,6 +1592,9 @@ impl App {
                 nav.sub = Some(SubPage::Theme);
                 nav.sub_index = ThemeId::ALL.iter().position(|&t| t == theme).unwrap_or(0);
                 return Ok(());
+            }
+            Some(Row::Roms3dsDir) => {
+                AppCommand::RequestAuthInput(crate::input::TextTarget::Roms3dsDir)
             }
             Some(Row::PluginManager | Row::ConfigViewer | Row::ConfigBackups | Row::Profiles) => {
                 let sub = match nav.current_row() {
@@ -2224,6 +2365,7 @@ impl App {
                         StoreTab::Library => catalog.apply_install_filter(&self.installed, false),
                         StoreTab::Updates => catalog.apply_install_filter(&self.installed, true),
                         StoreTab::Categories => catalog.sync_sidebar_cursor(),
+                        StoreTab::Roms => {}
                     }
                     self.audio.play(crate::audio::Sfx::Activation);
                 }
@@ -2462,6 +2604,7 @@ impl App {
                         StoreTab::Library => catalog.apply_install_filter(&self.installed, false),
                         StoreTab::Updates => catalog.apply_install_filter(&self.installed, true),
                         StoreTab::Categories => {}
+                        StoreTab::Roms => {}
                     }
                     self.audio.play(crate::audio::Sfx::Activation);
                 }
@@ -2494,6 +2637,22 @@ impl App {
                 if self.self_update_prompt {
                     self.self_update_prompt = false;
                     return self.handle_command(AppCommand::SelfUpdate);
+                }
+                if let AppState::Catalog(catalog) = &self.state {
+                    if catalog.tab == StoreTab::Roms {
+                        if self.roms.sidebar_focus {
+                            if let Some(&(code, _)) = crate::roms::ROM_CONSOLES.get(self.roms.sidebar_cursor) {
+                                self.roms.sidebar_focus = false;
+                                return self.handle_command(AppCommand::RomsSelectConsole(code.to_owned()));
+                            }
+                        } else {
+                            let filtered = self.roms.filtered_indices(&catalog.search_query);
+                            if let Some(&real_idx) = filtered.get(self.roms.selected) {
+                                return self.handle_command(AppCommand::RomsOpen(real_idx));
+                            }
+                        }
+                        return Ok(());
+                    }
                 }
                 if let AppState::Detail { data_prompt: true, data_step, .. } = &self.state {
                     return self.handle_command(match data_step {
@@ -2629,6 +2788,9 @@ impl App {
                         StoreTab::Updates => {
                             return self.handle_command(AppCommand::SetStoreTab(StoreTab::Library));
                         }
+                        StoreTab::Roms => {
+                            return self.handle_command(AppCommand::SetStoreTab(StoreTab::Updates));
+                        }
                     }
                 }
             }
@@ -2652,6 +2814,9 @@ impl App {
                             return self.handle_command(AppCommand::SetStoreTab(StoreTab::Updates));
                         }
                         StoreTab::Updates => {
+                            return self.handle_command(AppCommand::SetStoreTab(StoreTab::Roms));
+                        }
+                        StoreTab::Roms => {
                             catalog.tab = StoreTab::Categories;
                             catalog.set_content_type_group(ContentTypeGroup::Home);
                             self.audio.play(crate::audio::Sfx::TabTransition);
@@ -2662,6 +2827,75 @@ impl App {
             }
             AppCommand::Input(direction) => {
                 match &mut self.state {
+                    AppState::Catalog(catalog) if catalog.tab == StoreTab::Roms => {
+                        let cols = ui::GRID_COLUMNS;
+                        let filtered_len = self.roms.filtered_indices(&catalog.search_query).len();
+                        if self.roms.sidebar_focus {
+                            match direction {
+                                InputCommand::MoveUp => {
+                                    if self.roms.sidebar_cursor > 0 {
+                                        self.roms.sidebar_cursor -= 1;
+                                        self.audio.play(crate::audio::Sfx::Navigate);
+                                    }
+                                }
+                                InputCommand::MoveDown => {
+                                    if self.roms.sidebar_cursor + 1 < crate::roms::ROM_CONSOLES.len() {
+                                        self.roms.sidebar_cursor += 1;
+                                        self.audio.play(crate::audio::Sfx::Navigate);
+                                    }
+                                }
+                                InputCommand::MoveRight => {
+                                    self.roms.sidebar_focus = false;
+                                    self.audio.play(crate::audio::Sfx::Navigate);
+                                }
+                                _ => {}
+                            }
+                            return Ok(());
+                        }
+                        if filtered_len == 0 {
+                            if matches!(direction, InputCommand::MoveLeft) {
+                                self.roms.sidebar_focus = true;
+                                self.audio.play(crate::audio::Sfx::Navigate);
+                            }
+                            return Ok(());
+                        }
+                        let cur = self.roms.selected.min(filtered_len - 1);
+                        match direction {
+                            InputCommand::MoveLeft => {
+                                if cur % cols == 0 {
+                                    self.roms.sidebar_focus = true;
+                                } else {
+                                    self.roms.selected = cur - 1;
+                                    self.roms.scroll_to_selected = true;
+                                }
+                                self.audio.play(crate::audio::Sfx::Navigate);
+                            }
+                            InputCommand::MoveRight => {
+                                if cur + 1 < filtered_len {
+                                    self.roms.selected = cur + 1;
+                                    self.roms.scroll_to_selected = true;
+                                    self.audio.play(crate::audio::Sfx::Navigate);
+                                }
+                            }
+                            InputCommand::MoveUp => {
+                                if cur >= cols {
+                                    self.roms.selected = cur - cols;
+                                    self.roms.scroll_to_selected = true;
+                                    self.audio.play(crate::audio::Sfx::Navigate);
+                                }
+                            }
+                            InputCommand::MoveDown => {
+                                let next = (cur + cols).min(filtered_len - 1);
+                                if next != cur {
+                                    self.roms.selected = next;
+                                    self.roms.scroll_to_selected = true;
+                                    self.audio.play(crate::audio::Sfx::Navigate);
+                                }
+                            }
+                            _ => {}
+                        }
+                        return Ok(());
+                    }
                     AppState::Catalog(catalog) => {
                         if catalog.focus_pane == FocusPane::Sidebar
                             && catalog.shows_sidebar()
@@ -2829,7 +3063,70 @@ impl App {
             }
             AppCommand::SelectApp { index } => self.open_app(index),
             AppCommand::SelectAppById(id) => self.open_app_by_id(&id),
+            AppCommand::RomsSetQuery(q) => {
+                self.roms.query = q;
+            }
+            AppCommand::RomsLoadCatalog => {
+                self.roms.load_catalog();
+            }
+            AppCommand::RomsSelectConsole(console) => {
+                if self.roms.rom_type != console {
+                    self.roms.rom_type = console;
+                    self.roms.genre_filter = None;
+                    self.roms.selected = 0;
+                    self.roms.entries.clear();
+                    self.roms.etag = None;
+                    self.roms.loading = false;
+                    self.roms.load_catalog();
+                }
+            }
+            AppCommand::RomsSetGenre(genre) => {
+                self.roms.genre_filter = genre;
+                self.roms.selected = 0;
+                self.roms.scroll_to_selected = true;
+            }
+            AppCommand::SetRoms3dsDir(dir) => {
+                self.roms_3ds_dir = dir.clone();
+                data::settings::set_roms_3ds_dir(dir);
+            }
+            AppCommand::RomsOpen(idx) => {
+                if let Some(entry) = self.roms.entries.get(idx).map(|r| r.to_app_entry(&self.roms.rom_type)) {
+                    self.open_entry(entry, None);
+                }
+            }
+            AppCommand::RomsDownload(idx) => {
+                if let Some(entry) = self.roms.entries.get(idx).cloned() {
+                    let (tx, rx) = watch::channel(crate::install::Progress::Resolving);
+                    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                    let cancel_bg = cancel.clone();
+                    self.roms.download_title = Some(entry.title.clone());
+                    self.roms.download_progress = crate::install::Progress::Resolving;
+                    self.roms.download_rx = Some(rx);
+                    self.roms.download_cancel = Some(cancel);
+                    let storage = std::path::PathBuf::from(crate::roms::AZAHAR_ROMS_DIR);
+                    tokio::spawn(async move {
+                        if let Err(err) = crate::roms::download_rom(
+                            &entry,
+                            &storage,
+                            &tx,
+                            &cancel_bg,
+                        )
+                        .await
+                        {
+                            let _ = tx.send(crate::install::Progress::Failed(format!("{err:#}")));
+                        }
+                    });
+                }
+            }
+            AppCommand::RomsCancelDownload => {
+                if let Some(cancel) = &self.roms.download_cancel {
+                    cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
             AppCommand::SetStoreTab(tab) => {
+                if tab == StoreTab::Roms && self.roms.entries.is_empty() && !self.roms.loading {
+                    self.roms.load_catalog();
+                }
                 if let AppState::Catalog(catalog) = &mut self.state {
                     catalog.apply_store_tab(tab, &self.installed);
                     self.audio.play(crate::audio::Sfx::TabTransition);
@@ -3204,6 +3501,16 @@ impl App {
                 if let Some(target) = self.auth_input_target.take() {
                     match target {
                         crate::input::TextTarget::AuthUsername => self.auth_form.username = text.trim().to_owned(),
+                        crate::input::TextTarget::Roms3dsDir => {
+                            let dir = text.trim().trim_end_matches('/');
+                            let value = if dir.is_empty() {
+                                crate::roms::AZAHAR_ROMS_DIR.to_owned()
+                            } else {
+                                dir.to_owned()
+                            };
+                            self.roms_3ds_dir = value.clone();
+                            data::settings::set_roms_3ds_dir(value);
+                        }
                         crate::input::TextTarget::AuthPassword => self.auth_form.password = text,
                         crate::input::TextTarget::AuthEmail => self.auth_form.email = text.trim().to_owned(),
                         _ => {}
@@ -3288,7 +3595,11 @@ impl App {
         let app_id = entry.id.clone();
         let app_id_title = crate::install::installed::index_key(&entry);
         let title = entry.name.clone();
-        let (rx, cancel) = crate::install::start(entry);
+        let (rx, cancel) = if entry.source_catalog == "roms" {
+            crate::roms::start_rom_install(entry)
+        } else {
+            crate::install::start(entry)
+        };
         let progress = rx.borrow().clone();
         self.install = Some(InstallJob {
             app_id,
@@ -3486,6 +3797,7 @@ impl App {
                     StoreTab::Library => catalog.apply_install_filter(&self.installed, false),
                     StoreTab::Updates => catalog.apply_install_filter(&self.installed, true),
                     StoreTab::Categories => catalog.refresh_filter(),
+                    StoreTab::Roms => {}
                 }
                 return;
             }

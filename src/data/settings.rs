@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 #[cfg(not(test))]
 const SETTINGS_PATH: &str = "ux0:data/vitaforge/settings.json";
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default)]
     pub sort_order: SortOrder,
@@ -18,10 +18,13 @@ pub struct Settings {
     pub sound_effects: bool,
     #[serde(default)]
     pub theme: crate::app::ui::theme::ThemeId,
+    #[serde(default = "default_roms_3ds_dir")]
+    pub roms_3ds_dir: String,
 }
 
 const fn default_install_notifications() -> bool { true }
 const fn default_sound_effects() -> bool { true }
+fn default_roms_3ds_dir() -> String { crate::roms::AZAHAR_ROMS_DIR.to_owned() }
 
 impl Default for Settings {
     fn default() -> Self {
@@ -32,6 +35,7 @@ impl Default for Settings {
             install_notifications: true,
             sound_effects: true,
             theme: Default::default(),
+            roms_3ds_dir: default_roms_3ds_dir(),
         }
     }
 }
@@ -58,6 +62,27 @@ pub fn set_sound_effects(enabled: bool) {
     let mut settings = load();
     settings.sound_effects = enabled;
     save(&settings);
+}
+
+pub fn set_roms_3ds_dir(dir: String) {
+    let trimmed = dir.trim();
+    let value = if trimmed.is_empty() {
+        crate::roms::AZAHAR_ROMS_DIR.to_owned()
+    } else {
+        trimmed.trim_end_matches('/').to_owned()
+    };
+    let mut settings = load();
+    settings.roms_3ds_dir = value;
+    save(&settings);
+}
+
+pub fn roms_3ds_dir() -> String {
+    let dir = load().roms_3ds_dir;
+    if dir.trim().is_empty() {
+        crate::roms::AZAHAR_ROMS_DIR.to_owned()
+    } else {
+        dir
+    }
 }
 
 static SETTINGS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());

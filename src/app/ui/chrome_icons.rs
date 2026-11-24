@@ -57,6 +57,7 @@ impl ChromeIcon {
             crate::input::StoreTab::Categories => Self::All,
             crate::input::StoreTab::Library => Self::Library,
             crate::input::StoreTab::Updates => Self::Updates,
+            crate::input::StoreTab::Roms => Self::Games,
         }
     }
     pub fn for_category(category: Category) -> Self {
