@@ -626,14 +626,21 @@ fn account_section(ui: &mut egui::Ui, view: &SettingsView, commands: &mut Vec<Ap
         }
 
         // Center content: "Log out" + icon, subtitle "Disconnect your VitaForge account from this console"
-        ui.painter().text(
-            egui::pos2(rect.center().x, rect.center().y - 8.0),
-            egui::Align2::CENTER_CENTER,
-            lang.tr("auth-logout"),
-            font(FONT_BODY),
+        let logout_galley = ui.fonts(|f| f.layout_no_wrap(lang.tr("auth-logout"), font(FONT_BODY), pal().danger));
+        let icon_w = 15.0;
+        let gap = 6.0;
+        let total_w = logout_galley.size().x + gap + icon_w;
+        let start_x = rect.center().x - total_w * 0.5;
+        let row_y = rect.center().y - 8.0;
+        ui.painter().galley(
+            egui::pos2(start_x, row_y - logout_galley.size().y * 0.5),
+            logout_galley.clone(),
             pal().danger,
         );
-        let icon_rect = egui::Rect::from_center_size(egui::pos2(rect.center().x + 36.0, rect.center().y - 8.0), egui::Vec2::splat(15.0));
+        let icon_rect = egui::Rect::from_center_size(
+            egui::pos2(start_x + logout_galley.size().x + gap + icon_w * 0.5, row_y),
+            egui::Vec2::splat(icon_w),
+        );
         chrome_icons::paint(ui, ChromeIcon::Trash, icon_rect, pal().danger);
 
         ui.painter().text(

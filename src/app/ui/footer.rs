@@ -57,6 +57,7 @@ fn status_note_widget(ui: &mut egui::Ui, lang: Language, note: StatusNote, reser
                 ChromeIcon::Alert,
                 pal().warning,
                 reserve,
+                false,
             );
         }
         StatusNote::Overview {
@@ -75,6 +76,7 @@ fn status_note_widget(ui: &mut egui::Ui, lang: Language, note: StatusNote, reser
                     ChromeIcon::UpdateAvailable,
                     pal().warning,
                     reserve,
+                    true,
                 ) {
                     clicked = Some(StoreTab::Updates);
                 }
@@ -87,7 +89,7 @@ fn status_note_widget(ui: &mut egui::Ui, lang: Language, note: StatusNote, reser
                 } else {
                     pal().text_dim
                 };
-                let _ = status_chip_battery(ui, pct, color, reserve);
+                status_chip_battery(ui, pct, color, reserve);
             }
             if !clock.is_empty() && clock != "--:--" {
                 let _ = status_chip_inline(
@@ -97,6 +99,7 @@ fn status_note_widget(ui: &mut egui::Ui, lang: Language, note: StatusNote, reser
                     ChromeIcon::Recent,
                     pal().text_dim,
                     reserve,
+                    false,
                 );
             }
             let installed_label = lang.status_installed(installed);
@@ -107,6 +110,7 @@ fn status_note_widget(ui: &mut egui::Ui, lang: Language, note: StatusNote, reser
                 ChromeIcon::Installed,
                 pal().success,
                 reserve,
+                true,
             ) {
                 clicked = Some(StoreTab::Library);
             }
@@ -118,6 +122,7 @@ fn status_note_widget(ui: &mut egui::Ui, lang: Language, note: StatusNote, reser
                     ChromeIcon::Storage,
                     pal().text_dim,
                     reserve,
+                    false,
                 );
             }
         }
@@ -132,6 +137,7 @@ fn status_chip_inline(
     icon: ChromeIcon,
     color: egui::Color32,
     reserve: f32,
+    clickable: bool,
 ) -> bool {
     let galley = ui.fonts(|fonts| fonts.layout_no_wrap(text.to_owned(), font(FONT_MICRO), color));
     // 8 pad + 12 icon + 4 gap + text + 8 pad = 32.
@@ -140,8 +146,12 @@ fn status_chip_inline(
         return false;
     }
     let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
-    let touch_rect = rect.expand2(egui::vec2(4.0, 6.0));
-    let response = ui.interact(touch_rect, ui.id().with(id), egui::Sense::click());
+    let clicked = if clickable {
+        let touch_rect = rect.expand2(egui::vec2(4.0, 6.0));
+        ui.interact(touch_rect, ui.id().with(id), egui::Sense::click()).clicked()
+    } else {
+        false
+    };
     ui.painter()
         .rect_filled(rect, 13.0, color.gamma_multiply(0.13));
     ui.painter().rect_stroke(
@@ -164,19 +174,17 @@ fn status_chip_inline(
         galley,
         color,
     );
-    response.clicked()
+    clicked
 }
 
-fn status_chip_battery(ui: &mut egui::Ui, percent: u8, color: egui::Color32, reserve: f32) -> bool {
+fn status_chip_battery(ui: &mut egui::Ui, percent: u8, color: egui::Color32, reserve: f32) {
     let text = format!("{percent}%");
     let galley = ui.fonts(|fonts| fonts.layout_no_wrap(text, font(FONT_MICRO), color));
     let size = egui::vec2(galley.size().x + 34.0, 26.0);
     if size.x > ui.available_width() - reserve {
-        return false;
+        return;
     }
     let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
-    let touch_rect = rect.expand2(egui::vec2(4.0, 6.0));
-    let response = ui.interact(touch_rect, ui.id().with("status_chip_battery"), egui::Sense::click());
     ui.painter()
         .rect_filled(rect, 13.0, color.gamma_multiply(0.13));
     ui.painter().rect_stroke(
@@ -201,7 +209,6 @@ fn status_chip_battery(ui: &mut egui::Ui, percent: u8, color: egui::Color32, res
         galley,
         color,
     );
-    response.clicked()
 }
 
 pub(crate) fn button_hints(

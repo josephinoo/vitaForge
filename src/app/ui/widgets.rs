@@ -707,17 +707,27 @@ pub(crate) fn rating_stars(ui: &mut egui::Ui, rating: f32) {
     );
 }
 
-pub(crate) fn tappable_stars(ui: &mut egui::Ui, current: Option<u8>) -> Option<u8> {
+pub(crate) fn tappable_stars(ui: &mut egui::Ui, current: Option<u8>, focused_star: Option<u8>) -> Option<u8> {
     let mut chosen = None;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         for star in 1..=5u8 {
-            let filled = current.is_some_and(|c| star <= c);
+            let active = focused_star.or(current);
+            let filled = active.is_some_and(|c| star <= c);
             let color = if filled { pal().warning } else { pal().text_faint };
             let response = ui.add(
                 egui::Button::new(egui::RichText::new("★").size(FONT_LARGE).color(color))
                     .frame(false),
             );
+            if focused_star == Some(star) {
+                ui.painter().rect_stroke(
+                    response.rect.expand(2.0),
+                    RADIUS_XS,
+                    egui::Stroke::new(FOCUS_STROKE, pal().focus),
+                    egui::StrokeKind::Outside,
+                );
+                response.scroll_to_me(None);
+            }
             if response.clicked() {
                 chosen = Some(star);
             }

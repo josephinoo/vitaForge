@@ -33,6 +33,7 @@ pub(crate) fn detail_screen(
     apps: &[crate::data::AppEntry],
     dep_job: Option<(&str, &crate::install::Progress)>,
     detail_focus: DetailFocus,
+    verified_tab: bool,
     report_modal: Option<usize>,
     report_choice: usize,
     verify_modal: Option<&crate::app::VerifyDraft>,
@@ -81,6 +82,21 @@ pub(crate) fn detail_screen(
             &hints,
             Some(status_note(installed, icons)),
         ));
+    } else if uninstall_prompt {
+        let hints = [
+            (Glyph::Cross, lang.uninstall_btn()),
+            (Glyph::Circle, lang.cancel_btn()),
+        ];
+        commands.extend(button_hints(ctx, lang, &hints, None));
+    } else if data_prompt || report_modal.is_some() || verify_modal.is_some() {
+        let hints = [
+            (Glyph::Cross, lang.btn_choose()),
+            (Glyph::Circle, lang.cancel_btn()),
+        ];
+        commands.extend(button_hints(ctx, lang, &hints, None));
+    } else if lightbox.is_some() {
+        let hints = [(Glyph::Circle, lang.btn_back())];
+        commands.extend(button_hints(ctx, lang, &hints, None));
     } else {
         let mut hints = vec![(Glyph::Circle, lang.btn_back())];
         match detail_focus {
@@ -93,8 +109,16 @@ pub(crate) fn detail_screen(
             DetailFocus::Requirements => {
                 hints.push((Glyph::Cross, lang.get_btn()));
             }
-            DetailFocus::Like | DetailFocus::Report | DetailFocus::Comment | DetailFocus::Verify => {
+            DetailFocus::Like
+            | DetailFocus::Report
+            | DetailFocus::Comment
+            | DetailFocus::Verify
+            | DetailFocus::Rating(_)
+            | DetailFocus::CommentTab => {
                 hints.push((Glyph::Cross, lang.btn_choose()));
+            }
+            DetailFocus::CommentReply(_) => {
+                hints.push((Glyph::Cross, lang.reply_comment()));
             }
             DetailFocus::Primary => {
                 hints.push((Glyph::Cross, action_label(lang, primary)));
@@ -156,11 +180,11 @@ pub(crate) fn detail_screen(
                             );
                             ui.add_space(18.0);
                             ui.horizontal(|ui| {
-                                if pill_button(ui, lang.uninstall_btn(), true) {
+                                if prompt_chip(ui, Glyph::Cross, lang.uninstall_btn(), true) {
                                     commands.push(AppCommand::ConfirmUninstall);
                                 }
                                 ui.add_space(10.0);
-                                if pill_button(ui, lang.cancel_btn(), false) {
+                                if prompt_chip(ui, Glyph::Circle, lang.cancel_btn(), false) {
                                     commands.push(AppCommand::CancelUninstall);
                                 }
                             });
@@ -387,6 +411,10 @@ pub(crate) fn detail_screen(
                     ui.add_space(22.0);
                     section_label(ui, lang.community());
                     ui.add_space(8.0);
+                    let focused_star = match detail_focus {
+                        DetailFocus::Rating(star) => Some(star),
+                        _ => None,
+                    };
                     ui.horizontal(|ui| {
                         ui.label(
                             egui::RichText::new(lang.your_rating())
@@ -394,7 +422,7 @@ pub(crate) fn detail_screen(
                                 .color(pal().text_dim),
                         );
                         ui.add_space(8.0);
-                        if let Some(score) = tappable_stars(ui, entry.user_rating) {
+                        if let Some(score) = tappable_stars(ui, entry.user_rating, focused_star) {
                             commands.push(AppCommand::RateCurrent(score));
                         }
                     });
@@ -429,18 +457,23 @@ pub(crate) fn detail_screen(
                         });
                     });
                     ui.add_space(8.0);
-                    // Tab state is UI-local: Community first, resets with the egui memory.
-                    let tab_id = egui::Id::new("comment_tab_verified");
-                    let mut verified_tab: bool = ui.data(|d| d.get_temp(tab_id)).unwrap_or(false);
-                    ui.horizontal(|ui| {
+                    let tab_resp = ui.horizontal(|ui| {
                         if pill_button(ui, lang.tab_community(), !verified_tab) {
-                            verified_tab = false;
+                            commands.push(AppCommand::SetCommentTab(false));
                         }
                         if pill_button(ui, lang.tab_verified(), verified_tab) {
-                            verified_tab = true;
+                            commands.push(AppCommand::SetCommentTab(true));
                         }
                     });
-                    ui.data_mut(|d| d.insert_temp(tab_id, verified_tab));
+                    if detail_focus == DetailFocus::CommentTab {
+                        ui.painter().rect_stroke(
+                            tab_resp.response.rect.expand(3.0),
+                            RADIUS_MD,
+                            egui::Stroke::new(FOCUS_STROKE, pal().focus),
+                            egui::StrokeKind::Outside,
+                        );
+                        tab_resp.response.scroll_to_me(None);
+                    }
                     ui.add_space(8.0);
                     if verified_tab {
                         egui::Frame::NONE
@@ -541,7 +574,15 @@ pub(crate) fn detail_screen(
                             egui::Color32::from_rgb(20, 184, 166),
                             egui::Color32::from_rgb(234, 179, 8),
                         ];
+                        let mut reply_idx = 0usize;
                         for (comment, is_reply) in rows {
+                            let this_reply_idx = if !is_reply && !comment.id.is_empty() {
+                                let i = reply_idx;
+                                reply_idx += 1;
+                                Some(i)
+                            } else {
+                                None
+                            };
                             let avatar = if is_reply { 30.0 } else { 36.0 };
                             let hue = AVATARS[comment.author_name.bytes().fold(0usize, |a, b| a.wrapping_add(b as usize)) % AVATARS.len()];
                             ui.horizontal_top(|ui| {
@@ -602,17 +643,23 @@ pub(crate) fn detail_screen(
                                             // Replies of replies are rejected by the server; an id-less comment is not posted yet.
                                             if !is_reply && !comment.id.is_empty() && !comment_entry_requested {
                                                 ui.add_space(4.0);
-                                                if ui
-                                                    .add(
-                                                        egui::Button::new(
-                                                            egui::RichText::new(lang.reply_comment()).size(FONT_SMALL).color(pal().accent_soft),
-                                                        )
-                                                        .fill(egui::Color32::TRANSPARENT)
-                                                        .stroke(egui::Stroke::new(1.0_f32, pal().accent_soft))
-                                                        .corner_radius(14.0),
+                                                let reply_focused = this_reply_idx
+                                                    .is_some_and(|i| detail_focus == DetailFocus::CommentReply(i));
+                                                let resp = ui.add(
+                                                    egui::Button::new(
+                                                        egui::RichText::new(lang.reply_comment()).size(FONT_SMALL).color(pal().accent_soft),
                                                     )
-                                                    .clicked()
-                                                {
+                                                    .fill(egui::Color32::TRANSPARENT)
+                                                    .stroke(egui::Stroke::new(
+                                                        if reply_focused { FOCUS_STROKE } else { 1.0_f32 },
+                                                        if reply_focused { pal().focus } else { pal().accent_soft },
+                                                    ))
+                                                    .corner_radius(14.0),
+                                                );
+                                                if reply_focused {
+                                                    resp.scroll_to_me(None);
+                                                }
+                                                if resp.clicked() {
                                                     commands.push(AppCommand::RequestCommentReply(comment.id.clone()));
                                                 }
                                             }
@@ -768,6 +815,7 @@ fn verify_field(ui: &mut egui::Ui, caption: &str, value: &str, focused: bool) ->
 /// Verifier modal: score typed as a whole number, installs/works toggles, optional comment.
 /// Rows match `App::handle_verify_modal`: 0 score, 1 note, 2 installs, 3 works, 4 cancel, 5 submit.
 fn verify_modal_ui(ctx: &egui::Context, lang: Language, draft: &crate::app::VerifyDraft, commands: &mut Vec<AppCommand>) {
+    paint_modal_scrim(ctx);
     egui::Area::new(egui::Id::new("verify_modal"))
         .order(egui::Order::Foreground)
         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
@@ -880,8 +928,11 @@ pub(crate) fn install_progress_modal_opt(
             .order(egui::Order::Middle)
             .show(ctx, |ui| {
                 let screen_rect = ctx.screen_rect();
-                ui.painter().rect_filled(screen_rect, 0.0, egui::Color32::from_rgb(0, 0, 0));
+                let (bg, _) = ui.allocate_exact_size(screen_rect.size(), egui::Sense::click());
+                ui.painter().rect_filled(bg, 0.0, egui::Color32::from_rgb(0, 0, 0));
             });
+    } else {
+        paint_modal_scrim(ctx);
     }
 
     egui::Area::new(egui::Id::new("install_progress_modal"))
@@ -2073,6 +2124,120 @@ mod tests {
                     step,
                     crate::app::Language::English,
                     &mut commands,
+                );
+            });
+        }
+    }
+
+    #[tokio::test]
+    async fn uninstall_prompt_overrides_footer_hints() {
+        let ctx = egui::Context::default();
+        super::apply_theme(&ctx);
+        let icons = super::IconCache::new();
+        let installed = super::InstalledIndex::default();
+        let entry = crate::app::sort_tests::entry("demo", "vitadb", 0, 1024, 0.0, "");
+        let lang = super::Language::English;
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(960.0, 544.0))),
+            ..Default::default()
+        };
+        let output = ctx.run(input, |ctx| {
+            let _ = super::detail_screen(
+                ctx,
+                &icons,
+                &installed,
+                lang,
+                &entry,
+                None,
+                false,
+                false,
+                0.0,
+                &[],
+                true,
+                None,
+                false,
+                None,
+                false,
+                0,
+                crate::input::DataStep::Choice,
+                true,
+                None,
+                &[],
+                None,
+                super::DetailFocus::Primary,
+                false,
+                None,
+                0,
+                None,
+                false,
+            );
+        });
+        let footer_texts: Vec<&str> = output
+            .shapes
+            .iter()
+            .filter_map(|c| match &c.shape {
+                egui::Shape::Text(t) if t.pos.y > 500.0 => Some(t.galley.text()),
+                _ => None,
+            })
+            .collect();
+        assert!(footer_texts.contains(&lang.uninstall_btn()), "expected uninstall hint in footer: {footer_texts:?}");
+        assert!(footer_texts.contains(&lang.cancel_btn()), "expected cancel hint in footer: {footer_texts:?}");
+        assert!(!footer_texts.contains(&lang.btn_back()), "background back hint should be hidden: {footer_texts:?}");
+    }
+
+    #[tokio::test]
+    async fn community_gamepad_focus_states_render() {
+        let ctx = egui::Context::default();
+        super::apply_theme(&ctx);
+        let icons = super::IconCache::new();
+        let installed = super::InstalledIndex::default();
+        let entry = crate::app::sort_tests::entry("demo", "vitadb", 0, 1024, 0.0, "");
+        let comments = vec![crate::data::api::Comment {
+            id: "c1".into(),
+            parent_id: None,
+            author_name: "Alice".into(),
+            content: "Works great".into(),
+            created_at: String::new(),
+            verified: false,
+        }];
+        for focus in [
+            super::DetailFocus::Rating(4),
+            super::DetailFocus::CommentTab,
+            super::DetailFocus::CommentReply(0),
+        ] {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(960.0, 544.0))),
+                ..Default::default()
+            };
+            let _ = ctx.run(input, |ctx| {
+                let _ = super::detail_screen(
+                    ctx,
+                    &icons,
+                    &installed,
+                    super::Language::English,
+                    &entry,
+                    None,
+                    false,
+                    false,
+                    0.0,
+                    &comments,
+                    true,
+                    None,
+                    false,
+                    None,
+                    false,
+                    0,
+                    crate::input::DataStep::Choice,
+                    false,
+                    None,
+                    &[],
+                    None,
+                    focus,
+                    false,
+                    None,
+                    0,
+                    None,
+                    false,
                 );
             });
         }

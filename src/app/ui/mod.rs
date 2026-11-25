@@ -66,6 +66,7 @@ pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
             data_step,
             uninstall_prompt,
             detail_focus,
+            verified_tab,
             previous,
         } => {
             let progress = app
@@ -99,6 +100,7 @@ pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
                     .filter(|job| job.app_id != entry.id)
                     .map(|job| (job.app_id.as_str(), &job.progress)),
                 *detail_focus,
+                *verified_tab,
                 app.report_modal,
                 app.report_choice,
                 app.verify_modal.as_ref(),
@@ -184,12 +186,15 @@ fn self_update_modal(
     };
     egui::Area::new(egui::Id::new("self_update_modal_scrim"))
         .fixed_pos(egui::Pos2::ZERO)
-        .order(egui::Order::Foreground)
+        .order(egui::Order::Middle)
         .show(ctx, |ui| {
             let screen = ui.ctx().screen_rect();
-            let (bg, _) = ui.allocate_exact_size(screen.size(), egui::Sense::click());
+            let (bg, response) = ui.allocate_exact_size(screen.size(), egui::Sense::click());
             ui.painter()
                 .rect_filled(bg, 0.0, egui::Color32::from_black_alpha(175));
+            if response.clicked() {
+                commands.push(AppCommand::DismissSelfUpdate);
+            }
         });
     egui::Area::new(egui::Id::new("self_update_modal"))
         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
@@ -218,18 +223,16 @@ fn self_update_modal(
                                 .color(theme::pal().text),
                         );
                         ui.add_space(20.0);
-                        ui.horizontal(|ui| {
-                            let pad = (ui.available_width() - 240.0) / 2.0;
-                            if pad > 0.0 {
-                                ui.add_space(pad);
-                            }
-                            if crate::app::ui::detail::prompt_chip(ui, Glyph::Cross, lang.update(), true) {
-                                commands.push(AppCommand::SelfUpdate);
-                            }
-                            ui.add_space(14.0);
-                            if crate::app::ui::detail::prompt_chip(ui, Glyph::Circle, lang.cancel_btn(), false) {
-                                commands.push(AppCommand::DismissSelfUpdate);
-                            }
+                        ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                            ui.horizontal(|ui| {
+                                if crate::app::ui::detail::prompt_chip(ui, Glyph::Cross, lang.update(), true) {
+                                    commands.push(AppCommand::SelfUpdate);
+                                }
+                                ui.add_space(14.0);
+                                if crate::app::ui::detail::prompt_chip(ui, Glyph::Circle, lang.cancel_btn(), false) {
+                                    commands.push(AppCommand::DismissSelfUpdate);
+                                }
+                            });
                         });
                     });
                 });

@@ -50,6 +50,12 @@ pub enum DetailFocus {
     Report,
     Comment,
     Verify,
+    /// Star 1..=5 in the community rating row.
+    Rating(u8),
+    /// Community / Verified comments tab switcher.
+    CommentTab,
+    /// Index into top-level replyable comments of the active tab.
+    CommentReply(usize),
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum StoreTab {
@@ -182,6 +188,7 @@ pub enum AppCommand {
     PurgeAllCache,
     ToggleLike,
     RateCurrent(u8),
+    SetCommentTab(bool),
     RequestCommentEntry,
     RequestCommentReply(String),
     OpenVerifyModal,

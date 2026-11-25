@@ -797,6 +797,7 @@ pub enum AppState {
         data_step: DataStep,
         uninstall_prompt: bool,
         detail_focus: DetailFocus,
+        verified_tab: bool,
     },
     Settings {
         previous: Box<CatalogState>,
@@ -2745,6 +2746,14 @@ impl App {
                     *detail_focus = focus;
                 }
             }
+            AppCommand::SetCommentTab(verified) => {
+                if let AppState::Detail { verified_tab, detail_focus, .. } = &mut self.state {
+                    *verified_tab = verified;
+                    if matches!(*detail_focus, DetailFocus::CommentReply(_)) {
+                        *detail_focus = DetailFocus::CommentTab;
+                    }
+                }
+            }
             AppCommand::SetDetailMaxScroll(max) => self.detail_max_scroll = max,
             AppCommand::AnalogScroll(delta) => {
                 if let AppState::Detail { scroll_delta, .. } = &mut self.state {
@@ -2848,8 +2857,8 @@ impl App {
                 if matches!(self.state, AppState::Detail { uninstall_prompt: true, .. }) {
                     return self.handle_command(AppCommand::ConfirmUninstall);
                 }
-                if let AppState::Detail { lightbox: None, app, detail_focus, previous, .. } = &self.state {
-                    match detail_focus {
+                if let AppState::Detail { lightbox: None, app, detail_focus, previous, comments, verified_tab, .. } = &self.state {
+                    match *detail_focus {
                         DetailFocus::Author => {
                             return self.handle_command(AppCommand::MoreByAuthor(app.author.clone()));
                         }
@@ -2873,6 +2882,21 @@ impl App {
                         DetailFocus::Report => return self.handle_command(AppCommand::RequestReport),
                         DetailFocus::Comment => return self.handle_command(AppCommand::RequestCommentEntry),
                         DetailFocus::Verify => return self.handle_command(AppCommand::OpenVerifyModal),
+                        DetailFocus::Rating(star) => return self.handle_command(AppCommand::RateCurrent(star)),
+                        DetailFocus::CommentTab => {
+                            let next = !*verified_tab;
+                            return self.handle_command(AppCommand::SetCommentTab(next));
+                        }
+                        DetailFocus::CommentReply(idx) => {
+                            let reply_id = comments
+                                .iter()
+                                .filter(|c| c.parent_id.is_none() && c.verified == *verified_tab && !c.id.is_empty())
+                                .nth(idx)
+                                .map(|c| c.id.clone());
+                            if let Some(id) = reply_id {
+                                return self.handle_command(AppCommand::RequestCommentReply(id));
+                            }
+                        }
                         DetailFocus::Primary => {
                             let primary = detail_actions::primary(app, self.installed.state(app));
                             return match &self.install {
@@ -2953,18 +2977,15 @@ impl App {
             AppCommand::Input(step @ (InputCommand::CategoryPrev | InputCommand::CategoryNext)) => {
                 let AppState::Catalog(catalog) = &self.state else { return Ok(()) };
                 let groups = ContentTypeGroup::ALL;
+                // Library/Updates are footer-chip only: not in the ring, L/R leaves them as ROMs would.
                 let current = match catalog.tab {
                     StoreTab::Categories => groups.iter().position(|&g| g == catalog.content_type_group).unwrap_or(0),
-                    StoreTab::Roms => groups.len(),
-                    StoreTab::Library => groups.len() + 1,
-                    StoreTab::Updates => groups.len() + 2,
+                    StoreTab::Roms | StoreTab::Library | StoreTab::Updates => groups.len(),
                 };
-                let next = ring_step(current, groups.len() + 3, step == InputCommand::CategoryNext);
+                let next = ring_step(current, groups.len() + 1, step == InputCommand::CategoryNext);
                 let command = match groups.get(next) {
                     Some(&group) => AppCommand::SetContentTypeGroup(group),
-                    None => AppCommand::SetStoreTab(
-                        [StoreTab::Roms, StoreTab::Library, StoreTab::Updates][next - groups.len()],
-                    ),
+                    None => AppCommand::SetStoreTab(StoreTab::Roms),
                 };
                 self.handle_command(command)?;
                 // Moving by buttons must leave something highlighted.
@@ -3102,6 +3123,8 @@ impl App {
                         detail_focus,
                         app,
                         previous,
+                        comments,
+                        verified_tab,
                         lightbox: None,
                         data_prompt: false,
                         uninstall_prompt: false,
@@ -3117,6 +3140,11 @@ impl App {
                             has_dep.then_some(DetailFocus::Requirements)
                         };
                         let can_verify = self.verification.as_ref().is_some_and(|(id, v)| *id == app.id && v.can_verify);
+                        let replyable_count = comments
+                            .iter()
+                            .filter(|c| c.parent_id.is_none() && c.verified == *verified_tab && !c.id.is_empty())
+                            .count();
+                        let initial_star = app.user_rating.unwrap_or(5).clamp(1, 5);
                         let max = self.detail_max_scroll;
                         use DetailFocus as F;
                         use InputCommand as I;
@@ -3124,10 +3152,22 @@ impl App {
                             (I::MoveRight, F::Like) => Some(F::Report),
                             (I::MoveRight, F::Report) => Some(F::Comment),
                             (I::MoveRight, F::Comment) if can_verify => Some(F::Verify),
+                            (I::MoveRight, F::Rating(star)) => Some(F::Rating((star + 1).min(5))),
+                            (I::MoveRight, F::CommentTab) => {
+                                *verified_tab = !*verified_tab;
+                                self.audio.play(crate::audio::Sfx::Navigate);
+                                None
+                            }
                             (I::MoveRight, F::Primary | F::Author | F::Comment | F::Verify) => side,
                             (I::MoveLeft, F::Verify) => Some(F::Comment),
                             (I::MoveLeft, F::Comment) => Some(F::Report),
                             (I::MoveLeft, F::Report) => Some(F::Like),
+                            (I::MoveLeft, F::Rating(star)) => Some(F::Rating(star.saturating_sub(1).max(1))),
+                            (I::MoveLeft, F::CommentTab) => {
+                                *verified_tab = !*verified_tab;
+                                self.audio.play(crate::audio::Sfx::Navigate);
+                                None
+                            }
                             (I::MoveLeft, F::Screenshots | F::Requirements) => Some(F::Primary),
                             (I::MoveUp, F::Primary) if *scroll_delta > 0.0 => {
                                 *scroll_delta = (scroll_delta.min(max) - 60.0).max(0.0);
@@ -3138,6 +3178,10 @@ impl App {
                             (I::MoveUp, F::Like | F::Report | F::Comment | F::Verify) => Some(F::Author),
                             (I::MoveUp, F::Requirements) => Some(if has_shots { F::Screenshots } else { F::Primary }),
                             (I::MoveUp, F::Screenshots) => Some(F::Primary),
+                            (I::MoveUp, F::Rating(_)) => Some(F::Primary),
+                            (I::MoveUp, F::CommentTab) => Some(F::Rating(initial_star)),
+                            (I::MoveUp, F::CommentReply(0)) => Some(F::CommentTab),
+                            (I::MoveUp, F::CommentReply(i)) => Some(F::CommentReply(i - 1)),
                             (I::MoveDown, F::Author) => Some(if has_social { F::Like } else { F::Primary }),
                             (I::MoveDown, F::Like | F::Report | F::Comment | F::Verify) => Some(F::Primary),
                             (I::MoveDown, F::Primary) if *scroll_delta < max - 0.5 => {
@@ -3145,6 +3189,7 @@ impl App {
                                 self.audio.play(crate::audio::Sfx::Navigate);
                                 None
                             }
+                            (I::MoveDown, F::Primary) if has_social => Some(F::Rating(initial_star)),
                             (I::MoveDown, F::Primary) => {
                                 // Bottom of the page: carry on to the right column, which sits at the top.
                                 if side.is_some() {
@@ -3152,6 +3197,9 @@ impl App {
                                 }
                                 side
                             }
+                            (I::MoveDown, F::Rating(_)) => Some(F::CommentTab),
+                            (I::MoveDown, F::CommentTab) if replyable_count > 0 => Some(F::CommentReply(0)),
+                            (I::MoveDown, F::CommentReply(i)) if i + 1 < replyable_count => Some(F::CommentReply(i + 1)),
                             (I::MoveDown, F::Screenshots) => has_dep.then_some(F::Requirements),
                             _ => None,
                         };
@@ -3811,6 +3859,7 @@ impl App {
             uninstall_prompt: false,
             lightbox: None,
             detail_focus: DetailFocus::Primary,
+            verified_tab: false,
         };
         let AppState::Catalog(mut catalog) = std::mem::replace(&mut self.state, placeholder) else {
             unreachable!("checked above that self.state is Catalog")
@@ -3866,6 +3915,7 @@ impl App {
             uninstall_prompt: false,
             lightbox: None,
             detail_focus: DetailFocus::Primary,
+            verified_tab: false,
         };
         self.audio.play(crate::audio::Sfx::IntoDetail);
     }

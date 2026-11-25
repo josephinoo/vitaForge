@@ -111,8 +111,13 @@ pub(crate) fn roms_view(
                 if view.failed {
                     ui.add_space(18.0);
                     ui.label(egui::RichText::new(lang.tr("roms-error")).size(FONT_LARGE).color(pal().text_dim));
-                    ui.add_space(8.0);
-                    if ui.add(egui::Button::new(lang.tr("roms-retry")).min_size(egui::vec2(140.0, 44.0))).clicked() {
+                    ui.add_space(10.0);
+                    if crate::app::ui::detail::prompt_chip(
+                        ui,
+                        crate::app::ui::widgets::Glyph::Cross,
+                        &lang.tr("roms-retry"),
+                        true,
+                    ) {
                         commands.push(AppCommand::RomsRetry);
                     }
                     return;
