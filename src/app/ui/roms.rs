@@ -8,10 +8,12 @@ use crate::roms::{ROM_CONSOLES, RomEntry};
 pub struct RomsView<'a> {
     pub rom_type: &'a str,
     pub genre_filter: Option<&'a str>,
+    pub region_filter: Option<&'a str>,
     pub loading: bool,
     pub status: Option<&'a str>,
     pub entries: &'a [RomEntry],
     pub genre_counts: &'a [(String, usize)],
+    pub region_counts: &'a [(String, usize)],
     pub selected: usize,
     pub scroll_to_selected: bool,
     pub sidebar_focus: bool,
@@ -58,31 +60,17 @@ pub(crate) fn roms_view(
                 if view.scroll_to_selected {
                     icons.note_scrolling();
                 }
-                if !view.genre_counts.is_empty() {
+                if !view.genre_counts.is_empty() || !view.region_counts.is_empty() {
                     ui.allocate_ui_with_layout(
                         egui::vec2(ui.available_width(), 28.0),
                         egui::Layout::right_to_left(egui::Align::Center),
                         |ui| {
-                            let current_label = view.genre_filter.unwrap_or("All genres");
-                            egui::ComboBox::from_id_salt("roms_genre_filter")
-                                .selected_text(current_label)
-                                .show_ui(ui, |ui| {
-                                    if ui
-                                        .selectable_label(view.genre_filter.is_none(), "All genres")
-                                        .clicked()
-                                    {
-                                        commands.push(AppCommand::RomsSetGenre(None));
-                                    }
-                                    for (g, count) in view.genre_counts {
-                                        let active = view.genre_filter == Some(g.as_str());
-                                        if ui
-                                            .selectable_label(active, format!("{g} ({count})"))
-                                            .clicked()
-                                        {
-                                            commands.push(AppCommand::RomsSetGenre(Some(g.clone())));
-                                        }
-                                    }
-                                });
+                            if let Some(genre) = filter_combo(ui, "roms_genre_filter", "All genres", view.genre_counts, view.genre_filter) {
+                                commands.push(AppCommand::RomsSetGenre(genre));
+                            }
+                            if let Some(region) = filter_combo(ui, "roms_region_filter", "All regions", view.region_counts, view.region_filter) {
+                                commands.push(AppCommand::RomsSetRegion(region));
+                            }
                         },
                     );
                     ui.add_space(6.0);
@@ -103,11 +91,7 @@ pub(crate) fn roms_view(
                     .entries
                     .iter()
                     .enumerate()
-                    .filter(|(_, e)| needle.is_empty() || e.title.to_lowercase().contains(&needle))
-                    .filter(|(_, e)| {
-                        view.genre_filter
-                            .is_none_or(|g| e.genres.iter().any(|eg| eg == g))
-                    })
+                    .filter(|(_, e)| e.matches(&needle, view.genre_filter, view.region_filter))
                     .collect();
 
                 if filtered.is_empty() {
@@ -169,6 +153,33 @@ pub(crate) fn roms_view(
             });
         },
     );
+}
+
+/// `Some(choice)` when the user picks a row; `Some(None)` is "all".
+fn filter_combo(
+    ui: &mut egui::Ui,
+    id: &str,
+    all: &str,
+    options: &[(String, usize)],
+    current: Option<&str>,
+) -> Option<Option<String>> {
+    if options.is_empty() {
+        return None;
+    }
+    let mut picked = None;
+    egui::ComboBox::from_id_salt(id)
+        .selected_text(current.unwrap_or(all))
+        .show_ui(ui, |ui| {
+            if ui.selectable_label(current.is_none(), all).clicked() {
+                picked = Some(None);
+            }
+            for (option, count) in options {
+                if ui.selectable_label(current == Some(option.as_str()), format!("{option} ({count})")).clicked() {
+                    picked = Some(Some(option.clone()));
+                }
+            }
+        });
+    picked
 }
 
 fn console_sidebar_row(

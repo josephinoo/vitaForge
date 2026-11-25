@@ -176,7 +176,7 @@ pub fn run(mut app: App) -> Result<()> {
                         TextTarget::ProfileName => {
                             app.handle_command(AppCommand::SubmitProfileName(text))?;
                         }
-                        TextTarget::AuthUsername | TextTarget::AuthPassword | TextTarget::AuthEmail | TextTarget::Roms3dsDir => {
+                        TextTarget::AuthUsername | TextTarget::AuthPassword | TextTarget::AuthEmail | TextTarget::Roms3dsDir | TextTarget::RomsDsDir | TextTarget::RomsGbaDir => {
                             app.handle_command(AppCommand::SubmitAuthInput(text))?;
                         }
                         TextTarget::VerifyScore | TextTarget::VerifyNote => {
@@ -193,7 +193,7 @@ pub fn run(mut app: App) -> Result<()> {
                     TextTarget::Comment => app.handle_command(AppCommand::CloseCommentEntry)?,
                     TextTarget::Report => app.handle_command(AppCommand::CloseReportEntry)?,
                     TextTarget::ProfileName => app.handle_command(AppCommand::CloseProfileEntry)?,
-                    TextTarget::AuthUsername | TextTarget::AuthPassword | TextTarget::AuthEmail | TextTarget::Roms3dsDir => {
+                    TextTarget::AuthUsername | TextTarget::AuthPassword | TextTarget::AuthEmail | TextTarget::Roms3dsDir | TextTarget::RomsDsDir | TextTarget::RomsGbaDir => {
                         app.handle_command(AppCommand::CloseAuthInput)?
                     }
                     TextTarget::VerifyScore | TextTarget::VerifyNote => app.handle_command(AppCommand::CloseVerifyEntry)?,
@@ -365,7 +365,7 @@ pub fn run(mut app: App) -> Result<()> {
                 TextTarget::AuthEmail => ime::ImePurpose::AuthEmail,
                 TextTarget::VerifyScore => ime::ImePurpose::VerifyScore,
                 TextTarget::VerifyNote => ime::ImePurpose::VerifyNote,
-                TextTarget::Roms3dsDir => ime::ImePurpose::ProfileName,
+                TextTarget::Roms3dsDir | TextTarget::RomsDsDir | TextTarget::RomsGbaDir => ime::ImePurpose::ProfileName,
             };
             let query_before = match &app.state {
                 crate::app::AppState::Catalog(catalog) => catalog.search_query.clone(),
@@ -396,6 +396,14 @@ pub fn run(mut app: App) -> Result<()> {
                     initial_string = app.verify_modal.as_ref().map(|d| d.note.clone()).unwrap_or_default();
                     initial_string.as_str()
                 }
+                TextTarget::RomsDsDir => {
+                    initial_string = app.roms_ds_dir.clone();
+                    initial_string.as_str()
+                }
+                TextTarget::RomsGbaDir => {
+                    initial_string = app.roms_gba_dir.clone();
+                    initial_string.as_str()
+                }
                 TextTarget::Roms3dsDir => {
                     initial_string = app.roms_3ds_dir.clone();
                     initial_string.as_str()
@@ -413,7 +421,7 @@ pub fn run(mut app: App) -> Result<()> {
                     TextTarget::Comment => app.handle_command(AppCommand::CloseCommentEntry)?,
                     TextTarget::Report => app.handle_command(AppCommand::CloseReportEntry)?,
                     TextTarget::ProfileName => app.handle_command(AppCommand::CloseProfileEntry)?,
-                    TextTarget::AuthUsername | TextTarget::AuthPassword | TextTarget::AuthEmail | TextTarget::Roms3dsDir => {
+                    TextTarget::AuthUsername | TextTarget::AuthPassword | TextTarget::AuthEmail | TextTarget::Roms3dsDir | TextTarget::RomsDsDir | TextTarget::RomsGbaDir => {
                         app.handle_command(AppCommand::CloseAuthInput)?
                     }
                     TextTarget::VerifyScore | TextTarget::VerifyNote => app.handle_command(AppCommand::CloseVerifyEntry)?,

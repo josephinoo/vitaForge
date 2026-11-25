@@ -115,44 +115,6 @@ pub(crate) fn self_update_pill(ui: &mut egui::Ui, _lang: Language, tag: &str) ->
     response.clicked()
 }
 
-pub(crate) fn self_update_progress_pill(ui: &mut egui::Ui, progress: &crate::install::Progress) {
-    let size = egui::vec2(76.0, TAB_PILL_HEIGHT);
-    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
-    ui.painter().rect_filled(rect, rect.height() / 2.0, pal().warning.gamma_multiply(0.15));
-    ui.painter().rect_stroke(
-        rect,
-        rect.height() / 2.0,
-        egui::Stroke::new(1.0_f32, pal().warning.gamma_multiply(0.6)),
-        egui::StrokeKind::Inside,
-    );
-    let center = egui::pos2(rect.left() + 18.0, rect.center().y);
-    let radius = 6.5;
-    let n_dots = 6;
-    let time = ui.input(|i| i.time);
-    let angle = time * 5.0;
-    for i in 0..n_dots {
-        let dot_angle = angle + (i as f64 * std::f64::consts::TAU / n_dots as f64);
-        let pos = center + egui::vec2(dot_angle.cos() as f32, dot_angle.sin() as f32) * radius;
-        let alpha = (i as f32 / n_dots as f32).powf(1.5);
-        ui.painter().circle_filled(pos, 1.8, pal().warning.gamma_multiply(0.2 + 0.8 * alpha));
-    }
-    let pct_str = progress
-        .fraction()
-        .map(|f| format!("{:.0}%", f * 100.0))
-        .unwrap_or_else(|| "…".to_owned());
-    let galley = ui.fonts(|f| f.layout_no_wrap(pct_str, font(FONT_MICRO), pal().warning));
-    ui.painter().galley(
-        egui::pos2(rect.left() + 32.0, rect.center().y - galley.size().y * 0.5),
-        galley,
-        pal().warning,
-    );
-    ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
-}
-
-pub(crate) fn search_chip(ui: &mut egui::Ui, label: &str) -> bool {
-    search_chip_sized(ui, label, None)
-}
-
 pub(crate) fn search_chip_sized(ui: &mut egui::Ui, label: &str, fill_width: Option<f32>) -> bool {
     use crate::app::ui::chrome_icons::{self, ChromeIcon};
     let galley = ui.fonts(|f| f.layout_no_wrap(label.to_owned(), font(FONT_SMALL), pal().text_dim));
@@ -793,64 +755,6 @@ pub(crate) fn region_badge(ui: &mut egui::Ui, region: &str) {
     );
     ui.painter()
         .galley(rect.center() - galley.size() / 2.0, galley, pal().text);
-}
-
-pub(crate) fn warning_glyph(
-    painter: &egui::Painter,
-    center: egui::Pos2,
-    radius: f32,
-    color: egui::Color32,
-) {
-    let stroke = egui::Stroke::new(1.4_f32, color);
-    let top = center + egui::vec2(0.0, -radius);
-    let left = center + egui::vec2(-radius * 0.95, radius * 0.75);
-    let right = center + egui::vec2(radius * 0.95, radius * 0.75);
-    painter.line_segment([top, left], stroke);
-    painter.line_segment([left, right], stroke);
-    painter.line_segment([right, top], stroke);
-    painter.line_segment(
-        [
-            center + egui::vec2(0.0, -radius * 0.28),
-            center + egui::vec2(0.0, radius * 0.28),
-        ],
-        stroke,
-    );
-    painter.circle_filled(center + egui::vec2(0.0, radius * 0.55), 0.9, color);
-}
-
-pub(crate) fn warning_pill(ui: &mut egui::Ui, label: &str) {
-    const ICON_BOX: f32 = 16.0;
-    const PADDING: f32 = 7.0;
-    let text_width = (ui.available_width() - ICON_BOX - PADDING * 3.0).max(60.0);
-    let mut job =
-        egui::text::LayoutJob::simple(label.to_owned(), font(FONT_MICRO), pal().warning, text_width);
-    job.wrap.max_rows = 4;
-    job.wrap.overflow_character = Some('…');
-    let galley = ui.fonts(|f| f.layout_job(job));
-    let size = egui::vec2(
-        galley.size().x + ICON_BOX + PADDING * 3.0,
-        (galley.size().y + PADDING).max(ICON_BOX),
-    );
-    let rect = ui.allocate_exact_size(size, egui::Sense::hover()).0;
-    ui.painter()
-        .rect_filled(rect, RADIUS_XS, pal().warning.gamma_multiply(0.2));
-    warning_glyph(
-        ui.painter(),
-        egui::pos2(
-            rect.left() + PADDING + ICON_BOX / 2.0,
-            rect.top() + ICON_BOX / 2.0 + 1.0,
-        ),
-        5.0,
-        pal().warning,
-    );
-    ui.painter().galley(
-        egui::pos2(
-            rect.left() + PADDING * 2.0 + ICON_BOX,
-            rect.top() + PADDING / 2.0,
-        ),
-        galley,
-        pal().warning,
-    );
 }
 
 pub(crate) fn install_pill(ui: &mut egui::Ui, lang: Language, state: InstallState) {

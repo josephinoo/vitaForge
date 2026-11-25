@@ -514,10 +514,6 @@ impl CatalogState {
         false
     }
 
-    pub fn shows_category_pills(&self) -> bool {
-        self.tab == StoreTab::Categories
-    }
-
     pub fn shows_sidebar(&self) -> bool {
         self.tab == StoreTab::Categories
     }
@@ -664,6 +660,12 @@ impl CatalogState {
     }
 }
 
+
+/// All → first → … → last → All.
+fn next_option(options: &[(String, usize)], current: Option<&str>) -> Option<String> {
+    let next = current.map_or(0, |c| options.iter().position(|(o, _)| o == c).map_or(0, |i| i + 1));
+    options.get(next).map(|(o, _)| o.clone())
+}
 
 /// L/R walk the header left to right and wrap.
 fn ring_step(current: usize, len: usize, forward: bool) -> usize {
@@ -839,6 +841,8 @@ pub struct App {
     detail_max_scroll: f32,
     install_notifications: bool,
     pub roms_3ds_dir: String,
+    pub roms_ds_dir: String,
+    pub roms_gba_dir: String,
     update_queue: std::collections::VecDeque<AppEntry>,
     pub update_active: bool,
     pub update_total: usize,
@@ -884,21 +888,18 @@ pub struct App {
 pub struct RomsUiState {
     pub rom_type: String,
     pub genre_filter: Option<String>,
-    pub query: String,
+    pub region_filter: Option<String>,
     pub loading: bool,
     pub status: Option<String>,
     pub entries: Vec<crate::roms::RomEntry>,
     pub genre_counts: Vec<(String, usize)>,
+    pub region_counts: Vec<(String, usize)>,
     pub selected: usize,
     pub scroll_to_selected: bool,
     pub sidebar_focus: bool,
     pub sidebar_cursor: usize,
     etag: Option<String>,
     catalog_rx: Option<oneshot::Receiver<Result<crate::roms::SnapshotFetch>>>,
-    download_title: Option<String>,
-    download_rx: Option<watch::Receiver<crate::install::Progress>>,
-    download_progress: crate::install::Progress,
-    download_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl RomsUiState {
@@ -906,21 +907,18 @@ impl RomsUiState {
         Self {
             rom_type: crate::roms::DEFAULT_ROM_TYPE.to_owned(),
             genre_filter: None,
-            query: String::new(),
+            region_filter: None,
             loading: false,
             status: None,
             entries: Vec::new(),
             genre_counts: Vec::new(),
+            region_counts: Vec::new(),
             selected: 0,
             scroll_to_selected: false,
             sidebar_focus: false,
             sidebar_cursor: 0,
             etag: None,
             catalog_rx: None,
-            download_title: None,
-            download_rx: None,
-            download_progress: crate::install::Progress::Resolving,
-            download_cancel: None,
         }
     }
 
@@ -928,10 +926,12 @@ impl RomsUiState {
         ui::roms::RomsView {
             rom_type: &self.rom_type,
             genre_filter: self.genre_filter.as_deref(),
+            region_filter: self.region_filter.as_deref(),
             loading: self.loading,
             status: self.status.as_deref(),
             entries: &self.entries,
             genre_counts: &self.genre_counts,
+            region_counts: &self.region_counts,
             selected: self.selected,
             scroll_to_selected: self.scroll_to_selected,
             sidebar_focus: self.sidebar_focus,
@@ -944,12 +944,7 @@ impl RomsUiState {
         self.entries
             .iter()
             .enumerate()
-            .filter(|(_, e)| needle.is_empty() || e.title.to_lowercase().contains(&needle))
-            .filter(|(_, e)| {
-                self.genre_filter
-                    .as_deref()
-                    .is_none_or(|g| e.genres.iter().any(|eg| eg == g))
-            })
+            .filter(|(_, e)| e.matches(&needle, self.genre_filter.as_deref(), self.region_filter.as_deref()))
             .map(|(i, _)| i)
             .collect()
     }
@@ -987,6 +982,11 @@ impl RomsUiState {
                             }
                         }
                         self.genre_counts = counts.into_iter().collect();
+                        let mut regions = std::collections::BTreeMap::<String, usize>::new();
+                        for region in entries.iter().flat_map(|e| e.regions()) {
+                            *regions.entry(region.to_owned()).or_insert(0) += 1;
+                        }
+                        self.region_counts = regions.into_iter().collect();
                         self.entries = entries;
                         if etag.is_some() {
                             self.etag = etag;
@@ -994,16 +994,6 @@ impl RomsUiState {
                     }
                     Err(err) => self.status = Some(format!("Catalog error: {err:#}")),
                 }
-            }
-        }
-        if let Some(rx) = &mut self.download_rx {
-            self.download_progress = rx.borrow_and_update().clone();
-            if matches!(
-                self.download_progress,
-                crate::install::Progress::Done | crate::install::Progress::Failed(_)
-            ) {
-                self.download_rx = None;
-                self.download_cancel = None;
             }
         }
     }
@@ -1087,6 +1077,8 @@ impl App {
             icons_need_clear: false,
             install_notifications: settings.install_notifications,
             roms_3ds_dir: settings.roms_3ds_dir,
+            roms_ds_dir: settings.roms_ds_dir,
+            roms_gba_dir: settings.roms_gba_dir,
             update_queue: std::collections::VecDeque::new(),
             update_active: false,
             update_total: 0,
@@ -1615,6 +1607,12 @@ impl App {
                 nav.sub_index = ThemeId::ALL.iter().position(|&t| t == theme).unwrap_or(0);
                 return Ok(());
             }
+            Some(Row::RomsDsDir) => {
+                AppCommand::RequestAuthInput(crate::input::TextTarget::RomsDsDir)
+            }
+            Some(Row::RomsGbaDir) => {
+                AppCommand::RequestAuthInput(crate::input::TextTarget::RomsGbaDir)
+            }
             Some(Row::Roms3dsDir) => {
                 AppCommand::RequestAuthInput(crate::input::TextTarget::Roms3dsDir)
             }
@@ -2070,7 +2068,7 @@ impl App {
             AppCommand::Input(InputCommand::MoveLeft | InputCommand::MoveRight) if draft.focus >= 4 => {
                 draft.focus = if draft.focus == 4 { 5 } else { 4 };
             }
-            AppCommand::Input(InputCommand::Back) | AppCommand::CloseVerifyModal => {
+            AppCommand::Input(InputCommand::Back) => {
                 self.verify_modal = None;
                 self.audio.play(crate::audio::Sfx::HideModal);
             }
@@ -2360,6 +2358,14 @@ impl App {
                 return Ok(());
             }
             AppCommand::FlipSortDirection if self.in_plugin_list() => return self.tai_start_move(),
+            AppCommand::CycleCategoryFilter if matches!(&self.state, AppState::Catalog(c) if c.tab == StoreTab::Roms) => {
+                    let genre = next_option(&self.roms.genre_counts, self.roms.genre_filter.as_deref());
+                    return self.handle_command(AppCommand::RomsSetGenre(genre));
+            }
+            AppCommand::FlipSortDirection if matches!(&self.state, AppState::Catalog(c) if c.tab == StoreTab::Roms) => {
+                    let region = next_option(&self.roms.region_counts, self.roms.region_filter.as_deref());
+                    return self.handle_command(AppCommand::RomsSetRegion(region));
+            }
             AppCommand::CycleCategoryFilter => {
                 if matches!(self.state, AppState::Detail { .. }) {
                     return self.handle_command(AppCommand::SecondaryAction);
@@ -2373,11 +2379,7 @@ impl App {
                     && catalog.content_type_group == ContentTypeGroup::Games
                     && !catalog.genre_counts.is_empty()
                 {
-                    let next = match &catalog.genre_filter {
-                        None => 0,
-                        Some(current) => catalog.genre_counts.iter().position(|(g, _)| g == current).map_or(0, |i| i + 1),
-                    };
-                    let genre = catalog.genre_counts.get(next).map(|(g, _)| g.clone());
+                    let genre = next_option(&catalog.genre_counts, catalog.genre_filter.as_deref());
                     return self.handle_command(AppCommand::SetGenreFilter(genre));
                 }
                 if let AppState::Catalog(catalog) = &mut self.state {
@@ -3069,17 +3071,13 @@ impl App {
                 }
             }
             AppCommand::SelectApp { index } => self.open_app(index),
-            AppCommand::SelectAppById(id) => self.open_app_by_id(&id),
-            AppCommand::RomsSetQuery(q) => {
-                self.roms.query = q;
-            }
-            AppCommand::RomsLoadCatalog => {
-                self.roms.load_catalog();
-            }
             AppCommand::RomsSelectConsole(console) => {
                 if self.roms.rom_type != console {
                     self.roms.rom_type = console;
                     self.roms.genre_filter = None;
+                    self.roms.region_filter = None;
+                    self.roms.genre_counts.clear();
+                    self.roms.region_counts.clear();
                     self.roms.selected = 0;
                     self.roms.entries.clear();
                     self.roms.etag = None;
@@ -3087,47 +3085,19 @@ impl App {
                     self.roms.load_catalog();
                 }
             }
+            AppCommand::RomsSetRegion(region) => {
+                self.roms.region_filter = region;
+                self.roms.selected = 0;
+                self.roms.scroll_to_selected = true;
+            }
             AppCommand::RomsSetGenre(genre) => {
                 self.roms.genre_filter = genre;
                 self.roms.selected = 0;
                 self.roms.scroll_to_selected = true;
             }
-            AppCommand::SetRoms3dsDir(dir) => {
-                self.roms_3ds_dir = dir.clone();
-                data::settings::set_roms_3ds_dir(dir);
-            }
             AppCommand::RomsOpen(idx) => {
                 if let Some(entry) = self.roms.entries.get(idx).map(|r| r.to_app_entry(&self.roms.rom_type)) {
                     self.open_entry(entry, None);
-                }
-            }
-            AppCommand::RomsDownload(idx) => {
-                if let Some(entry) = self.roms.entries.get(idx).cloned() {
-                    let (tx, rx) = watch::channel(crate::install::Progress::Resolving);
-                    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-                    let cancel_bg = cancel.clone();
-                    self.roms.download_title = Some(entry.title.clone());
-                    self.roms.download_progress = crate::install::Progress::Resolving;
-                    self.roms.download_rx = Some(rx);
-                    self.roms.download_cancel = Some(cancel);
-                    let storage = std::path::PathBuf::from(crate::roms::AZAHAR_ROMS_DIR);
-                    tokio::spawn(async move {
-                        if let Err(err) = crate::roms::download_rom(
-                            &entry,
-                            &storage,
-                            &tx,
-                            &cancel_bg,
-                        )
-                        .await
-                        {
-                            let _ = tx.send(crate::install::Progress::Failed(format!("{err:#}")));
-                        }
-                    });
-                }
-            }
-            AppCommand::RomsCancelDownload => {
-                if let Some(cancel) = &self.roms.download_cancel {
-                    cancel.store(true, std::sync::atomic::Ordering::Relaxed);
                 }
             }
             AppCommand::SetStoreTab(tab) => {
@@ -3473,7 +3443,7 @@ impl App {
                     self.audio.play(crate::audio::Sfx::ShowModal);
                 }
             }
-            AppCommand::VerifyActivate(_) | AppCommand::CloseVerifyModal | AppCommand::SubmitVerifyText(_) | AppCommand::CloseVerifyEntry => {}
+            AppCommand::VerifyActivate(_) | AppCommand::SubmitVerifyText(_) | AppCommand::CloseVerifyEntry => {}
             AppCommand::SubmitVerification { score, installs_ok, works_ok, note } => {
                 if let AppState::Detail { app, .. } = &self.state
                     && self.verification.as_ref().is_some_and(|(_, v)| v.can_verify)
@@ -3508,6 +3478,14 @@ impl App {
                 if let Some(target) = self.auth_input_target.take() {
                     match target {
                         crate::input::TextTarget::AuthUsername => self.auth_form.username = text.trim().to_owned(),
+                        crate::input::TextTarget::RomsDsDir => {
+                            data::settings::set_roms_ds_dir(text);
+                            self.roms_ds_dir = data::settings::roms_ds_dir();
+                        }
+                        crate::input::TextTarget::RomsGbaDir => {
+                            data::settings::set_roms_gba_dir(text);
+                            self.roms_gba_dir = data::settings::roms_gba_dir();
+                        }
                         crate::input::TextTarget::Roms3dsDir => {
                             let dir = text.trim().trim_end_matches('/');
                             let value = if dir.is_empty() {
@@ -3687,21 +3665,6 @@ impl App {
         };
         let Some(entry) = entry else { return };
         self.open_entry(entry, Some(filtered_index));
-    }
-    fn open_app_by_id(&mut self, id: &str) {
-        let entry = match &self.state {
-            AppState::Catalog(catalog) => catalog.apps.iter().find(|app| app.id == id).cloned(),
-            _ => None,
-        };
-        let Some(entry) = entry else { return };
-        let filtered_index = match &self.state {
-            AppState::Catalog(catalog) => catalog
-                .filtered_indices
-                .iter()
-                .position(|&idx| catalog.apps.get(idx).is_some_and(|app| app.id == id)),
-            _ => None,
-        };
-        self.open_entry(entry, filtered_index);
     }
     fn open_entry(&mut self, entry: AppEntry, filtered_index: Option<usize>) {
         let placeholder = AppState::Detail {

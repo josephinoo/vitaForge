@@ -189,8 +189,6 @@ struct RawApp {
     #[serde(default)]
     source_catalog: Option<String>,
     #[serde(default)]
-    source_labels: Vec<String>,
-    #[serde(default)]
     size: Option<String>,
     #[serde(default)]
     install_count: u64,
@@ -919,53 +917,6 @@ pub async fn notify_install(app_id: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[derive(Debug, Deserialize)]
-struct RailPage {
-    #[serde(default)]
-    data: Vec<RailItem>,
-}
-#[derive(Debug, Deserialize)]
-struct RailItem {
-    id: i64,
-}
-
-async fn fetch_rail_ids(path: &str) -> anyhow::Result<Vec<String>> {
-    let page: RailPage = request(reqwest::Method::GET, path)
-        .timeout(std::time::Duration::from_secs(8))
-        .send()
-        .await?
-        .error_for_status()?
-        .json()
-        .await?;
-    Ok(page.data.into_iter().map(|item| item.id.to_string()).collect())
-}
-
-pub async fn fetch_top_installed() -> anyhow::Result<Vec<String>> {
-    fetch_rail_ids("/apps/top-installed").await
-}
-
-pub async fn fetch_recent(limit: u32, source: Option<&str>) -> anyhow::Result<Vec<String>> {
-    let limit = limit.clamp(1, 100);
-    let path = match source {
-        Some(src) => format!("/apps/recent?limit={limit}&source={src}"),
-        None => format!("/apps/recent?limit={limit}"),
-    };
-    fetch_rail_ids(&path).await
-}
-
-pub async fn fetch_discover_rails(source: Option<&str>) -> (Vec<String>, Vec<String>) {
-    let (top, recent) = tokio::join!(fetch_top_installed(), fetch_recent(20, source));
-    (
-        top.unwrap_or_else(|err| {
-            eprintln!("top-installed rail failed: {err:#}");
-            Vec::new()
-        }),
-        recent.unwrap_or_else(|err| {
-            eprintln!("recent rail failed: {err:#}");
-            Vec::new()
-        }),
-    )
-}
 #[cfg(test)]
 mod tests {
     use super::*;

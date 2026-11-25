@@ -36,6 +36,8 @@ pub enum TextTarget {
     VerifyScore,
     VerifyNote,
     Roms3dsDir,
+    RomsDsDir,
+    RomsGbaDir,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DetailFocus {
@@ -142,16 +144,11 @@ pub enum AppCommand {
     SetSortOrder(crate::data::SortOrder),
     FlipSortDirection,
     SelectApp { index: usize },
-    SelectAppById(String),
     SetStoreTab(StoreTab),
-    RomsSetQuery(String),
-    RomsLoadCatalog,
     RomsSelectConsole(String),
     RomsSetGenre(Option<String>),
-    SetRoms3dsDir(String),
+    RomsSetRegion(Option<String>),
     RomsOpen(usize),
-    RomsDownload(usize),
-    RomsCancelDownload,
     MoreByAuthor(String),
     OpenScreenshot(usize),
     CloseScreenshot,
@@ -187,7 +184,6 @@ pub enum AppCommand {
     OpenVerifyModal,
     /// Touch on a modal row, or Cross on the focused one.
     VerifyActivate(usize),
-    CloseVerifyModal,
     SubmitVerifyText(String),
     CloseVerifyEntry,
     SubmitVerification { score: i16, installs_ok: bool, works_ok: bool, note: String },

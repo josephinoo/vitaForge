@@ -32,6 +32,8 @@ pub enum Row {
     SoundEffects,
     Theme,
     Roms3dsDir,
+    RomsDsDir,
+    RomsGbaDir,
     ClearIcons,
     ClearCatalog,
     PurgeAll,
@@ -79,7 +81,7 @@ pub const SECTIONS: [(Section, &[Row]); 6] = [
         Section::Plugins,
         &[Row::PluginManager, Row::ConfigViewer, Row::ConfigBackups, Row::Profiles, Row::SafeMode, Row::MigrateConfig, Row::Reboot],
     ),
-    (Section::Storage, &[Row::Roms3dsDir, Row::ClearIcons, Row::ClearCatalog, Row::PurgeAll]),
+    (Section::Storage, &[Row::Roms3dsDir, Row::RomsDsDir, Row::RomsGbaDir, Row::ClearIcons, Row::ClearCatalog, Row::PurgeAll]),
     (Section::About, &[]),
 ];
 
@@ -205,6 +207,8 @@ pub(crate) struct SettingsView<'a> {
     pub install_notifications: bool,
     pub sound_effects: bool,
     pub roms_3ds_dir: &'a str,
+    pub roms_ds_dir: &'a str,
+    pub roms_gba_dir: &'a str,
     pub purge_armed: bool,
     pub plugins: PluginsView<'a>,
     pub auth_form: &'a crate::app::AuthForm,
@@ -454,6 +458,30 @@ fn content(ui: &mut egui::Ui, view: &SettingsView, commands: &mut Vec<AppCommand
                 value(ui, theme_label(active_theme(), lang));
                 swatch(ui, active_theme().palette(), egui::vec2(34.0, 22.0));
             }),
+            Row::RomsDsDir => setting_row(
+                ui,
+                ChromeIcon::Games,
+                "DS ROMs folder",
+                "Default: ux0:data/dsvita",
+                focused,
+                false,
+                |ui| {
+                    chevron(ui);
+                    value(ui, view.roms_ds_dir);
+                },
+            ),
+            Row::RomsGbaDir => setting_row(
+                ui,
+                ChromeIcon::Games,
+                "GBA ROMs folder",
+                "Default: ux0:data/retroarch/roms/gba",
+                focused,
+                false,
+                |ui| {
+                    chevron(ui);
+                    value(ui, view.roms_gba_dir);
+                },
+            ),
             Row::Roms3dsDir => setting_row(
                 ui,
                 ChromeIcon::Games,
@@ -1443,7 +1471,7 @@ mod tests {
                             cache_notice: None,
                             install_notifications: true,
                             sound_effects: true,
-                            roms_3ds_dir: "ux0:data/azahar/roms",
+                            roms_3ds_dir: "ux0:data/azahar/roms", roms_ds_dir: "ux0:data/dsvita", roms_gba_dir: "ux0:data/retroarch/roms/gba",
                             purge_armed: false,
                             plugins: PluginsView {
                                 tai: Some(&snapshot),
@@ -1498,7 +1526,7 @@ mod tests {
                     egui::TopBottomPanel::bottom("hints").exact_height(47.0).show(ctx, |_| {});
                     settings_page(ctx, SettingsView {
                         lang: Language::English, nav: &nav, catalog_count: 0, stats: &stats,
-                        cache_notice: None, install_notifications: true, sound_effects: true, roms_3ds_dir: "ux0:data/azahar/roms", purge_armed: false,
+                        cache_notice: None, install_notifications: true, sound_effects: true, roms_3ds_dir: "ux0:data/azahar/roms", roms_ds_dir: "ux0:data/dsvita", roms_gba_dir: "ux0:data/retroarch/roms/gba", purge_armed: false,
                         plugins: PluginsView { tai: Some(&snapshot), outdated: &[], pending_reboot: false,
                             reboot_armed: false, armed: false, notice: None },
                         appear: 1.0,

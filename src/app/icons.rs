@@ -284,17 +284,6 @@ impl IconCache {
     pub fn get_hero(&self, ctx: &egui::Context, url: &str) -> Option<egui::TextureHandle> {
         self.get_sized(ctx, url, HERO_SIDE)
     }
-    pub fn peek(&self, url: &str) -> Option<egui::TextureHandle> {
-        let mut entries = lock(&self.entries);
-        let bucket = entries.get_mut(&MAX_ICON_SIDE)?;
-        match bucket.get_mut(url)? {
-            IconState::Ready { texture, last_used, .. } => {
-                *last_used = self.tick();
-                Some(texture.clone())
-            }
-            _ => None,
-        }
-    }
     pub fn get_sized(&self, ctx: &egui::Context, url: &str, max_side: u32) -> Option<egui::TextureHandle> {
         let mut entries = lock(&self.entries);
         let now = {
@@ -547,37 +536,6 @@ impl IconCache {
         });
     }
 
-    pub fn warm_disk_urls(&self, urls: Vec<String>) {
-        if urls.is_empty() {
-            return;
-        }
-        let cache = self.clone();
-        tokio::spawn(async move {
-            for url in urls {
-                if cache_digest(&url).is_some_and(|d| cache.disk_has(&d)) {
-                    continue;
-                }
-                loop {
-                    match cache.try_reserve_precache_slot() {
-                        Ok(wait) => {
-                            if !wait.is_zero() {
-                                tokio::time::sleep(wait).await;
-                            }
-                            break;
-                        }
-                        Err(retry_in) => tokio::time::sleep(retry_in.max(LIVE_PRIORITY_WINDOW)).await,
-                    }
-                }
-                if let WarmOutcome::Backoff(after) = warm_disk_cache(&url, &cache).await {
-                    eprintln!(
-                        "precache stopping: server rate limit, {}s to go",
-                        after.as_secs()
-                    );
-                    return;
-                }
-            }
-        });
-    }
 }
 enum WarmOutcome {
     Continue,
@@ -756,9 +714,6 @@ fn cache_path_for_digest(digest: &str) -> Option<PathBuf> {
         return None;
     }
     Some(PathBuf::from(CACHE_DIR).join(&digest[..2]).join(&digest[2..]))
-}
-fn cache_path(url: &str) -> Option<PathBuf> {
-    cache_digest(url).and_then(|d| cache_path_for_digest(&d))
 }
 enum LoadOutcome {
     Ready(egui::ColorImage),
@@ -1134,14 +1089,14 @@ mod tests {
     }
     #[test]
     fn one_size_shares_the_cached_bytes_of_another() {
-        let icon = cache_path("https://x/api/v1/images/screenshot/abc.png?size=medium&format=jpeg");
-        let hero = cache_path("https://x/api/v1/images/screenshot/abc.png?size=thumb&format=png");
+        let icon = cache_digest("https://x/api/v1/images/screenshot/abc.png?size=medium&format=jpeg");
+        let hero = cache_digest("https://x/api/v1/images/screenshot/abc.png?size=thumb&format=png");
         assert_eq!(icon, hero);
     }
     #[test]
     fn two_games_first_screenshots_do_not_collide() {
-        let gow = cache_path("https://x/scraped_assets/psvita/god_of_war/screenshots/01.jpeg");
-        let inc = cache_path("https://x/scraped_assets/psvita/stealth_inc_2/screenshots/01.jpeg");
+        let gow = cache_digest("https://x/scraped_assets/psvita/god_of_war/screenshots/01.jpeg");
+        let inc = cache_digest("https://x/scraped_assets/psvita/stealth_inc_2/screenshots/01.jpeg");
         assert!(gow.is_some());
         assert_ne!(gow, inc);
     }
@@ -1171,6 +1126,10 @@ mod tests {
         );
     }
 
+    fn cached(cache: &IconCache) -> bool {
+        lock(&cache.entries).get(&MAX_ICON_SIDE).is_some_and(|b| b.contains_key("https://x/a.png"))
+    }
+
     #[test]
     fn a_dropped_gpu_texture_is_forgotten_so_the_art_can_be_rebuilt() {
         let ctx = egui::Context::default();
@@ -1188,10 +1147,10 @@ mod tests {
             .entry(MAX_ICON_SIDE)
             .or_default()
             .insert("https://x/a.png".to_owned(), IconState::Ready { texture, last_used: 1, byte_size: 16 });
-        assert!(cache.peek("https://x/a.png").is_some());
+        assert!(cached(&cache));
 
         cache.forget_textures(&ctx, &[id]);
-        assert!(cache.peek("https://x/a.png").is_none(), "stale Ready entry survived");
+        assert!(!cached(&cache), "stale Ready entry survived");
 
         cache.forget_textures(&ctx, &[id]);
     }

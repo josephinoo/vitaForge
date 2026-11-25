@@ -20,10 +20,16 @@ pub struct Settings {
     pub theme: crate::app::ui::theme::ThemeId,
     #[serde(default = "default_roms_3ds_dir")]
     pub roms_3ds_dir: String,
+    #[serde(default = "default_roms_ds_dir")]
+    pub roms_ds_dir: String,
+    #[serde(default = "default_roms_gba_dir")]
+    pub roms_gba_dir: String,
 }
 
 const fn default_install_notifications() -> bool { true }
 const fn default_sound_effects() -> bool { true }
+fn default_roms_ds_dir() -> String { crate::roms::DSVITA_ROMS_DIR.to_owned() }
+fn default_roms_gba_dir() -> String { crate::roms::GBA_ROMS_DIR.to_owned() }
 fn default_roms_3ds_dir() -> String { crate::roms::AZAHAR_ROMS_DIR.to_owned() }
 
 impl Default for Settings {
@@ -36,6 +42,8 @@ impl Default for Settings {
             sound_effects: true,
             theme: Default::default(),
             roms_3ds_dir: default_roms_3ds_dir(),
+            roms_ds_dir: default_roms_ds_dir(),
+            roms_gba_dir: default_roms_gba_dir(),
         }
     }
 }
@@ -80,6 +88,36 @@ pub fn roms_3ds_dir() -> String {
     let dir = load().roms_3ds_dir;
     if dir.trim().is_empty() {
         crate::roms::AZAHAR_ROMS_DIR.to_owned()
+    } else {
+        dir
+    }
+}
+
+pub fn set_roms_ds_dir(dir: String) {
+    let mut settings = load();
+    settings.roms_ds_dir = dir.trim().trim_end_matches('/').to_owned();
+    save(&settings);
+}
+
+pub fn roms_ds_dir() -> String {
+    let dir = load().roms_ds_dir;
+    if dir.trim().is_empty() {
+        default_roms_ds_dir()
+    } else {
+        dir
+    }
+}
+
+pub fn set_roms_gba_dir(dir: String) {
+    let mut settings = load();
+    settings.roms_gba_dir = dir.trim().trim_end_matches('/').to_owned();
+    save(&settings);
+}
+
+pub fn roms_gba_dir() -> String {
+    let dir = load().roms_gba_dir;
+    if dir.trim().is_empty() {
+        default_roms_gba_dir()
     } else {
         dir
     }

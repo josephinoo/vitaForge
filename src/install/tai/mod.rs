@@ -121,17 +121,6 @@ fn names_entry(name: &str, entry: &EntryView, registry: &Registry) -> bool {
         || file_name(&entry.path).rsplit_once('.').is_some_and(|(stem, _)| stem.eq_ignore_ascii_case(name))
 }
 
-/// What `app` needs (`requires`) that no enabled line provides. Warn-only.
-pub fn missing_requirements(app: &AppEntry, config: &TaiConfig, registry: &Registry) -> Vec<String> {
-    let Some(meta) = app.plugin_meta.as_deref() else { return Vec::new() };
-    let entries: Vec<EntryView> = config.entries().into_iter().filter(|e| e.enabled).collect();
-    meta.requires
-        .iter()
-        .filter(|need| !entries.iter().any(|e| names_entry(need, e, registry)))
-        .cloned()
-        .collect()
-}
-
 /// Names of installed catalog plugins that `requires` the plugin `id`; shown
 /// before disabling or removing it.
 pub fn dependents_of(id: &str, registry: &Registry, catalog: &[AppEntry]) -> Vec<String> {
@@ -294,21 +283,6 @@ mod tests {
         let mut app = plugin(id, &format!("ur0:tai/{id}.suprx"), &[]);
         app.plugin_meta.as_mut().unwrap().requires = requires.iter().map(|r| (*r).to_owned()).collect();
         app
-    }
-
-    #[test]
-    fn reports_requirements_nothing_enabled_provides() {
-        let config = TaiConfig::parse("*KERNEL\nur0:tai/kubridge.skprx\n# ur0:tai/fd_fix.skprx\n");
-        let app = needing("port", &["kubridge", "fd_fix.skprx", "libshacccg"]);
-        assert_eq!(missing_requirements(&app, &config, &Registry::default()), ["fd_fix.skprx", "libshacccg"]);
-        assert!(missing_requirements(&needing("x", &[]), &config, &Registry::default()).is_empty());
-        let mut bare = needing("y", &["kubridge"]);
-        bare.plugin_meta = None;
-        assert!(missing_requirements(&bare, &config, &Registry::default()).is_empty());
-        let mut registry = Registry::default();
-        registry.upsert(PluginRecord { id: "fdfix".into(), files: vec!["ur0:tai/fd_fix.skprx".into()], ..Default::default() });
-        let enabled = TaiConfig::parse("*KERNEL\nur0:tai/fd_fix.skprx\n");
-        assert!(missing_requirements(&needing("z", &["fdfix"]), &enabled, &registry).is_empty(), "by owner id");
     }
 
     #[test]

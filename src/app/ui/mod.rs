@@ -14,7 +14,7 @@ pub use theme::{apply_theme, GRID_COLUMNS};
 
 use crate::app::i18n::Language;
 use crate::app::icons::IconCache;
-use crate::app::{App, AppState, CatalogState, SelfUpdateInfo, SELF_UPDATE_ID};
+use crate::app::{App, AppState, CatalogState, SELF_UPDATE_ID};
 use crate::data::{Category, SortOrder};
 use crate::input::{AppCommand, ContentTypeGroup, StoreTab};
 use crate::install::installed::InstalledIndex;
@@ -38,11 +38,6 @@ pub(crate) enum UpdateAllUi {
 pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
     theme::sync_visuals(ctx);
     let self_update = app.self_update.as_ref();
-    let self_update_progress = app
-        .install
-        .as_ref()
-        .filter(|job| job.app_id == SELF_UPDATE_ID)
-        .map(|job| &job.progress);
     // Fades and slides the settings modal in; snaps back to 0 while it is closed.
     let appear = ctx.animate_bool_with_time(
         egui::Id::new("settings_appear"),
@@ -57,7 +52,7 @@ pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
             self_update,
         ),
         AppState::Catalog(catalog) => {
-            catalog_view(ctx, app, catalog, self_update, self_update_progress)
+            catalog_view(ctx, app, catalog)
         }
         AppState::Detail {
             app: entry,
@@ -112,7 +107,7 @@ pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
         }
         AppState::Settings { nav, previous } => {
             // The catalog still draws the footer hints; the page covers the rest.
-            let mut commands = catalog_view(ctx, app, previous, self_update, self_update_progress);
+            let mut commands = catalog_view(ctx, app, previous);
             commands.extend(settings_page(
                 ctx,
                 SettingsView {
@@ -124,6 +119,8 @@ pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
                     install_notifications: app.install_notifications,
                     sound_effects: app.audio.is_enabled(),
                     roms_3ds_dir: &app.roms_3ds_dir,
+                    roms_ds_dir: &app.roms_ds_dir,
+                    roms_gba_dir: &app.roms_gba_dir,
                     purge_armed: app.purge_armed,
                     plugins: settings::PluginsView {
                         tai: app.tai.as_ref(),
@@ -242,8 +239,6 @@ fn catalog_view(
     ctx: &egui::Context,
     app: &App,
     catalog: &CatalogState,
-    self_update: Option<&SelfUpdateInfo>,
-    self_update_progress: Option<&crate::install::Progress>,
 ) -> Vec<AppCommand> {
     if catalog.scroll_to_selected {
         app.icons.note_scrolling();
@@ -283,8 +278,6 @@ fn catalog_view(
         catalog.shows_sidebar(),
         catalog.focus_pane == crate::app::FocusPane::Sidebar,
         catalog.sidebar_cursor,
-        self_update,
-        self_update_progress,
         &update_all,
         matches!(app.state, crate::app::AppState::Settings { .. }),
         app.self_update_prompt,
@@ -317,8 +310,6 @@ fn catalog_screen(
     show_sidebar: bool,
     sidebar_focus: bool,
     sidebar_cursor: usize,
-    self_update: Option<&SelfUpdateInfo>,
-    self_update_progress: Option<&crate::install::Progress>,
     update_all: &UpdateAllUi,
     settings_open: bool,
     self_update_prompt: bool,
@@ -347,12 +338,12 @@ fn catalog_screen(
             (
                 Glyph::Triangle,
                 if update_all_hint.is_empty() {
-                    lang.btn_filter()
+                    if tab == StoreTab::Roms { "Genre" } else { lang.btn_filter() }
                 } else {
                     update_all_hint.as_str()
                 },
             ),
-            (Glyph::Square, lang.btn_sort()),
+            (Glyph::Square, if tab == StoreTab::Roms { "Region" } else { lang.btn_sort() }),
             (Glyph::Shoulders, lang.btn_tabs()),
             (Glyph::Start, lang.btn_settings()),
         ]

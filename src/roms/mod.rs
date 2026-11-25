@@ -11,13 +11,21 @@ use tokio::sync::watch;
 pub const SNAPSHOT_API_BASE: &str = "https://vitaforge.josephinoo.dev/api/v1/roms/snapshot";
 pub const DEFAULT_ROM_TYPE: &str = "3ds";
 pub const AZAHAR_ROMS_DIR: &str = "ux0:data/azahar/roms";
+/// Where DSVita looks for `.nds` files.
+pub const DSVITA_ROMS_DIR: &str = "ux0:data/dsvita";
+/// RetroArch has no fixed content folder; this keeps GBA next to its other data.
+pub const GBA_ROMS_DIR: &str = "ux0:data/retroarch/roms/gba";
 pub const ROM_CONSOLES: &[(&str, &str)] = &[
     ("3ds", "Nintendo 3DS"),
+    ("ds", "Nintendo DS"),
+    ("gba", "Game Boy Advance"),
 ];
 
 pub fn storage_dir_for(rom_type: &str) -> PathBuf {
     match rom_type {
         "3ds" => PathBuf::from(crate::data::settings::roms_3ds_dir()),
+        "ds" => PathBuf::from(crate::data::settings::roms_ds_dir()),
+        "gba" => PathBuf::from(crate::data::settings::roms_gba_dir()),
         other => PathBuf::from(format!("ux0:data/roms/{other}")),
     }
 }
@@ -37,6 +45,23 @@ pub struct RomEntry {
 }
 
 impl RomEntry {
+    /// Regions from the No-Intro name, "Game (USA, Europe)"; the API sends no region field.
+    pub fn regions(&self) -> impl Iterator<Item = &str> {
+        self.title
+            .split_once('(')
+            .and_then(|(_, rest)| rest.split_once(')'))
+            .map(|(group, _)| group.split(", "))
+            .into_iter()
+            .flatten()
+    }
+
+    /// `needle` is already lowercase.
+    pub fn matches(&self, needle: &str, genre: Option<&str>, region: Option<&str>) -> bool {
+        (needle.is_empty() || self.title.to_lowercase().contains(needle))
+            && genre.is_none_or(|g| self.genres.iter().any(|own| own == g))
+            && region.is_none_or(|r| self.regions().any(|own| own == r))
+    }
+
     pub fn to_app_entry(&self, rom_type: &str) -> crate::data::AppEntry {
         let upper = rom_type.to_uppercase();
         let mut entry = crate::data::AppEntry {
@@ -289,6 +314,21 @@ pub fn extract_rom_zip(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ds_roms_go_where_dsvita_reads_them() {
+        assert_eq!(storage_dir_for("ds"), PathBuf::from("ux0:data/dsvita"));
+    }
+
+    #[test]
+    fn region_comes_from_the_title() {
+        let mut rom = parse_snapshot(br#"{"data":[{"id":"a","title":"Game (USA, Europe) (Rev 1)","filename":"a.zip","download_url":"u"}]}"#).unwrap().remove(0);
+        assert_eq!(rom.regions().collect::<Vec<_>>(), ["USA", "Europe"]);
+        assert!(rom.matches("game", None, Some("Europe")));
+        assert!(!rom.matches("", None, Some("Japan")));
+        rom.title = "No region".to_owned();
+        assert_eq!(rom.regions().count(), 0);
+    }
 
     #[test]
     fn parses_vitaforge_snapshot_json() {

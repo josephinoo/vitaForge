@@ -863,20 +863,6 @@ fn paint_modal_scrim(ctx: &egui::Context) {
         });
 }
 
-/// Installation owns its own surface.  Keeping progress here prevents the
-/// primary action from jumping between an action button and a progress bar.
-pub(crate) fn install_progress_modal(
-    ctx: &egui::Context,
-    lang: Language,
-    title: &str,
-    job: &crate::install::Progress,
-    cancellable: bool,
-    cancel_armed: bool,
-    commands: &mut Vec<AppCommand>,
-) {
-    install_progress_modal_opt(ctx, lang, title, job, cancellable, cancel_armed, false, commands);
-}
-
 pub(crate) fn install_progress_modal_opt(
     ctx: &egui::Context,
     lang: Language,
