@@ -147,6 +147,10 @@ pub enum AppCommand {
     RomsSelectConsole(String),
     RomsSetGenre(Option<String>),
     RomsSetRegion(Option<String>),
+    RomsRetry,
+    /// Row of the open filter list; 0 is "all".
+    PickFilter(usize),
+    CloseFilterPicker,
     RomsOpen(usize),
     MoreByAuthor(String),
     OpenScreenshot(usize),

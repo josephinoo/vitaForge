@@ -138,6 +138,9 @@ pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
             commands
         }
     };
+    if let Some(picker) = app.filter_picker {
+        filter_picker_modal(ctx, app, picker, &mut commands);
+    }
     app.icons.maintain(ctx);
     if app.icons.rate_limited_for().is_some() {
         ctx.request_repaint_after(std::time::Duration::from_secs(1));
@@ -233,6 +236,75 @@ fn self_update_modal(
         });
 }
 
+fn filter_picker_modal(
+    ctx: &egui::Context,
+    app: &App,
+    picker: crate::app::FilterPicker,
+    commands: &mut Vec<AppCommand>,
+) {
+    use crate::app::PickerTarget;
+    let lang = app.lang;
+    let (options, _) = app.picker_options(picker.target);
+    let region = picker.target == PickerTarget::RomRegion;
+    let title = lang.tr(if region { "filter-region" } else { "filter-genre" });
+    egui::Area::new(egui::Id::new("filter_picker_scrim"))
+        .fixed_pos(egui::Pos2::ZERO)
+        .order(egui::Order::Middle)
+        .show(ctx, |ui| {
+            let screen = ui.ctx().screen_rect();
+            let (bg, response) = ui.allocate_exact_size(screen.size(), egui::Sense::click());
+            ui.painter().rect_filled(bg, 0.0, egui::Color32::from_black_alpha(175));
+            if response.clicked() {
+                commands.push(AppCommand::CloseFilterPicker);
+            }
+        });
+    egui::Area::new(egui::Id::new("filter_picker"))
+        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+        .order(egui::Order::Foreground)
+        .show(ctx, |ui| {
+            egui::Frame::window(&ctx.style())
+                .fill(theme::glass_modal(pal().bg_card))
+                .stroke(egui::Stroke::new(1.5_f32, pal().accent_soft))
+                .corner_radius(RADIUS_LG)
+                .inner_margin(egui::vec2(16.0, 12.0))
+                .show(ui, |ui| {
+                    ui.set_width(360.0);
+                    ui.label(egui::RichText::new(title).size(FONT_LARGE).strong().color(pal().text));
+                    ui.add_space(6.0);
+                    egui::ScrollArea::vertical().max_height(344.0).show(ui, |ui| {
+                        ui.spacing_mut().item_spacing.y = 2.0;
+                        for row in 0..=options.len() {
+                            let label = match row.checked_sub(1).map(|i| &options[i]) {
+                                None if region => lang.tr("filter-all-regions"),
+                                None => lang.all_genres_label(),
+                                Some((name, count)) if region => format!("{name} ({count})"),
+                                Some((name, count)) => format!("{} ({count})", lang.genre_label(name)),
+                            };
+                            let (rect, response) = ui.allocate_exact_size(
+                                egui::vec2(ui.available_width(), 41.0),
+                                egui::Sense::click(),
+                            );
+                            let focused = row == picker.cursor;
+                            if focused {
+                                ui.painter().rect_filled(rect, RADIUS_SM, pal().primary);
+                                response.scroll_to_me(None);
+                            }
+                            ui.painter().text(
+                                rect.left_center() + egui::vec2(12.0, 0.0),
+                                egui::Align2::LEFT_CENTER,
+                                label,
+                                font(FONT_BODY),
+                                if focused { egui::Color32::WHITE } else { pal().text },
+                            );
+                            if response.clicked() {
+                                commands.push(AppCommand::PickFilter(row));
+                            }
+                        }
+                    });
+                });
+        });
+}
+
 fn catalog_view(
     ctx: &egui::Context,
     app: &App,
@@ -279,6 +351,7 @@ fn catalog_view(
         &update_all,
         matches!(app.state, crate::app::AppState::Settings { .. }),
         app.self_update_prompt,
+        app.filter_picker.is_some(),
         app.roms.view(),
     )
 }
@@ -311,6 +384,7 @@ fn catalog_screen(
     update_all: &UpdateAllUi,
     settings_open: bool,
     self_update_prompt: bool,
+    picking: bool,
     roms_view_data: self::roms::RomsView<'_>,
 ) -> Vec<AppCommand> {
     let mut commands = Vec::new();
@@ -318,7 +392,17 @@ fn catalog_screen(
         UpdateAllUi::Available(count) if tab == StoreTab::Updates => lang.update_all(*count),
         _ => String::new(),
     };
-    let hints = if self_update_prompt {
+    // ○ only does something here when there is a sidebar focus, search or filter to leave.
+    let can_go_back = sidebar_focus
+        || search_active
+        || !search_query.is_empty()
+        || (tab == StoreTab::Categories && (category_filter.is_some() || favorites_filter));
+    let roms_genre = lang.tr("filter-genre");
+    let roms_region = lang.tr("filter-region");
+    let retry = lang.tr("roms-retry");
+    let mut hints = if picking {
+        vec![(Glyph::Cross, lang.btn_choose()), (Glyph::Circle, lang.btn_back())]
+    } else if self_update_prompt {
         vec![
             (Glyph::Cross, lang.update()),
             (Glyph::Circle, lang.btn_back()),
@@ -331,21 +415,27 @@ fn catalog_screen(
         ]
     } else {
         vec![
-            (Glyph::Cross, lang.btn_open()),
+            (
+                Glyph::Cross,
+                if tab == StoreTab::Roms && roms_view_data.failed { retry.as_str() } else { lang.btn_open() },
+            ),
             (Glyph::Circle, lang.btn_back()),
             (
                 Glyph::Triangle,
                 if update_all_hint.is_empty() {
-                    if tab == StoreTab::Roms { "Genre" } else { lang.btn_filter() }
+                    if tab == StoreTab::Roms { roms_genre.as_str() } else { lang.btn_filter() }
                 } else {
                     update_all_hint.as_str()
                 },
             ),
-            (Glyph::Square, if tab == StoreTab::Roms { "Region" } else { lang.btn_sort() }),
+            (Glyph::Square, if tab == StoreTab::Roms { roms_region.as_str() } else { lang.btn_sort() }),
             (Glyph::Shoulders, lang.btn_tabs()),
             (Glyph::Start, lang.btn_settings()),
         ]
     };
+    if !picking && !self_update_prompt && !settings_open && !can_go_back {
+        hints.retain(|(glyph, _)| *glyph != Glyph::Circle);
+    }
     commands.extend(button_hints(
         ctx,
         lang,
@@ -421,7 +511,7 @@ fn catalog_screen(
                     }
 
                     if tab == StoreTab::Roms {
-                        self::roms::roms_view(ui, icons, search_query, roms_view_data, &mut commands);
+                        self::roms::roms_view(ui, lang, icons, installed, search_query, roms_view_data, &mut commands);
                     } else if filtered_indices.is_empty()
                         && content_type_group == ContentTypeGroup::Themes
                         && crate::data::psvt::searching()

@@ -242,9 +242,20 @@ pub(crate) fn genre_dropdown(
     genre_counts: &[(String, usize)],
     genre_filter: Option<&str>,
 ) -> Option<Option<String>> {
-    let popup_id = ui.make_persistent_id("genre_dropdown");
-    let mut label =
-        genre_filter.map_or_else(|| lang.all_genres_label(), |genre| lang.genre_label(genre));
+    filter_dropdown(ui, "genre_dropdown", &lang.all_genres_label(), genre_counts, genre_filter, |genre| lang.genre_label(genre))
+}
+
+/// The pill + popup list shared by Games and ROMs. `Some(None)` means "all".
+pub(crate) fn filter_dropdown(
+    ui: &mut egui::Ui,
+    id: &str,
+    all: &str,
+    options: &[(String, usize)],
+    current: Option<&str>,
+    name: impl Fn(&str) -> String,
+) -> Option<Option<String>> {
+    let popup_id = ui.make_persistent_id(id);
+    let mut label = current.map_or_else(|| all.to_owned(), &name);
     if label.chars().count() > 16 {
         label = format!("{}…", label.chars().take(15).collect::<String>());
     }
@@ -263,7 +274,7 @@ pub(crate) fn genre_dropdown(
         rect.height() / 2.0,
         egui::Stroke::new(
             1.0_f32,
-            if open || genre_filter.is_some() {
+            if open || current.is_some() {
                 pal().accent_soft
             } else {
                 pal().separator
@@ -293,17 +304,17 @@ pub(crate) fn genre_dropdown(
         |ui| {
             ui.set_width(176.0);
             egui::ScrollArea::vertical()
-                .id_salt("genre_dropdown_options")
+                .id_salt((id, "options"))
                 .max_height(180.0)
                 .show(ui, |ui| {
                     ui.spacing_mut().item_spacing.y = 2.0;
-                    if dropdown_row(ui, &lang.all_genres_label(), genre_filter.is_none()) {
+                    if dropdown_row(ui, all, current.is_none()) {
                         picked = Some(None);
                     }
-                    for (genre, count) in genre_counts {
-                        let row_label = format!("{} ({count})", lang.genre_label(genre));
-                        if dropdown_row(ui, &row_label, genre_filter == Some(genre.as_str())) {
-                            picked = Some(Some(genre.clone()));
+                    for (option, count) in options {
+                        let row_label = format!("{} ({count})", name(option));
+                        if dropdown_row(ui, &row_label, current == Some(option.as_str())) {
+                            picked = Some(Some(option.clone()));
                         }
                     }
                 });

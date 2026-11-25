@@ -79,6 +79,11 @@ impl RomEntry {
     }
 
     pub fn to_app_entry(&self, rom_type: &str) -> crate::data::AppEntry {
+        self.to_app_entry_in(rom_type, &storage_dir_for(rom_type))
+    }
+
+    /// For whole lists: the folder lookup reads the settings file, so do it once.
+    pub fn to_app_entry_in(&self, rom_type: &str, dir: &Path) -> crate::data::AppEntry {
         let upper = rom_type.to_uppercase();
         let mut entry = crate::data::AppEntry {
             id: self.id.clone(),
@@ -91,7 +96,7 @@ impl RomEntry {
             author: format!("{upper} ROM"),
             author_lower: format!("{rom_type} rom"),
             description_lower: String::new(),
-            description: format!("{} · {}", self.filename, storage_dir_for(rom_type).display()),
+            description: format!("{} · {}", self.filename, dir.display()),
             long_description: String::new(),
             requirements: String::new(),
             changelog: String::new(),
@@ -182,6 +187,25 @@ pub enum SnapshotFetch {
 
 pub fn snapshot_url(rom_type: &str) -> String {
     format!("{SNAPSHOT_API_BASE}?type={rom_type}")
+}
+
+/// Catalog size without downloading the snapshot: a one-item page carries `total`.
+pub async fn fetch_total(rom_type: &str) -> Result<usize> {
+    #[derive(Deserialize)]
+    struct Page {
+        total: usize,
+    }
+    let base = SNAPSHOT_API_BASE.trim_end_matches("/snapshot");
+    let page: Page = crate::net::client()
+        .get(format!("{base}?type={rom_type}&limit=1"))
+        .header("X-Client-ID", crate::data::client_id::get())
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    Ok(page.total)
 }
 
 pub fn parse_snapshot(json: &[u8]) -> Result<Vec<RomEntry>> {

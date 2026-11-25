@@ -23,9 +23,9 @@ pub(crate) fn status_note(installed: &InstalledIndex, icons: &IconCache) -> Stat
     if let Some(left) = icons.rate_limited_for() {
         let secs = left.as_secs();
         return StatusNote::RateLimited(if secs >= 60 {
-            format!("Artwork resumes in {}m {:02}s", secs / 60, secs % 60)
+            format!("{}m {:02}s", secs / 60, secs % 60)
         } else {
-            format!("Artwork resumes in {}s", secs.max(1))
+            format!("{}s", secs.max(1))
         });
     }
     let (installed_count, outdated_count) = installed.counts();
@@ -48,7 +48,8 @@ pub(crate) fn status_note(installed: &InstalledIndex, icons: &IconCache) -> Stat
 fn status_note_widget(ui: &mut egui::Ui, lang: Language, note: StatusNote, reserve: f32) -> Option<StoreTab> {
     let mut clicked = None;
     match note {
-        StatusNote::RateLimited(message) => {
+        StatusNote::RateLimited(time) => {
+            let message = lang.tr_args("artwork-resumes", &[("time", &time)]);
             let _ = status_chip_inline(
                 ui,
                 "status_chip_rate_limited",

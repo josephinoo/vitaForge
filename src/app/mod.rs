@@ -661,10 +661,43 @@ impl CatalogState {
 }
 
 
-/// All → first → … → last → All.
-fn next_option(options: &[(String, usize)], current: Option<&str>) -> Option<String> {
-    let next = current.map_or(0, |c| options.iter().position(|(o, _)| o == c).map_or(0, |i| i + 1));
-    options.get(next).map(|(o, _)| o.clone())
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PickerTarget {
+    RomGenre,
+    RomRegion,
+    GameGenre,
+}
+
+/// Controller-driven filter list; row 0 is "all", row n is option n-1.
+#[derive(Clone, Copy)]
+pub struct FilterPicker {
+    pub target: PickerTarget,
+    pub cursor: usize,
+}
+
+const PICKER_PAGE: usize = 8;
+
+/// Up/down wrap, left/right jump a page and stop at the ends.
+fn picker_step(cursor: usize, len: usize, input: InputCommand) -> usize {
+    match input {
+        InputCommand::MoveUp => (cursor + len - 1) % len,
+        InputCommand::MoveDown => (cursor + 1) % len,
+        InputCommand::MoveLeft => cursor.saturating_sub(PICKER_PAGE),
+        InputCommand::MoveRight => (cursor + PICKER_PAGE).min(len - 1),
+        _ => cursor,
+    }
+}
+
+#[cfg(test)]
+mod picker_tests {
+    use super::{picker_step, InputCommand};
+    #[test]
+    fn wraps_and_pages() {
+        assert_eq!(picker_step(0, 24, InputCommand::MoveUp), 23);
+        assert_eq!(picker_step(23, 24, InputCommand::MoveDown), 0);
+        assert_eq!(picker_step(3, 24, InputCommand::MoveLeft), 0);
+        assert_eq!(picker_step(20, 24, InputCommand::MoveRight), 23);
+    }
 }
 
 /// L/R walk the header left to right and wrap.
@@ -850,6 +883,7 @@ pub struct App {
     pub report_notice: Option<String>,
     /// Focused item while the report picker is open: a category, then Cancel, then Submit.
     pub report_modal: Option<usize>,
+    pub filter_picker: Option<FilterPicker>,
     /// The checked category.
     pub report_choice: usize,
     /// The IME is up for the report message.
@@ -888,10 +922,15 @@ pub struct RomsUiState {
     pub genre_filter: Option<String>,
     pub region_filter: Option<String>,
     pub loading: bool,
-    pub status: Option<String>,
+    pub failed: bool,
     pub entries: Vec<crate::roms::RomEntry>,
+    /// `entries` as grid tiles, same order.
+    tiles: Vec<AppEntry>,
     pub genre_counts: Vec<(String, usize)>,
     pub region_counts: Vec<(String, usize)>,
+    /// Games per console code, for the sidebar.
+    totals: std::collections::HashMap<&'static str, usize>,
+    totals_rx: Option<std::sync::mpsc::Receiver<(&'static str, usize)>>,
     pub selected: usize,
     pub scroll_to_selected: bool,
     pub sidebar_focus: bool,
@@ -907,10 +946,13 @@ impl RomsUiState {
             genre_filter: None,
             region_filter: None,
             loading: false,
-            status: None,
+            failed: false,
             entries: Vec::new(),
+            tiles: Vec::new(),
             genre_counts: Vec::new(),
             region_counts: Vec::new(),
+            totals: Default::default(),
+            totals_rx: None,
             selected: 0,
             scroll_to_selected: false,
             sidebar_focus: false,
@@ -926,10 +968,12 @@ impl RomsUiState {
             genre_filter: self.genre_filter.as_deref(),
             region_filter: self.region_filter.as_deref(),
             loading: self.loading,
-            status: self.status.as_deref(),
+            failed: self.failed,
             entries: &self.entries,
+            tiles: &self.tiles,
             genre_counts: &self.genre_counts,
             region_counts: &self.region_counts,
+            totals: &self.totals,
             selected: self.selected,
             scroll_to_selected: self.scroll_to_selected,
             sidebar_focus: self.sidebar_focus,
@@ -947,32 +991,63 @@ impl RomsUiState {
             .collect()
     }
 
+    /// Once per session, and again only for consoles that never answered.
+    fn load_totals(&mut self) {
+        if self.totals_rx.is_some() {
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        for console in &crate::roms::ROM_CONSOLES {
+            if !self.totals.contains_key(console.code) {
+                let (tx, code) = (tx.clone(), console.code);
+                tokio::spawn(async move {
+                    if let Ok(total) = crate::roms::fetch_total(code).await {
+                        let _ = tx.send((code, total));
+                    }
+                });
+            }
+        }
+        self.totals_rx = Some(rx);
+    }
+
     fn load_catalog(&mut self) {
         if self.loading {
             return;
         }
+        self.load_totals();
         let (tx, rx) = oneshot::channel();
         let etag = self.etag.clone();
         let rom_type = self.rom_type.clone();
         self.catalog_rx = Some(rx);
         self.loading = true;
-        self.status = Some(format!("Loading {} ROMs snapshot...", rom_type.to_uppercase()));
+        self.failed = false;
         tokio::spawn(async move {
             let _ = tx.send(crate::roms::fetch_snapshot(&rom_type, etag.as_deref()).await);
         });
     }
 
     fn poll(&mut self) {
+        if let Some(rx) = &self.totals_rx {
+            loop {
+                match rx.try_recv() {
+                    Ok((code, total)) => {
+                        self.totals.insert(code, total);
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        self.totals_rx = None;
+                        break;
+                    }
+                }
+            }
+        }
         if let Some(rx) = &mut self.catalog_rx {
             if let Ok(res) = rx.try_recv() {
                 self.catalog_rx = None;
                 self.loading = false;
                 match res {
-                    Ok(crate::roms::SnapshotFetch::NotModified) => {
-                        self.status = None;
-                    }
+                    Ok(crate::roms::SnapshotFetch::NotModified) => {}
                     Ok(crate::roms::SnapshotFetch::Updated { entries, etag }) => {
-                        self.status = None;
                         let mut counts = std::collections::BTreeMap::<String, usize>::new();
                         for e in &entries {
                             for g in &e.genres {
@@ -980,17 +1055,26 @@ impl RomsUiState {
                             }
                         }
                         self.genre_counts = counts.into_iter().collect();
+                        // The loaded snapshot is the truth for the open console.
+                        if let Some(console) = crate::roms::ROM_CONSOLES.iter().find(|c| c.code == self.rom_type) {
+                            self.totals.insert(console.code, entries.len());
+                        }
                         let mut regions = std::collections::BTreeMap::<String, usize>::new();
                         for region in entries.iter().flat_map(|e| e.regions()) {
                             *regions.entry(region.to_owned()).or_insert(0) += 1;
                         }
                         self.region_counts = regions.into_iter().collect();
+                        let dir = crate::roms::storage_dir_for(&self.rom_type);
+                        self.tiles = entries.iter().map(|e| e.to_app_entry_in(&self.rom_type, &dir)).collect();
                         self.entries = entries;
                         if etag.is_some() {
                             self.etag = etag;
                         }
                     }
-                    Err(err) => self.status = Some(format!("Catalog error: {err:#}")),
+                    Err(err) => {
+                        crate::install::log_file(&format!("rom catalog failed: {err:#}"));
+                        self.failed = true;
+                    }
                 }
             }
         }
@@ -1083,6 +1167,7 @@ impl App {
             uninstall_rx: None,
             report_notice: None,
             report_modal: None,
+            filter_picker: None,
             report_choice: 0,
             report_entry: false,
             profile_rename: None,
@@ -2101,6 +2186,62 @@ impl App {
         }
     }
 
+    /// `(options, current)` for a picker target.
+    pub(crate) fn picker_options(&self, target: PickerTarget) -> (&[(String, usize)], Option<&str>) {
+        match target {
+            PickerTarget::RomGenre => (&self.roms.genre_counts, self.roms.genre_filter.as_deref()),
+            PickerTarget::RomRegion => (&self.roms.region_counts, self.roms.region_filter.as_deref()),
+            PickerTarget::GameGenre => match &self.state {
+                AppState::Catalog(catalog) => (&catalog.genre_counts, catalog.genre_filter.as_deref()),
+                _ => (&[], None),
+            },
+        }
+    }
+
+    fn open_filter_picker(&mut self, target: PickerTarget) {
+        let (options, current) = self.picker_options(target);
+        if options.is_empty() {
+            return;
+        }
+        let cursor = current.and_then(|c| options.iter().position(|(o, _)| o == c)).map_or(0, |i| i + 1);
+        self.filter_picker = Some(FilterPicker { target, cursor });
+        self.audio.play(crate::audio::Sfx::ShowModal);
+    }
+
+    fn handle_filter_picker(&mut self, picker: FilterPicker, command: AppCommand) -> Result<()> {
+        let len = self.picker_options(picker.target).0.len() + 1;
+        let picked = match command {
+            AppCommand::Input(InputCommand::Confirm) => picker.cursor,
+            AppCommand::PickFilter(row) => row,
+            AppCommand::Input(InputCommand::Back)
+            | AppCommand::CloseFilterPicker
+            | AppCommand::CycleCategoryFilter => {
+                self.filter_picker = None;
+                self.audio.play(crate::audio::Sfx::HideModal);
+                return Ok(());
+            }
+            AppCommand::Input(input) => {
+                let cursor = picker_step(picker.cursor.min(len - 1), len, input);
+                if cursor != picker.cursor {
+                    self.filter_picker = Some(FilterPicker { cursor, ..picker });
+                    self.audio.play(crate::audio::Sfx::Navigate);
+                }
+                return Ok(());
+            }
+            _ => return Ok(()),
+        };
+        let choice = picked
+            .checked_sub(1)
+            .and_then(|i| self.picker_options(picker.target).0.get(i))
+            .map(|(option, _)| option.clone());
+        self.filter_picker = None;
+        self.handle_command(match picker.target {
+            PickerTarget::RomGenre => AppCommand::RomsSetGenre(choice),
+            PickerTarget::RomRegion => AppCommand::RomsSetRegion(choice),
+            PickerTarget::GameGenre => AppCommand::SetGenreFilter(choice),
+        })
+    }
+
     /// Focus runs over the categories (two columns), then Cancel, then Submit.
     fn handle_report_modal(&mut self, focus: usize, command: AppCommand) {
         let count = data::api::REPORT_CATEGORIES.len();
@@ -2203,7 +2344,12 @@ impl App {
             self.handle_report_modal(selected, command);
             return Ok(());
         }
+        if let Some(picker) = self.filter_picker {
+            return self.handle_filter_picker(picker, command);
+        }
         match command {
+            AppCommand::PickFilter(_) | AppCommand::CloseFilterPicker => {}
+            AppCommand::RomsRetry => self.roms.load_catalog(),
             AppCommand::Input(InputCommand::Back) => {
                 if self.self_update_prompt {
                     return self.handle_command(AppCommand::DismissSelfUpdate);
@@ -2349,12 +2495,10 @@ impl App {
             }
             AppCommand::FlipSortDirection if self.in_plugin_list() => return self.tai_start_move(),
             AppCommand::CycleCategoryFilter if matches!(&self.state, AppState::Catalog(c) if c.tab == StoreTab::Roms) => {
-                    let genre = next_option(&self.roms.genre_counts, self.roms.genre_filter.as_deref());
-                    return self.handle_command(AppCommand::RomsSetGenre(genre));
+                self.open_filter_picker(PickerTarget::RomGenre);
             }
             AppCommand::FlipSortDirection if matches!(&self.state, AppState::Catalog(c) if c.tab == StoreTab::Roms) => {
-                    let region = next_option(&self.roms.region_counts, self.roms.region_filter.as_deref());
-                    return self.handle_command(AppCommand::RomsSetRegion(region));
+                self.open_filter_picker(PickerTarget::RomRegion);
             }
             AppCommand::CycleCategoryFilter => {
                 if matches!(self.state, AppState::Detail { .. }) {
@@ -2363,14 +2507,14 @@ impl App {
                 if matches!(&self.state, AppState::Catalog(catalog) if catalog.tab == StoreTab::Updates) {
                     return self.handle_command(AppCommand::UpdateAll);
                 }
-                // Games: the sidebar already walks categories, so △ walks the genre dropdown.
+                // Games: the sidebar already walks categories, so △ opens the genre list.
                 if let AppState::Catalog(catalog) = &self.state
                     && catalog.tab == StoreTab::Categories
                     && catalog.content_type_group == ContentTypeGroup::Games
                     && !catalog.genre_counts.is_empty()
                 {
-                    let genre = next_option(&catalog.genre_counts, catalog.genre_filter.as_deref());
-                    return self.handle_command(AppCommand::SetGenreFilter(genre));
+                    self.open_filter_picker(PickerTarget::GameGenre);
+                    return Ok(());
                 }
                 if let AppState::Catalog(catalog) = &mut self.state {
                     if catalog.tab != StoreTab::Categories {
@@ -2672,7 +2816,13 @@ impl App {
                 }
                 if let AppState::Catalog(catalog) = &self.state {
                     if catalog.tab == StoreTab::Roms {
-                        if self.roms.sidebar_focus {
+                        let on_other_console = self.roms.sidebar_focus
+                            && crate::roms::ROM_CONSOLES
+                                .get(self.roms.sidebar_cursor)
+                                .is_some_and(|console| console.code != self.roms.rom_type);
+                        if self.roms.failed && !on_other_console {
+                            self.roms.load_catalog();
+                        } else if self.roms.sidebar_focus {
                             if let Some(console) = crate::roms::ROM_CONSOLES.get(self.roms.sidebar_cursor) {
                                 self.roms.sidebar_focus = false;
                                 return self.handle_command(AppCommand::RomsSelectConsole(console.code.to_owned()));
@@ -3070,6 +3220,8 @@ impl App {
                     self.roms.region_counts.clear();
                     self.roms.selected = 0;
                     self.roms.entries.clear();
+                    self.roms.tiles.clear();
+                    self.roms.scroll_to_selected = true;
                     self.roms.etag = None;
                     self.roms.loading = false;
                     self.roms.load_catalog();
@@ -3717,6 +3869,7 @@ impl App {
         self.audio.play(crate::audio::Sfx::IntoDetail);
     }
     pub fn clear_one_shot_ui_state(&mut self) {
+        self.roms.scroll_to_selected = false;
         match &mut self.state {
             AppState::Catalog(catalog) => {
                 catalog.scroll_to_selected = false;

@@ -197,6 +197,8 @@ pub(crate) fn tile_platform_badge(
     entry: &crate::data::AppEntry,
 ) {
     let text = match entry.category {
+        // ROMs carry their console code as the version.
+        _ if entry.source_catalog == "roms" => entry.version.as_str(),
         Category::Port => "PORT",
         Category::PspGame => "PSP",
         Category::Ps1Game => "PS1",

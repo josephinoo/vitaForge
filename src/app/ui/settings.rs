@@ -460,8 +460,8 @@ fn content(ui: &mut egui::Ui, view: &SettingsView, commands: &mut Vec<AppCommand
                 setting_row(
                     ui,
                     ChromeIcon::Games,
-                    &format!("{} ROMs folder", console.label),
-                    &format!("Default: {}", console.default_dir),
+                    &lang.tr_args("roms-folder", &[("console", console.label)]),
+                    &lang.tr_args("roms-folder-default", &[("path", console.default_dir)]),
                     focused,
                     false,
                     |ui| {
@@ -582,7 +582,7 @@ fn account_section(ui: &mut egui::Ui, view: &SettingsView, commands: &mut Vec<Ap
 
         card_frame.show(ui, |ui| {
             ui.vertical(|ui| {
-                ui.label(egui::RichText::new("Connected Account").size(FONT_BODY).color(pal().text_dim));
+                ui.label(egui::RichText::new(lang.tr("auth-account")).size(FONT_BODY).color(pal().text_dim));
                 ui.add_space(8.0);
 
                 ui.label(egui::RichText::new(&session.username).size(FONT_TITLE + 4.0).strong().color(pal().text));
@@ -593,13 +593,13 @@ fn account_section(ui: &mut egui::Ui, view: &SettingsView, commands: &mut Vec<Ap
                     // Online green dot
                     let (dot_rect, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
                     ui.painter().circle_filled(dot_rect.center(), 3.5, egui::Color32::from_rgb(34, 197, 94));
-                    ui.label(egui::RichText::new("Online").size(FONT_SMALL).color(egui::Color32::from_rgb(34, 197, 94)).strong());
+                    ui.label(egui::RichText::new(lang.tr("auth-online")).size(FONT_SMALL).color(egui::Color32::from_rgb(34, 197, 94)).strong());
                     ui.add_space(4.0);
-                    ui.label(egui::RichText::new("Connected to VitaForge").size(FONT_SMALL).color(pal().text_dim));
+                    ui.label(egui::RichText::new(lang.tr("auth-connected")).size(FONT_SMALL).color(pal().text_dim));
                 });
 
                 ui.add_space(3.0);
-                ui.label(egui::RichText::new(format!("User ID: {}", session.user_id)).size(FONT_SMALL).color(pal().text_faint));
+                ui.label(egui::RichText::new(lang.tr_args("auth-user-id", &[("id", &session.user_id.to_string())])).size(FONT_SMALL).color(pal().text_faint));
             });
         });
 
@@ -629,7 +629,7 @@ fn account_section(ui: &mut egui::Ui, view: &SettingsView, commands: &mut Vec<Ap
         ui.painter().text(
             egui::pos2(rect.center().x, rect.center().y - 8.0),
             egui::Align2::CENTER_CENTER,
-            "Log out",
+            lang.tr("auth-logout"),
             font(FONT_BODY),
             pal().danger,
         );
