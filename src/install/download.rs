@@ -243,6 +243,7 @@ async fn fetch_range_part(
             writer.flush()?;
             return Ok(());
         }
+        wait_for_network(tx, cancel, crate::net::is_online).await?;
         let resp = match crate::net::client()
             .get(url)
             .header("Range", format!("bytes={pos}-{end}"))
@@ -746,6 +747,7 @@ async fn fetch_file_from(
     cancel: &AtomicBool,
     join: bool,
 ) -> Result<()> {
+    wait_for_network(tx, cancel, crate::net::is_online).await?;
     let probe = or_cancelled(cancel, async { Ok(probe_parallel(url).await) }).await?;
     if probe.is_none() {
         crate::install::log_file("parallel: range probe failed, using one connection");
@@ -834,6 +836,34 @@ async fn fetch_file_from(
     or_cancelled(cancel, fetch_to(url, &mut sink, &mut reporter, cancel)).await
 }
 
+const NETWORK_WAIT: Duration = Duration::from_secs(600);
+
+/// Holds a transfer while the Wi-Fi is down so the outage doesn't burn retries.
+/// Callers can cancel: every use sits inside a cancellable wait or checks the flag next.
+async fn wait_for_network(
+    tx: &watch::Sender<crate::install::Progress>,
+    cancel: &AtomicBool,
+    online: impl Fn() -> bool,
+) -> Result<()> {
+    if online() {
+        return Ok(());
+    }
+    crate::install::log_file("network down, download paused");
+    let since = Instant::now();
+    while !online() {
+        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            bail!(crate::install::CANCELLED_MESSAGE);
+        }
+        if since.elapsed() >= NETWORK_WAIT {
+            bail!("no network connection; the download is kept, retry once reconnected");
+        }
+        let _ = tx.send(crate::install::Progress::WaitingForNetwork);
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    crate::install::log_file("network back, resuming");
+    Ok(())
+}
+
 pub async fn fetch_to(
     url: &str,
     sink: &mut dyn ByteSink,
@@ -851,6 +881,7 @@ pub async fn fetch_to(
             tokio::time::sleep(backoff).await;
             eprintln!("retrying download (attempt {}): {url}", attempt + 1);
         }
+        wait_for_network(rep.tx, cancel, crate::net::is_online).await?;
         let start = sink.resume_offset();
         let mut request = crate::net::client().get(url);
         if start > 0 {
@@ -945,6 +976,16 @@ mod vitadb_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn offline_pauses_until_the_link_returns() {
+        let (tx, rx) = watch::channel(crate::install::Progress::Resolving);
+        let cancel = AtomicBool::new(false);
+        let checks = std::cell::Cell::new(0);
+        wait_for_network(&tx, &cancel, || { checks.set(checks.get() + 1); checks.get() > 2 }).await.unwrap();
+        assert_eq!(*rx.borrow(), crate::install::Progress::WaitingForNetwork);
+        cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        assert!(wait_for_network(&tx, &cancel, || false).await.is_err());
+    }
     #[test]
     fn join_parts_appends_in_order_and_cleans_up() {
         let dest = std::env::temp_dir().join(format!("vf_join_{}", std::process::id()));

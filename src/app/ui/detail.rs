@@ -347,6 +347,10 @@ pub(crate) fn detail_screen(
                         );
                     });
                     ui.add_space(20.0);
+                    // With screenshots, full width: no blank column beside a long description.
+                    if !entry.screenshot_urls.is_empty() {
+                        about_block(ui, lang, entry);
+                    }
                     if !entry.changelog.trim().is_empty() {
                         ui.add_space(16.0);
                         egui::Frame::NONE
@@ -472,7 +476,7 @@ pub(crate) fn detail_screen(
                             egui::Stroke::new(FOCUS_STROKE, pal().focus),
                             egui::StrokeKind::Outside,
                         );
-                        tab_resp.response.scroll_to_me(None);
+                        crate::app::ui::widgets::scroll_on_focus_arrival(ui, &tab_resp.response);
                     }
                     ui.add_space(8.0);
                     if verified_tab {
@@ -657,7 +661,7 @@ pub(crate) fn detail_screen(
                                                     .corner_radius(14.0),
                                                 );
                                                 if reply_focused {
-                                                    resp.scroll_to_me(None);
+                                                    crate::app::ui::widgets::scroll_on_focus_arrival(ui, &resp);
                                                 }
                                                 if resp.clicked() {
                                                     commands.push(AppCommand::RequestCommentReply(comment.id.clone()));
@@ -671,6 +675,10 @@ pub(crate) fn detail_screen(
                     }
                     ui.add_space(20.0);
                 });
+            // A finger drag (or scroll-to-focus) moved the page: keep it, or the next frame snaps back.
+            if (scroll_output.state.offset.y - scroll_offset).abs() > 0.5 {
+                commands.push(AppCommand::SetDetailScroll(scroll_output.state.offset.y));
+            }
             // egui clamps what it draws; hand the real limit back so the stored offset cannot run past the content.
             let max_scroll = (scroll_output.content_size.y - scroll_output.inner_rect.height()).max(0.0);
             ui.ctx().data_mut(|d| d.insert_temp(max_id, max_scroll));
@@ -1035,6 +1043,7 @@ fn install_stepper(ui: &mut egui::Ui, progress: &crate::install::Progress, lang:
     let failed = matches!(progress, Progress::Failed(_));
     let current = match progress {
         Progress::Resolving
+        | Progress::WaitingForNetwork
         | Progress::Cancelling
         | Progress::DownloadingData { .. }
         | Progress::Downloading { .. } => 1,
@@ -1818,6 +1827,9 @@ fn left_column(
     }
     version_info_block(ui, lang, installed, entry, state);
     ui.add_space(10.0);
+}
+
+fn about_block(ui: &mut egui::Ui, lang: Language, entry: &crate::data::AppEntry) {
     section_label(ui, lang.about_app());
     let body = if entry.long_description.trim().is_empty() {
         &entry.description
@@ -1865,6 +1877,11 @@ fn right_column(
         ui.add_space(14.0);
     }
     requirements_block(ui, lang, entry, state, apps, dep_job, detail_focus, commands);
+    // Without screenshots this column would sit mostly empty, so the description fills it.
+    if entry.screenshot_urls.is_empty() {
+        ui.add_space(14.0);
+        about_block(ui, lang, entry);
+    }
 }
 
 fn requirements_block(
@@ -2183,6 +2200,45 @@ mod tests {
         assert!(footer_texts.contains(&lang.uninstall_btn()), "expected uninstall hint in footer: {footer_texts:?}");
         assert!(footer_texts.contains(&lang.cancel_btn()), "expected cancel hint in footer: {footer_texts:?}");
         assert!(!footer_texts.contains(&lang.btn_back()), "background back hint should be hidden: {footer_texts:?}");
+    }
+
+    #[tokio::test]
+    async fn a_finger_drag_scrolls_the_page() {
+        let ctx = egui::Context::default();
+        super::apply_theme(&ctx);
+        let icons = super::IconCache::new();
+        let installed = super::InstalledIndex::default();
+        let mut entry = crate::app::sort_tests::entry("demo", "vitadb", 0, 1024, 0.0, "");
+        entry.long_description = "line\n".repeat(80);
+        let at = |y| egui::pos2(200.0, y);
+        let button = |y, pressed| egui::Event::PointerButton { pos: at(y), button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+        let frames = [
+            vec![], vec![],
+            vec![egui::Event::PointerMoved(at(400.0)), button(400.0, true)],
+            vec![egui::Event::PointerMoved(at(300.0))],
+            vec![egui::Event::PointerMoved(at(200.0))],
+        ];
+        let mut offset = 0.0;
+        for (i, events) in frames.into_iter().enumerate() {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(960.0, 544.0))),
+                time: Some(i as f64 * 0.016),
+                events,
+                ..Default::default()
+            };
+            let _ = ctx.run(input, |ctx| {
+                for command in super::detail_screen(
+                    ctx, &icons, &installed, super::Language::English, &entry, None, false, false, offset, &[], true, None,
+                    false, None, false, 0, crate::input::DataStep::Choice, false, None, &[], None,
+                    super::DetailFocus::Primary, false, None, 0, None, false,
+                ) {
+                    if let crate::input::AppCommand::SetDetailScroll(y) = command {
+                        offset = y;
+                    }
+                }
+            });
+        }
+        assert!(offset > 100.0, "drag was snapped back: {offset}");
     }
 
     #[tokio::test]

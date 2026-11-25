@@ -228,6 +228,7 @@ progress-files = file
 progress-preparing-extract = Preparazione dell'estrazione…
 progress-installing = Installazione
 progress-elapsed = trascorsi
+progress-waiting-network = In attesa della rete
 progress-queued = In coda — controlla le notifiche
 progress-done = Installato
 progress-reboot = Installato — riavvia la Vita per attivarlo

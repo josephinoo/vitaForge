@@ -228,6 +228,7 @@ progress-files = fichiers
 progress-preparing-extract = Préparation de l'extraction…
 progress-installing = Installation
 progress-elapsed = écoulé
+progress-waiting-network = En attente du réseau
 progress-queued = En file d'attente — voir les notifications
 progress-done = Installé
 progress-reboot = Installé — redémarrez la Vita pour l'activer

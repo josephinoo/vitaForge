@@ -21,6 +21,7 @@ pub(super) fn tile_art_url(app: &AppEntry) -> Option<&str> {
 
 const MAX_PRECACHE_PER_LAUNCH: usize = 150;
 const CATALOG_REFRESH_EVERY: std::time::Duration = std::time::Duration::from_secs(600);
+const CATALOG_RETRY_EMPTY_EVERY: std::time::Duration = std::time::Duration::from_secs(15);
 fn precache_art_urls(apps: &[AppEntry]) -> Vec<String> {
     apps.iter()
         .filter_map(tile_art_url)
@@ -1523,6 +1524,7 @@ impl App {
             }
             ctx.request_repaint();
         }
+        self.sync_account_rows();
         if self.verifier_status.is_none()
             && self.verifier_rx.is_none()
             && crate::data::auth::is_logged_in()
@@ -1616,10 +1618,15 @@ impl App {
                 if matches!(self.state, AppState::Loading) && !self.install_busy() {
                     let apps = data::api::load_cached_catalog_sync().unwrap_or_default();
                     eprintln!("live catalog fetch failed; fallback to {} cached entries", apps.len());
+                    if apps.is_empty() {
+                        self.refresh_due_at = std::time::Instant::now() + CATALOG_RETRY_EMPTY_EVERY;
+                    }
                     let catalog = CatalogState::new(apps);
                     self.installed.force_refresh(ctx, &catalog.apps);
                     self.state = AppState::Catalog(catalog);
                     ctx.request_repaint();
+                } else if matches!(&self.state, AppState::Catalog(c) if c.apps.is_empty()) {
+                    self.refresh_due_at = std::time::Instant::now() + CATALOG_RETRY_EMPTY_EVERY;
                 }
             }
             Err(oneshot::error::TryRecvError::Empty) => {
@@ -1643,6 +1650,14 @@ impl App {
             Err(oneshot::error::TryRecvError::Closed) => self.load_rx = None,
         }
         Ok(())
+    }
+    fn sync_account_rows(&mut self) {
+        let can_verify = matches!(self.verifier_status.as_deref(), Some("not_applied" | "rejected" | "unavailable"));
+        let rows = ui::settings::account_rows(crate::data::auth::current().is_some(), self.auth_form.is_register, can_verify);
+        if let AppState::Settings { nav, .. } = &mut self.state {
+            nav.account = rows;
+            nav.row = nav.row.min(nav.rows().len().saturating_sub(1));
+        }
     }
     /// ✕ inside Settings: enter the rows, open a choice list, or run the row.
     fn settings_confirm(&mut self) -> Result<()> {
@@ -2324,6 +2339,7 @@ impl App {
     }
 
     pub fn handle_command(&mut self, command: AppCommand) -> Result<()> {
+        self.sync_account_rows();
         if self.self_update_prompt {
             match command {
                 AppCommand::Input(InputCommand::Confirm) | AppCommand::SelfUpdate => {
@@ -3132,7 +3148,9 @@ impl App {
                     } => {
                         // Only move to things that are actually on screen.
                         let has_shots = !app.screenshot_urls.is_empty();
-                        let has_dep = crate::install::requirements::cached_missing_dependency(&app.id, &previous.apps).is_some();
+                        // The "Get" button is only drawn for an installed app.
+                        let has_dep = self.installed.state(app) != crate::install::installed::InstallState::Absent
+                            && crate::install::requirements::cached_missing_dependency(&app.id, &previous.apps).is_some();
                         let has_social = app.platform != data::Platform::Theme && app.source_catalog != "roms";
                         let side = if has_shots {
                             Some(DetailFocus::Screenshots)

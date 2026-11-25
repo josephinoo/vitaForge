@@ -99,6 +99,18 @@ pub struct SettingsNav {
     pub list_len: usize,
     /// □ in the plugin list: ↑/↓ carry the focused line instead of moving focus.
     pub moving: bool,
+    /// The Account rows actually on screen; the d-pad must never land on a hidden one.
+    pub account: &'static [Row],
+}
+
+pub fn account_rows(logged_in: bool, register: bool, can_verify: bool) -> &'static [Row] {
+    use Row::*;
+    match (logged_in, register, can_verify) {
+        (true, _, true) => &[AccountLogout, AccountVerifier],
+        (true, _, false) => &[AccountLogout],
+        (false, true, _) => &[AccountUsername, AccountPassword, AccountEmail, AccountSubmit, AccountToggleMode],
+        (false, false, _) => &[AccountUsername, AccountPassword, AccountSubmit, AccountToggleMode],
+    }
 }
 
 impl SettingsNav {
@@ -106,17 +118,21 @@ impl SettingsNav {
         Self {
             section: 0,
             row: 0,
-            rail: false,
+            rail: true,
             sub: None,
             sub_index: 0,
             theme_before: active_theme(),
             list_len: 0,
             moving: false,
+            account: account_rows(false, false, false),
         }
     }
 
     pub fn rows(&self) -> &'static [Row] {
-        SECTIONS[self.section].1
+        match SECTIONS[self.section] {
+            (Section::Account, _) => self.account,
+            (_, rows) => rows,
+        }
     }
 
     pub fn current_row(&self) -> Option<Row> {
@@ -606,7 +622,7 @@ fn account_section(ui: &mut egui::Ui, view: &SettingsView, commands: &mut Vec<Ap
         ui.add_space(12.0);
 
         // Red bordered "Log out" button
-        let focused = !nav.rail && nav.row == 6; // Logout row index
+        let focused = nav.current_row() == Some(Row::AccountLogout);
         let logout_height = 54.0;
         let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), logout_height), egui::Sense::click());
         let bg_fill = if response.hovered() {
@@ -671,7 +687,7 @@ fn account_section(ui: &mut egui::Ui, view: &SettingsView, commands: &mut Vec<Ap
         ui.add_space(4.0);
 
         // Row 1: Username
-        let focused_u = !nav.rail && nav.row == 1;
+        let focused_u = nav.current_row() == Some(Row::AccountUsername);
         let u_val = if form.username.is_empty() { lang.tr("auth-tap-to-enter") } else { form.username.clone() };
         if auth_input_row(ui, ChromeIcon::User, &lang.tr("auth-username"), &lang.tr("auth-username-hint"), &u_val, focused_u) {
             commands.push(AppCommand::RequestAuthInput(crate::input::TextTarget::AuthUsername));
@@ -680,7 +696,7 @@ fn account_section(ui: &mut egui::Ui, view: &SettingsView, commands: &mut Vec<Ap
         ui.add_space(2.0);
 
         // Row 2: Password
-        let focused_p = !nav.rail && nav.row == 2;
+        let focused_p = nav.current_row() == Some(Row::AccountPassword);
         let p_val = if form.password.is_empty() {
             lang.tr("auth-tap-to-enter")
         } else {
@@ -693,7 +709,7 @@ fn account_section(ui: &mut egui::Ui, view: &SettingsView, commands: &mut Vec<Ap
         // Row 3: Email (only if register)
         if is_reg {
             ui.add_space(2.0);
-            let focused_e = !nav.rail && nav.row == 3;
+            let focused_e = nav.current_row() == Some(Row::AccountEmail);
             let e_val = if form.email.is_empty() { lang.tr("auth-optional") } else { form.email.clone() };
             if auth_input_row(ui, ChromeIcon::Info, &lang.tr("auth-email"), &lang.tr("auth-email-hint"), &e_val, focused_e) {
                 commands.push(AppCommand::RequestAuthInput(crate::input::TextTarget::AuthEmail));
@@ -703,7 +719,7 @@ fn account_section(ui: &mut egui::Ui, view: &SettingsView, commands: &mut Vec<Ap
         ui.add_space(6.0);
 
         // Row 4: Submit action (blue full-width button)
-        let focused_s = !nav.rail && nav.row == 4;
+        let focused_s = nav.current_row() == Some(Row::AccountSubmit);
         let submit_title = if view.auth_busy {
             lang.tr("auth-connecting")
         } else if is_reg {
@@ -718,7 +734,7 @@ fn account_section(ui: &mut egui::Ui, view: &SettingsView, commands: &mut Vec<Ap
         ui.add_space(6.0);
 
         // Row 5: Toggle login / register (footer link)
-        let focused_t = !nav.rail && nav.row == 5;
+        let focused_t = nav.current_row() == Some(Row::AccountToggleMode);
         let toggle_title = if is_reg {
             lang.tr("auth-switch-to-login")
         } else {
@@ -752,7 +768,7 @@ fn verifier_card(ui: &mut egui::Ui, view: &SettingsView, commands: &mut Vec<AppC
     });
     if matches!(status, Some("not_applied" | "rejected" | "unavailable")) {
         ui.add_space(8.0);
-        let focused = !view.nav.rail && view.nav.row == 7; // AccountVerifier row index
+        let focused = view.nav.current_row() == Some(Row::AccountVerifier);
         if auth_button_row(ui, &lang.tr("verifier-apply"), Some(ChromeIcon::Check), false, focused) {
             commands.push(AppCommand::VerifierApply);
         }
@@ -1526,6 +1542,17 @@ mod tests {
             assert!(rect.top() >= clip.top() - 1.0 && rect.bottom() <= clip.bottom() + 1.0,
                 "row {index} not visible: row {rect:?} clip {clip:?}");
         }
+    }
+
+    #[test]
+    fn account_focus_only_visits_visible_rows() {
+        let mut nav = SettingsNav::new();
+        assert!(nav.rail, "opening settings must not arm a row");
+        nav.rail = false;
+        nav.account = account_rows(true, false, false);
+        assert_eq!(nav.current_row(), Some(Row::AccountLogout));
+        assert_eq!(account_rows(false, false, false).len(), 4);
+        assert!(!account_rows(false, false, false).contains(&Row::AccountEmail));
     }
 
     #[test]

@@ -582,6 +582,9 @@ async fn fetch_snapshot(remote_ver: CatalogVersionInfo) -> anyhow::Result<Vec<Ap
         remote_ver.version
     );
     let entries = download_snapshot().await?;
+    if entries.is_empty() {
+        anyhow::bail!("catalog snapshot returned 0 entries");
+    }
     tokio::task::spawn_blocking(move || {
         save_cached_catalog_blocking(&entries, remote_ver);
         entries
@@ -608,7 +611,20 @@ pub async fn fetch_catalog() -> anyhow::Result<Vec<AppEntry>> {
             );
             Ok(drop_unavailable_platforms(entries))
         }
-        (_, Ok(remote_ver)) => fetch_snapshot(remote_ver).await,
+        (cached, Ok(remote_ver)) => match fetch_snapshot(remote_ver).await {
+            Ok(entries) => Ok(entries),
+            Err(err) => match cached {
+                Some((entries, local_ver)) if catalog_cache_complete(&entries) => {
+                    eprintln!(
+                        "Catalog snapshot failed ({err:#}). Falling back to cached catalog (version: {}, {} entries).",
+                        local_ver.version,
+                        entries.len()
+                    );
+                    Ok(drop_unavailable_platforms(entries))
+                }
+                _ => Err(err),
+            },
+        },
         (Some((entries, local_ver)), Err(err)) if catalog_cache_complete(&entries) => {
             eprintln!(
                 "Network offline/error ({err:#}). Using offline cached catalog (version: {}, {} entries).",

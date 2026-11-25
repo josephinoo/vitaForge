@@ -290,7 +290,7 @@ fn filter_picker_modal(
                             let focused = row == picker.cursor;
                             if focused {
                                 ui.painter().rect_filled(rect, RADIUS_SM, pal().primary);
-                                response.scroll_to_me(None);
+                                crate::app::ui::widgets::scroll_on_focus_arrival(ui, &response);
                             }
                             ui.painter().text(
                                 rect.left_center() + egui::vec2(12.0, 0.0),

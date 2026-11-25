@@ -74,7 +74,7 @@ pub(crate) fn roms_view(
                                         focused,
                                     );
                                     if focused {
-                                        response.scroll_to_me(None);
+                                        crate::app::ui::widgets::scroll_on_focus_arrival(ui, &response);
                                     }
                                     if response.clicked() && !active {
                                         commands.push(AppCommand::RomsSelectConsole(code.to_owned()));

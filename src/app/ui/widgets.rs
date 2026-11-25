@@ -726,7 +726,7 @@ pub(crate) fn tappable_stars(ui: &mut egui::Ui, current: Option<u8>, focused_sta
                     egui::Stroke::new(FOCUS_STROKE, pal().focus),
                     egui::StrokeKind::Outside,
                 );
-                response.scroll_to_me(None);
+                scroll_on_focus_arrival(ui, &response);
             }
             if response.clicked() {
                 chosen = Some(star);
@@ -842,6 +842,20 @@ pub(crate) fn radio_row(ui: &mut egui::Ui, name: &str, trailing: Option<&str>, c
     response.clicked()
 }
 
+/// `scroll_to_me` only on the frame focus arrives: repeating it every frame undoes finger drags.
+pub(crate) fn scroll_on_focus_arrival(ui: &egui::Ui, response: &egui::Response) {
+    let key = response.id.with("focus_pass");
+    let pass = ui.ctx().cumulative_pass_nr();
+    let previous = ui.ctx().data_mut(|d| {
+        let previous = d.get_temp::<u64>(key);
+        d.insert_temp(key, pass);
+        previous
+    });
+    if previous.is_none_or(|p| p + 1 < pass) {
+        response.scroll_to_me(None);
+    }
+}
+
 fn scroll_radio_on_focus_change(ui: &egui::Ui, response: &egui::Response) {
     let key = egui::Id::new("radio_last_focus");
     let changed = ui.ctx().data_mut(|d| {
@@ -851,5 +865,38 @@ fn scroll_radio_on_focus_change(ui: &egui::Ui, response: &egui::Response) {
     });
     if changed {
         response.scroll_to_me(None);
+    }
+}
+
+#[cfg(test)]
+mod focus_scroll_tests {
+    #[test]
+    fn a_drag_survives_a_focused_row() {
+        let ctx = egui::Context::default();
+        let at = |y| egui::pos2(100.0, y);
+        let down = egui::Event::PointerButton { pos: at(150.0), button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() };
+        let frames = [vec![], vec![], vec![], vec![egui::Event::PointerMoved(at(150.0)), down], vec![egui::Event::PointerMoved(at(80.0))], vec![egui::Event::PointerMoved(at(20.0))]];
+        let mut offset = 0.0;
+        for (i, events) in frames.into_iter().enumerate() {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(200.0, 200.0))),
+                time: Some(i as f64 * 0.016),
+                events,
+                ..Default::default()
+            };
+            let _ = ctx.run(input, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    offset = egui::ScrollArea::vertical().show(ui, |ui| {
+                        for row in 0..30 {
+                            let (_, response) = ui.allocate_exact_size(egui::vec2(180.0, 30.0), egui::Sense::click());
+                            if row == 0 {
+                                super::scroll_on_focus_arrival(ui, &response);
+                            }
+                        }
+                    }).state.offset.y;
+                });
+            });
+        }
+        assert!(offset > 50.0, "drag was snapped back: {offset}");
     }
 }

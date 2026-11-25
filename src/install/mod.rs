@@ -41,6 +41,8 @@ const PLUGIN_DIR: &str = "ux0:data/vitaforge/plugins";
 #[derive(Clone, Debug, PartialEq)]
 pub enum Progress {
     Resolving,
+    /// Wi-Fi dropped mid-transfer; resumes by itself.
+    WaitingForNetwork,
     DownloadingData {
         received: u64,
         total: Option<u64>,
@@ -106,6 +108,7 @@ impl Progress {
         let text = |id: &str| lang.tr(id);
         match self {
             Self::Resolving => text("progress-resolving"),
+            Self::WaitingForNetwork => text("progress-waiting-network"),
             Self::Downloading { received, total, elapsed_secs }
             | Self::DownloadingData { received, total, elapsed_secs } => {
                 let phase = if matches!(self, Self::DownloadingData { .. }) {
@@ -260,8 +263,13 @@ fn check_cancelled(cancel: &AtomicBool) -> Result<()> {
     }
     Ok(())
 }
+/// Game data is a zip that sits on the card next to its extracted files, hence 2.25x plus slack.
 fn required_bytes(size_bytes: u64, data_size_bytes: u64) -> u64 {
-    size_bytes.saturating_add(data_size_bytes).saturating_mul(2)
+    let data = match data_size_bytes {
+        0 => 0,
+        n => n.saturating_mul(2).saturating_add(n / 4).saturating_add(64 * 1024 * 1024),
+    };
+    size_bytes.saturating_mul(2).saturating_add(data)
 }
 fn shortfall(size_bytes: u64, data_size_bytes: u64, storage: Option<(u64, u64)>) -> Option<(u64, u64)> {
     let required = required_bytes(size_bytes, data_size_bytes);
@@ -289,6 +297,10 @@ fn check_free_space(
     data_size_bytes: u64,
     storage: Option<(u64, u64)>,
 ) -> Result<()> {
+    // A failed card query must not start an install that may run out halfway.
+    if storage.is_none() && cfg!(target_os = "vita") {
+        bail!("couldn't check the free space on the memory card, please try again");
+    }
     if let Some((required, available)) = shortfall(size_bytes, data_size_bytes, storage) {
         bail!(
             "not enough free space: {} required, {} available",
@@ -488,6 +500,7 @@ pub fn start(entry: AppEntry) -> (watch::Receiver<Progress>, Arc<AtomicBool>) {
                 let mid_download = matches!(
                     last,
                     Progress::Resolving
+                        | Progress::WaitingForNetwork
                         | Progress::Downloading { .. }
                         | Progress::DownloadingData { .. }
                 );
@@ -1992,7 +2005,8 @@ mod tests {
     }
     #[test]
     fn required_space_accounts_for_download_and_extraction() {
-        assert_eq!(required_bytes(100, 50), 300);
+        assert_eq!(required_bytes(100, 0), 200);
+        assert_eq!(required_bytes(100, 400), 200 + 900 + 64 * 1024 * 1024);
         assert_eq!(required_bytes(0, 0), 0);
         assert_eq!(required_bytes(u64::MAX, 1), u64::MAX);
     }
@@ -2003,8 +2017,8 @@ mod tests {
     }
     #[test]
     fn compares_required_space_with_available_space() {
-        assert!(check_free_space(100, 50, Some((700, 1_000))).is_ok());
-        let error = check_free_space(100, 50, Some((701, 1_000))).unwrap_err();
+        assert!(check_free_space(150, 0, Some((700, 1_000))).is_ok());
+        let error = check_free_space(150, 0, Some((701, 1_000))).unwrap_err();
         assert_eq!(
             error.to_string(),
             "not enough free space: 300 B required, 299 B available"
