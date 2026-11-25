@@ -192,9 +192,6 @@ impl InstalledIndex {
             counts: Arc::new(Mutex::new(counts)),
         }
     }
-    pub fn summary(&self) -> String {
-        self.summary.lock().unwrap().clone()
-    }
     pub fn counts(&self) -> (usize, usize) {
         *self.counts.lock().unwrap()
     }

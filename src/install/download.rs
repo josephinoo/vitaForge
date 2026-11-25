@@ -243,6 +243,7 @@ async fn fetch_range_part(
             writer.flush()?;
             return Ok(());
         }
+        wait_for_network(tx, cancel, crate::net::is_online).await?;
         let resp = match crate::net::client()
             .get(url)
             .header("Range", format!("bytes={pos}-{end}"))
@@ -313,7 +314,9 @@ fn archive_parts(url: &str) -> Option<(String, String)> {
         .strip_prefix("https://archive.org/download/")
         .or_else(|| url.strip_prefix("http://archive.org/download/"))?;
     let (id, file) = rest.split_once('/')?;
-    (!id.is_empty() && !file.is_empty()).then(|| (id.to_owned(), file.to_owned()))
+    // "pack.zip/game.nds" is unzipped on the fly by archive.org: no node, md5 or Range for it.
+    let inside_zip = file.to_ascii_lowercase().contains(".zip/");
+    (!id.is_empty() && !file.is_empty() && !inside_zip).then(|| (id.to_owned(), file.to_owned()))
 }
 
 /// archive.org's redirect picks one storage node, often a slow one; its mirrors
@@ -530,7 +533,6 @@ pub struct HashingReader<R> {
 }
 struct Md5Worker {
     tx: std::sync::mpsc::SyncSender<Vec<u8>>,
-    tx_free: std::sync::mpsc::SyncSender<Vec<u8>>,
     rx_free: std::sync::mpsc::Receiver<Vec<u8>>,
     handle: std::thread::JoinHandle<String>,
 }
@@ -543,7 +545,6 @@ impl Md5Worker {
         for _ in 0..SLOTS {
             let _ = tx_free.send(vec![0u8; BUF_SIZE]);
         }
-        let tx_recycle = tx_free.clone();
         let handle = std::thread::spawn(move || {
             use md5::Digest;
             let mut hasher = md5::Md5::new();
@@ -551,12 +552,12 @@ impl Md5Worker {
                 hasher.update(&chunk);
                 if chunk.capacity() >= BUF_SIZE {
                     chunk.clear();
-                    let _ = tx_recycle.try_send(chunk);
+                    let _ = tx_free.try_send(chunk);
                 }
             }
             format!("{:x}", hasher.finalize())
         });
-        Self { tx, tx_free, rx_free, handle }
+        Self { tx, rx_free, handle }
     }
     fn update(&self, data: &[u8]) {
         let mut buf = self.rx_free.try_recv().unwrap_or_default();
@@ -658,6 +659,20 @@ async fn resolve_vitadb(url: &str) -> Option<String> {
     (link.starts_with("http://") || link.starts_with("https://")).then(|| link.to_owned())
 }
 
+/// Ends a network wait as soon as ○ is confirmed: connect, probe and backoff
+/// never look at the flag themselves. Only wrap futures with no blocking worker.
+pub async fn or_cancelled<T>(cancel: &AtomicBool, work: impl std::future::Future<Output = Result<T>>) -> Result<T> {
+    let watch = async {
+        while !cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    };
+    match futures_util::future::select(std::pin::pin!(work), std::pin::pin!(watch)).await {
+        futures_util::future::Either::Left((result, _)) => result,
+        futures_util::future::Either::Right(_) => Err(anyhow::anyhow!(crate::install::CANCELLED_MESSAGE)),
+    }
+}
+
 pub async fn fetch_file(
     url: &str,
     dest: &Path,
@@ -665,9 +680,9 @@ pub async fn fetch_file(
     make: fn(u64, Option<u64>, u32) -> crate::install::Progress,
     cancel: &AtomicBool,
 ) -> Result<()> {
-    let resolved = resolve_vitadb(url).await;
+    let resolved = or_cancelled(cancel, async { Ok(resolve_vitadb(url).await) }).await?;
     let url = resolved.as_deref().unwrap_or(url);
-    let Some((node_url, md5)) = fastest_archive_node(url).await else {
+    let Some((node_url, md5)) = or_cancelled(cancel, async { Ok(fastest_archive_node(url).await) }).await? else {
         return fetch_file_from(url, dest, tx, make, cancel, true).await;
     };
     fetch_file_from(&node_url, dest, tx, make, cancel, true).await?;
@@ -714,7 +729,7 @@ pub async fn fetch_parts(
     make: fn(u64, Option<u64>, u32) -> crate::install::Progress,
     cancel: &AtomicBool,
 ) -> Result<Option<String>> {
-    let Some((node_url, md5)) = fastest_archive_node(url).await else {
+    let Some((node_url, md5)) = or_cancelled(cancel, async { Ok(fastest_archive_node(url).await) }).await? else {
         fetch_file_from(url, dest, tx, make, cancel, false).await?;
         return Ok(None);
     };
@@ -730,7 +745,8 @@ async fn fetch_file_from(
     cancel: &AtomicBool,
     join: bool,
 ) -> Result<()> {
-    let probe = probe_parallel(url).await;
+    wait_for_network(tx, cancel, crate::net::is_online).await?;
+    let probe = or_cancelled(cancel, async { Ok(probe_parallel(url).await) }).await?;
     if probe.is_none() {
         crate::install::log_file("parallel: range probe failed, using one connection");
     }
@@ -790,7 +806,7 @@ async fn fetch_file_from(
             )
         });
         // Parts are kept on error so the next try resumes each one.
-        futures_util::future::try_join_all(futs).await?;
+        or_cancelled(cancel, futures_util::future::try_join_all(futs)).await?;
         if !join {
             crate::install::log_file("parallel: all parts done");
             let elapsed = eta_elapsed(started_at.elapsed().as_secs_f64(), probe.total, base);
@@ -815,7 +831,35 @@ async fn fetch_file_from(
     remove_parts(dest);
     let mut sink = FileSink::open(dest)?;
     let mut reporter = ProgressReporter::new(tx, make);
-    fetch_to(url, &mut sink, &mut reporter, cancel).await
+    or_cancelled(cancel, fetch_to(url, &mut sink, &mut reporter, cancel)).await
+}
+
+const NETWORK_WAIT: Duration = Duration::from_secs(600);
+
+/// Holds a transfer while the Wi-Fi is down so the outage doesn't burn retries.
+/// Callers can cancel: every use sits inside a cancellable wait or checks the flag next.
+async fn wait_for_network(
+    tx: &watch::Sender<crate::install::Progress>,
+    cancel: &AtomicBool,
+    online: impl Fn() -> bool,
+) -> Result<()> {
+    if online() {
+        return Ok(());
+    }
+    crate::install::log_file("network down, download paused");
+    let since = Instant::now();
+    while !online() {
+        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            bail!(crate::install::CANCELLED_MESSAGE);
+        }
+        if since.elapsed() >= NETWORK_WAIT {
+            bail!("no network connection; the download is kept, retry once reconnected");
+        }
+        let _ = tx.send(crate::install::Progress::WaitingForNetwork);
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    crate::install::log_file("network back, resuming");
+    Ok(())
 }
 
 pub async fn fetch_to(
@@ -835,6 +879,7 @@ pub async fn fetch_to(
             tokio::time::sleep(backoff).await;
             eprintln!("retrying download (attempt {}): {url}", attempt + 1);
         }
+        wait_for_network(rep.tx, cancel, crate::net::is_online).await?;
         let start = sink.resume_offset();
         let mut request = crate::net::client().get(url);
         if start > 0 {
@@ -913,6 +958,13 @@ pub async fn fetch_to(
 }
 #[cfg(test)]
 mod vitadb_tests {
+    #[tokio::test]
+    async fn cancel_ends_a_hung_wait() {
+        let cancel = std::sync::atomic::AtomicBool::new(true);
+        let err = super::or_cancelled(&cancel, std::future::pending::<anyhow::Result<()>>()).await.unwrap_err();
+        assert_eq!(err.to_string(), crate::install::CANCELLED_MESSAGE);
+    }
+
     #[test]
     fn only_vitadb_redirector_links_are_resolved() {
         assert!(super::is_vitadb_link("https://www.rinnegatamante.eu/vitadb/get_hb_url.php?id=245"));
@@ -922,6 +974,16 @@ mod vitadb_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn offline_pauses_until_the_link_returns() {
+        let (tx, rx) = watch::channel(crate::install::Progress::Resolving);
+        let cancel = AtomicBool::new(false);
+        let checks = std::cell::Cell::new(0);
+        wait_for_network(&tx, &cancel, || { checks.set(checks.get() + 1); checks.get() > 2 }).await.unwrap();
+        assert_eq!(*rx.borrow(), crate::install::Progress::WaitingForNetwork);
+        cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        assert!(wait_for_network(&tx, &cancel, || false).await.is_err());
+    }
     #[test]
     fn join_parts_appends_in_order_and_cleans_up() {
         let dest = std::env::temp_dir().join(format!("vf_join_{}", std::process::id()));
@@ -950,6 +1012,7 @@ mod tests {
     }
     #[test]
     fn archive_parts_splits_id_and_encoded_file() {
+        assert_eq!(super::archive_parts("https://archive.org/download/pack/a.zip/a.nds"), None);
         assert_eq!(
             archive_parts("https://archive.org/download/mkwiita/Game%20Files.zip"),
             Some(("mkwiita".into(), "Game%20Files.zip".into()))

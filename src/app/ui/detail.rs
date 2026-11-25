@@ -33,6 +33,7 @@ pub(crate) fn detail_screen(
     apps: &[crate::data::AppEntry],
     dep_job: Option<(&str, &crate::install::Progress)>,
     detail_focus: DetailFocus,
+    verified_tab: bool,
     report_modal: Option<usize>,
     report_choice: usize,
     verify_modal: Option<&crate::app::VerifyDraft>,
@@ -81,6 +82,21 @@ pub(crate) fn detail_screen(
             &hints,
             Some(status_note(installed, icons)),
         ));
+    } else if uninstall_prompt {
+        let hints = [
+            (Glyph::Cross, lang.uninstall_btn()),
+            (Glyph::Circle, lang.cancel_btn()),
+        ];
+        commands.extend(button_hints(ctx, lang, &hints, None));
+    } else if data_prompt || report_modal.is_some() || verify_modal.is_some() {
+        let hints = [
+            (Glyph::Cross, lang.btn_choose()),
+            (Glyph::Circle, lang.cancel_btn()),
+        ];
+        commands.extend(button_hints(ctx, lang, &hints, None));
+    } else if lightbox.is_some() {
+        let hints = [(Glyph::Circle, lang.btn_back())];
+        commands.extend(button_hints(ctx, lang, &hints, None));
     } else {
         let mut hints = vec![(Glyph::Circle, lang.btn_back())];
         match detail_focus {
@@ -92,6 +108,17 @@ pub(crate) fn detail_screen(
             }
             DetailFocus::Requirements => {
                 hints.push((Glyph::Cross, lang.get_btn()));
+            }
+            DetailFocus::Like
+            | DetailFocus::Report
+            | DetailFocus::Comment
+            | DetailFocus::Verify
+            | DetailFocus::Rating(_)
+            | DetailFocus::CommentTab => {
+                hints.push((Glyph::Cross, lang.btn_choose()));
+            }
+            DetailFocus::CommentReply(_) => {
+                hints.push((Glyph::Cross, lang.reply_comment()));
             }
             DetailFocus::Primary => {
                 hints.push((Glyph::Cross, action_label(lang, primary)));
@@ -153,11 +180,11 @@ pub(crate) fn detail_screen(
                             );
                             ui.add_space(18.0);
                             ui.horizontal(|ui| {
-                                if pill_button(ui, lang.uninstall_btn(), true) {
+                                if prompt_chip(ui, Glyph::Cross, lang.uninstall_btn(), true) {
                                     commands.push(AppCommand::ConfirmUninstall);
                                 }
                                 ui.add_space(10.0);
-                                if pill_button(ui, lang.cancel_btn(), false) {
+                                if prompt_chip(ui, Glyph::Circle, lang.cancel_btn(), false) {
                                     commands.push(AppCommand::CancelUninstall);
                                 }
                             });
@@ -320,6 +347,10 @@ pub(crate) fn detail_screen(
                         );
                     });
                     ui.add_space(20.0);
+                    // With screenshots, full width: no blank column beside a long description.
+                    if !entry.screenshot_urls.is_empty() {
+                        about_block(ui, lang, entry);
+                    }
                     if !entry.changelog.trim().is_empty() {
                         ui.add_space(16.0);
                         egui::Frame::NONE
@@ -384,17 +415,24 @@ pub(crate) fn detail_screen(
                     ui.add_space(22.0);
                     section_label(ui, lang.community());
                     ui.add_space(8.0);
-                    ui.horizontal(|ui| {
+                    let focused_star = match detail_focus {
+                        DetailFocus::Rating(star) => Some(star),
+                        _ => None,
+                    };
+                    let rating = ui.horizontal(|ui| {
                         ui.label(
                             egui::RichText::new(lang.your_rating())
                                 .size(FONT_BODY)
                                 .color(pal().text_dim),
                         );
                         ui.add_space(8.0);
-                        if let Some(score) = tappable_stars(ui, entry.user_rating) {
+                        if let Some(score) = tappable_stars(ui, entry.user_rating, focused_star) {
                             commands.push(AppCommand::RateCurrent(score));
                         }
                     });
+                    // Scroll offset from which the rating row is fully on screen.
+                    let rating_at = (rating.response.rect.bottom() - ui.min_rect().top() + 8.0 - scroll_h).max(0.0);
+                    commands.push(AppCommand::SetDetailRatingAt(rating_at));
                     info_row(ui, lang.ratings_count(), &entry.ratings_count.to_string());
                     ui.add_space(16.0);
                     ui.horizontal(|ui| {
@@ -426,18 +464,23 @@ pub(crate) fn detail_screen(
                         });
                     });
                     ui.add_space(8.0);
-                    // Tab state is UI-local: Community first, resets with the egui memory.
-                    let tab_id = egui::Id::new("comment_tab_verified");
-                    let mut verified_tab: bool = ui.data(|d| d.get_temp(tab_id)).unwrap_or(false);
-                    ui.horizontal(|ui| {
+                    let tab_resp = ui.horizontal(|ui| {
                         if pill_button(ui, lang.tab_community(), !verified_tab) {
-                            verified_tab = false;
+                            commands.push(AppCommand::SetCommentTab(false));
                         }
                         if pill_button(ui, lang.tab_verified(), verified_tab) {
-                            verified_tab = true;
+                            commands.push(AppCommand::SetCommentTab(true));
                         }
                     });
-                    ui.data_mut(|d| d.insert_temp(tab_id, verified_tab));
+                    if detail_focus == DetailFocus::CommentTab {
+                        ui.painter().rect_stroke(
+                            tab_resp.response.rect.expand(3.0),
+                            RADIUS_MD,
+                            egui::Stroke::new(FOCUS_STROKE, pal().focus),
+                            egui::StrokeKind::Outside,
+                        );
+                        crate::app::ui::widgets::scroll_on_focus_arrival(ui, &tab_resp.response);
+                    }
                     ui.add_space(8.0);
                     if verified_tab {
                         egui::Frame::NONE
@@ -538,7 +581,15 @@ pub(crate) fn detail_screen(
                             egui::Color32::from_rgb(20, 184, 166),
                             egui::Color32::from_rgb(234, 179, 8),
                         ];
+                        let mut reply_idx = 0usize;
                         for (comment, is_reply) in rows {
+                            let this_reply_idx = if !is_reply && !comment.id.is_empty() {
+                                let i = reply_idx;
+                                reply_idx += 1;
+                                Some(i)
+                            } else {
+                                None
+                            };
                             let avatar = if is_reply { 30.0 } else { 36.0 };
                             let hue = AVATARS[comment.author_name.bytes().fold(0usize, |a, b| a.wrapping_add(b as usize)) % AVATARS.len()];
                             ui.horizontal_top(|ui| {
@@ -599,17 +650,23 @@ pub(crate) fn detail_screen(
                                             // Replies of replies are rejected by the server; an id-less comment is not posted yet.
                                             if !is_reply && !comment.id.is_empty() && !comment_entry_requested {
                                                 ui.add_space(4.0);
-                                                if ui
-                                                    .add(
-                                                        egui::Button::new(
-                                                            egui::RichText::new(lang.reply_comment()).size(FONT_SMALL).color(pal().accent_soft),
-                                                        )
-                                                        .fill(egui::Color32::TRANSPARENT)
-                                                        .stroke(egui::Stroke::new(1.0_f32, pal().accent_soft))
-                                                        .corner_radius(14.0),
+                                                let reply_focused = this_reply_idx
+                                                    .is_some_and(|i| detail_focus == DetailFocus::CommentReply(i));
+                                                let resp = ui.add(
+                                                    egui::Button::new(
+                                                        egui::RichText::new(lang.reply_comment()).size(FONT_SMALL).color(pal().accent_soft),
                                                     )
-                                                    .clicked()
-                                                {
+                                                    .fill(egui::Color32::TRANSPARENT)
+                                                    .stroke(egui::Stroke::new(
+                                                        if reply_focused { FOCUS_STROKE } else { 1.0_f32 },
+                                                        if reply_focused { pal().focus } else { pal().accent_soft },
+                                                    ))
+                                                    .corner_radius(14.0),
+                                                );
+                                                if reply_focused {
+                                                    crate::app::ui::widgets::scroll_on_focus_arrival(ui, &resp);
+                                                }
+                                                if resp.clicked() {
                                                     commands.push(AppCommand::RequestCommentReply(comment.id.clone()));
                                                 }
                                             }
@@ -621,9 +678,14 @@ pub(crate) fn detail_screen(
                     }
                     ui.add_space(20.0);
                 });
+            // A finger drag (or scroll-to-focus) moved the page: keep it, or the next frame snaps back.
+            if (scroll_output.state.offset.y - scroll_offset).abs() > 0.5 {
+                commands.push(AppCommand::SetDetailScroll(scroll_output.state.offset.y));
+            }
             // egui clamps what it draws; hand the real limit back so the stored offset cannot run past the content.
             let max_scroll = (scroll_output.content_size.y - scroll_output.inner_rect.height()).max(0.0);
             ui.ctx().data_mut(|d| d.insert_temp(max_id, max_scroll));
+            commands.push(AppCommand::SetDetailMaxScroll(max_scroll));
             if scroll_delta > max_scroll + 0.5 {
                 commands.push(AppCommand::SetDetailScroll(max_scroll));
             }
@@ -764,6 +826,7 @@ fn verify_field(ui: &mut egui::Ui, caption: &str, value: &str, focused: bool) ->
 /// Verifier modal: score typed as a whole number, installs/works toggles, optional comment.
 /// Rows match `App::handle_verify_modal`: 0 score, 1 note, 2 installs, 3 works, 4 cancel, 5 submit.
 fn verify_modal_ui(ctx: &egui::Context, lang: Language, draft: &crate::app::VerifyDraft, commands: &mut Vec<AppCommand>) {
+    paint_modal_scrim(ctx);
     egui::Area::new(egui::Id::new("verify_modal"))
         .order(egui::Order::Foreground)
         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
@@ -859,20 +922,6 @@ fn paint_modal_scrim(ctx: &egui::Context) {
         });
 }
 
-/// Installation owns its own surface.  Keeping progress here prevents the
-/// primary action from jumping between an action button and a progress bar.
-pub(crate) fn install_progress_modal(
-    ctx: &egui::Context,
-    lang: Language,
-    title: &str,
-    job: &crate::install::Progress,
-    cancellable: bool,
-    cancel_armed: bool,
-    commands: &mut Vec<AppCommand>,
-) {
-    install_progress_modal_opt(ctx, lang, title, job, cancellable, cancel_armed, false, commands);
-}
-
 pub(crate) fn install_progress_modal_opt(
     ctx: &egui::Context,
     lang: Language,
@@ -890,8 +939,11 @@ pub(crate) fn install_progress_modal_opt(
             .order(egui::Order::Middle)
             .show(ctx, |ui| {
                 let screen_rect = ctx.screen_rect();
-                ui.painter().rect_filled(screen_rect, 0.0, egui::Color32::from_rgb(0, 0, 0));
+                let (bg, _) = ui.allocate_exact_size(screen_rect.size(), egui::Sense::click());
+                ui.painter().rect_filled(bg, 0.0, egui::Color32::from_rgb(0, 0, 0));
             });
+    } else {
+        paint_modal_scrim(ctx);
     }
 
     egui::Area::new(egui::Id::new("install_progress_modal"))
@@ -943,7 +995,7 @@ pub(crate) fn install_progress_modal_opt(
                                 .color(pal().text),
                         );
                         ui.add_space(16.0);
-                        if !matches!(job, crate::install::Progress::Failed(_)) {
+                        if !matches!(job, crate::install::Progress::Failed(_) | crate::install::Progress::Cancelling) {
                             install_stepper(ui, job, lang);
                         }
                         ui.add_space(16.0);
@@ -994,6 +1046,8 @@ fn install_stepper(ui: &mut egui::Ui, progress: &crate::install::Progress, lang:
     let failed = matches!(progress, Progress::Failed(_));
     let current = match progress {
         Progress::Resolving
+        | Progress::WaitingForNetwork
+        | Progress::Cancelling
         | Progress::DownloadingData { .. }
         | Progress::Downloading { .. } => 1,
         Progress::Finishing { .. } => 2,
@@ -1675,25 +1729,47 @@ fn left_column(
                     }
                 });
                 ui.add_space(4.0);
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     rating_stars(ui, entry.rating);
                     ui.add_space(8.0);
-                    if like_button(ui, entry.user_liked, entry.likes_count) {
+                    let ring = |ui: &egui::Ui, rect: egui::Rect, on: bool| {
+                        if on {
+                            ui.painter().rect_stroke(
+                                rect.expand(2.0),
+                                RADIUS_XS,
+                                egui::Stroke::new(FOCUS_STROKE, pal().focus),
+                                egui::StrokeKind::Outside,
+                            );
+                        }
+                    };
+                    // like_button only reports clicks, so take its rect from the cursor.
+                    let like = ui.scope(|ui| like_button(ui, entry.user_liked, entry.likes_count));
+                    ring(ui, like.response.rect, detail_focus == DetailFocus::Like);
+                    if like.inner {
                         commands.push(AppCommand::ToggleLike);
                     }
                     ui.add_space(8.0);
-                    if ui
-                        .add(
-                            egui::Button::new(
-                                egui::RichText::new(lang.tr("bugreport-btn"))
-                                    .size(FONT_SMALL)
-                                    .color(pal().text_dim),
-                            )
-                            .frame(false),
-                        )
-                        .clicked()
-                    {
+                    let link = |ui: &mut egui::Ui, text: String| {
+                        ui.add(egui::Button::new(egui::RichText::new(text).size(FONT_SMALL).color(pal().text_dim)).frame(false))
+                    };
+                    let report = link(ui, lang.tr("bugreport-btn").to_string());
+                    ring(ui, report.rect, detail_focus == DetailFocus::Report);
+                    if report.clicked() {
                         commands.push(AppCommand::RequestReport);
+                    }
+                    ui.add_space(8.0);
+                    let comment = link(ui, lang.add_comment().to_string());
+                    ring(ui, comment.rect, detail_focus == DetailFocus::Comment);
+                    if comment.clicked() {
+                        commands.push(AppCommand::RequestCommentEntry);
+                    }
+                    if verification.is_some_and(|v| v.can_verify) {
+                        ui.add_space(8.0);
+                        let verify = link(ui, lang.verify_add().to_string());
+                        ring(ui, verify.rect, detail_focus == DetailFocus::Verify);
+                        if verify.clicked() {
+                            commands.push(AppCommand::OpenVerifyModal);
+                        }
                     }
                 });
                 if state != InstallState::Absent {
@@ -1754,6 +1830,9 @@ fn left_column(
     }
     version_info_block(ui, lang, installed, entry, state);
     ui.add_space(10.0);
+}
+
+fn about_block(ui: &mut egui::Ui, lang: Language, entry: &crate::data::AppEntry) {
     section_label(ui, lang.about_app());
     let body = if entry.long_description.trim().is_empty() {
         &entry.description
@@ -1801,6 +1880,11 @@ fn right_column(
         ui.add_space(14.0);
     }
     requirements_block(ui, lang, entry, state, apps, dep_job, detail_focus, commands);
+    // Without screenshots this column would sit mostly empty, so the description fills it.
+    if entry.screenshot_urls.is_empty() {
+        ui.add_space(14.0);
+        about_block(ui, lang, entry);
+    }
 }
 
 fn requirements_block(
@@ -2060,6 +2144,159 @@ mod tests {
                     step,
                     crate::app::Language::English,
                     &mut commands,
+                );
+            });
+        }
+    }
+
+    #[tokio::test]
+    async fn uninstall_prompt_overrides_footer_hints() {
+        let ctx = egui::Context::default();
+        super::apply_theme(&ctx);
+        let icons = super::IconCache::new();
+        let installed = super::InstalledIndex::default();
+        let entry = crate::app::sort_tests::entry("demo", "vitadb", 0, 1024, 0.0, "");
+        let lang = super::Language::English;
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(960.0, 544.0))),
+            ..Default::default()
+        };
+        let output = ctx.run(input, |ctx| {
+            let _ = super::detail_screen(
+                ctx,
+                &icons,
+                &installed,
+                lang,
+                &entry,
+                None,
+                false,
+                false,
+                0.0,
+                &[],
+                true,
+                None,
+                false,
+                None,
+                false,
+                0,
+                crate::input::DataStep::Choice,
+                true,
+                None,
+                &[],
+                None,
+                super::DetailFocus::Primary,
+                false,
+                None,
+                0,
+                None,
+                false,
+            );
+        });
+        let footer_texts: Vec<&str> = output
+            .shapes
+            .iter()
+            .filter_map(|c| match &c.shape {
+                egui::Shape::Text(t) if t.pos.y > 500.0 => Some(t.galley.text()),
+                _ => None,
+            })
+            .collect();
+        assert!(footer_texts.contains(&lang.uninstall_btn()), "expected uninstall hint in footer: {footer_texts:?}");
+        assert!(footer_texts.contains(&lang.cancel_btn()), "expected cancel hint in footer: {footer_texts:?}");
+        assert!(!footer_texts.contains(&lang.btn_back()), "background back hint should be hidden: {footer_texts:?}");
+    }
+
+    #[tokio::test]
+    async fn a_finger_drag_scrolls_the_page() {
+        let ctx = egui::Context::default();
+        super::apply_theme(&ctx);
+        let icons = super::IconCache::new();
+        let installed = super::InstalledIndex::default();
+        let mut entry = crate::app::sort_tests::entry("demo", "vitadb", 0, 1024, 0.0, "");
+        entry.long_description = "line\n".repeat(80);
+        let at = |y| egui::pos2(200.0, y);
+        let button = |y, pressed| egui::Event::PointerButton { pos: at(y), button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+        let frames = [
+            vec![], vec![],
+            vec![egui::Event::PointerMoved(at(400.0)), button(400.0, true)],
+            vec![egui::Event::PointerMoved(at(300.0))],
+            vec![egui::Event::PointerMoved(at(200.0))],
+        ];
+        let mut offset = 0.0;
+        for (i, events) in frames.into_iter().enumerate() {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(960.0, 544.0))),
+                time: Some(i as f64 * 0.016),
+                events,
+                ..Default::default()
+            };
+            let _ = ctx.run(input, |ctx| {
+                for command in super::detail_screen(
+                    ctx, &icons, &installed, super::Language::English, &entry, None, false, false, offset, &[], true, None,
+                    false, None, false, 0, crate::input::DataStep::Choice, false, None, &[], None,
+                    super::DetailFocus::Primary, false, None, 0, None, false,
+                ) {
+                    if let crate::input::AppCommand::SetDetailScroll(y) = command {
+                        offset = y;
+                    }
+                }
+            });
+        }
+        assert!(offset > 100.0, "drag was snapped back: {offset}");
+    }
+
+    #[tokio::test]
+    async fn community_gamepad_focus_states_render() {
+        let ctx = egui::Context::default();
+        super::apply_theme(&ctx);
+        let icons = super::IconCache::new();
+        let installed = super::InstalledIndex::default();
+        let entry = crate::app::sort_tests::entry("demo", "vitadb", 0, 1024, 0.0, "");
+        let comments = vec![crate::data::api::Comment {
+            id: "c1".into(),
+            parent_id: None,
+            author_name: "Alice".into(),
+            content: "Works great".into(),
+            created_at: String::new(),
+            verified: false,
+        }];
+        for focus in [
+            super::DetailFocus::Rating(4),
+            super::DetailFocus::CommentTab,
+            super::DetailFocus::CommentReply(0),
+        ] {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(960.0, 544.0))),
+                ..Default::default()
+            };
+            let _ = ctx.run(input, |ctx| {
+                let _ = super::detail_screen(
+                    ctx,
+                    &icons,
+                    &installed,
+                    super::Language::English,
+                    &entry,
+                    None,
+                    false,
+                    false,
+                    0.0,
+                    &comments,
+                    true,
+                    None,
+                    false,
+                    None,
+                    false,
+                    0,
+                    crate::input::DataStep::Choice,
+                    false,
+                    None,
+                    &[],
+                    None,
+                    focus,
+                    false,
+                    None,
+                    0,
+                    None,
+                    false,
                 );
             });
         }

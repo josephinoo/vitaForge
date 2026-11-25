@@ -23,6 +23,24 @@ pub fn client() -> reqwest::Client {
         .clone()
 }
 
+/// False only when the console says the link is down; any query failure counts as online.
+#[cfg(target_os = "vita")]
+pub fn is_online() -> bool {
+    use vitasdk_sys::*;
+    static INIT: std::sync::Once = std::sync::Once::new();
+    INIT.call_once(|| unsafe {
+        // Both report "already done" when someone else initialised them, which is fine.
+        let _ = sceSysmoduleLoadModule(SCE_SYSMODULE_NET);
+        let _ = sceNetCtlInit();
+    });
+    let mut state = 0;
+    unsafe { sceNetCtlInetGetState(&mut state) < 0 || state == SCE_NETCTL_STATE_CONNECTED as i32 }
+}
+#[cfg(not(target_os = "vita"))]
+pub fn is_online() -> bool {
+    true
+}
+
 /// The Vita's Cortex-A9 has no AES instructions, so software ChaCha20 is
 /// several times faster than AES-GCM; offer it first (archive.org honours it).
 fn tls_config() -> rustls::ClientConfig {

@@ -115,44 +115,6 @@ pub(crate) fn self_update_pill(ui: &mut egui::Ui, _lang: Language, tag: &str) ->
     response.clicked()
 }
 
-pub(crate) fn self_update_progress_pill(ui: &mut egui::Ui, progress: &crate::install::Progress) {
-    let size = egui::vec2(76.0, TAB_PILL_HEIGHT);
-    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
-    ui.painter().rect_filled(rect, rect.height() / 2.0, pal().warning.gamma_multiply(0.15));
-    ui.painter().rect_stroke(
-        rect,
-        rect.height() / 2.0,
-        egui::Stroke::new(1.0_f32, pal().warning.gamma_multiply(0.6)),
-        egui::StrokeKind::Inside,
-    );
-    let center = egui::pos2(rect.left() + 18.0, rect.center().y);
-    let radius = 6.5;
-    let n_dots = 6;
-    let time = ui.input(|i| i.time);
-    let angle = time * 5.0;
-    for i in 0..n_dots {
-        let dot_angle = angle + (i as f64 * std::f64::consts::TAU / n_dots as f64);
-        let pos = center + egui::vec2(dot_angle.cos() as f32, dot_angle.sin() as f32) * radius;
-        let alpha = (i as f32 / n_dots as f32).powf(1.5);
-        ui.painter().circle_filled(pos, 1.8, pal().warning.gamma_multiply(0.2 + 0.8 * alpha));
-    }
-    let pct_str = progress
-        .fraction()
-        .map(|f| format!("{:.0}%", f * 100.0))
-        .unwrap_or_else(|| "…".to_owned());
-    let galley = ui.fonts(|f| f.layout_no_wrap(pct_str, font(FONT_MICRO), pal().warning));
-    ui.painter().galley(
-        egui::pos2(rect.left() + 32.0, rect.center().y - galley.size().y * 0.5),
-        galley,
-        pal().warning,
-    );
-    ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
-}
-
-pub(crate) fn search_chip(ui: &mut egui::Ui, label: &str) -> bool {
-    search_chip_sized(ui, label, None)
-}
-
 pub(crate) fn search_chip_sized(ui: &mut egui::Ui, label: &str, fill_width: Option<f32>) -> bool {
     use crate::app::ui::chrome_icons::{self, ChromeIcon};
     let galley = ui.fonts(|f| f.layout_no_wrap(label.to_owned(), font(FONT_SMALL), pal().text_dim));
@@ -280,9 +242,20 @@ pub(crate) fn genre_dropdown(
     genre_counts: &[(String, usize)],
     genre_filter: Option<&str>,
 ) -> Option<Option<String>> {
-    let popup_id = ui.make_persistent_id("genre_dropdown");
-    let mut label =
-        genre_filter.map_or_else(|| lang.all_genres_label(), |genre| lang.genre_label(genre));
+    filter_dropdown(ui, "genre_dropdown", &lang.all_genres_label(), genre_counts, genre_filter, |genre| lang.genre_label(genre))
+}
+
+/// The pill + popup list shared by Games and ROMs. `Some(None)` means "all".
+pub(crate) fn filter_dropdown(
+    ui: &mut egui::Ui,
+    id: &str,
+    all: &str,
+    options: &[(String, usize)],
+    current: Option<&str>,
+    name: impl Fn(&str) -> String,
+) -> Option<Option<String>> {
+    let popup_id = ui.make_persistent_id(id);
+    let mut label = current.map_or_else(|| all.to_owned(), &name);
     if label.chars().count() > 16 {
         label = format!("{}…", label.chars().take(15).collect::<String>());
     }
@@ -301,7 +274,7 @@ pub(crate) fn genre_dropdown(
         rect.height() / 2.0,
         egui::Stroke::new(
             1.0_f32,
-            if open || genre_filter.is_some() {
+            if open || current.is_some() {
                 pal().accent_soft
             } else {
                 pal().separator
@@ -331,17 +304,17 @@ pub(crate) fn genre_dropdown(
         |ui| {
             ui.set_width(176.0);
             egui::ScrollArea::vertical()
-                .id_salt("genre_dropdown_options")
+                .id_salt((id, "options"))
                 .max_height(180.0)
                 .show(ui, |ui| {
                     ui.spacing_mut().item_spacing.y = 2.0;
-                    if dropdown_row(ui, &lang.all_genres_label(), genre_filter.is_none()) {
+                    if dropdown_row(ui, all, current.is_none()) {
                         picked = Some(None);
                     }
-                    for (genre, count) in genre_counts {
-                        let row_label = format!("{} ({count})", lang.genre_label(genre));
-                        if dropdown_row(ui, &row_label, genre_filter == Some(genre.as_str())) {
-                            picked = Some(Some(genre.clone()));
+                    for (option, count) in options {
+                        let row_label = format!("{} ({count})", name(option));
+                        if dropdown_row(ui, &row_label, current == Some(option.as_str())) {
+                            picked = Some(Some(option.clone()));
                         }
                     }
                 });
@@ -734,17 +707,27 @@ pub(crate) fn rating_stars(ui: &mut egui::Ui, rating: f32) {
     );
 }
 
-pub(crate) fn tappable_stars(ui: &mut egui::Ui, current: Option<u8>) -> Option<u8> {
+pub(crate) fn tappable_stars(ui: &mut egui::Ui, current: Option<u8>, focused_star: Option<u8>) -> Option<u8> {
     let mut chosen = None;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         for star in 1..=5u8 {
-            let filled = current.is_some_and(|c| star <= c);
+            let active = focused_star.or(current);
+            let filled = active.is_some_and(|c| star <= c);
             let color = if filled { pal().warning } else { pal().text_faint };
             let response = ui.add(
                 egui::Button::new(egui::RichText::new("★").size(FONT_LARGE).color(color))
                     .frame(false),
             );
+            if focused_star == Some(star) {
+                ui.painter().rect_stroke(
+                    response.rect.expand(2.0),
+                    RADIUS_XS,
+                    egui::Stroke::new(FOCUS_STROKE, pal().focus),
+                    egui::StrokeKind::Outside,
+                );
+                scroll_on_focus_arrival(ui, &response);
+            }
             if response.clicked() {
                 chosen = Some(star);
             }
@@ -793,64 +776,6 @@ pub(crate) fn region_badge(ui: &mut egui::Ui, region: &str) {
     );
     ui.painter()
         .galley(rect.center() - galley.size() / 2.0, galley, pal().text);
-}
-
-pub(crate) fn warning_glyph(
-    painter: &egui::Painter,
-    center: egui::Pos2,
-    radius: f32,
-    color: egui::Color32,
-) {
-    let stroke = egui::Stroke::new(1.4_f32, color);
-    let top = center + egui::vec2(0.0, -radius);
-    let left = center + egui::vec2(-radius * 0.95, radius * 0.75);
-    let right = center + egui::vec2(radius * 0.95, radius * 0.75);
-    painter.line_segment([top, left], stroke);
-    painter.line_segment([left, right], stroke);
-    painter.line_segment([right, top], stroke);
-    painter.line_segment(
-        [
-            center + egui::vec2(0.0, -radius * 0.28),
-            center + egui::vec2(0.0, radius * 0.28),
-        ],
-        stroke,
-    );
-    painter.circle_filled(center + egui::vec2(0.0, radius * 0.55), 0.9, color);
-}
-
-pub(crate) fn warning_pill(ui: &mut egui::Ui, label: &str) {
-    const ICON_BOX: f32 = 16.0;
-    const PADDING: f32 = 7.0;
-    let text_width = (ui.available_width() - ICON_BOX - PADDING * 3.0).max(60.0);
-    let mut job =
-        egui::text::LayoutJob::simple(label.to_owned(), font(FONT_MICRO), pal().warning, text_width);
-    job.wrap.max_rows = 4;
-    job.wrap.overflow_character = Some('…');
-    let galley = ui.fonts(|f| f.layout_job(job));
-    let size = egui::vec2(
-        galley.size().x + ICON_BOX + PADDING * 3.0,
-        (galley.size().y + PADDING).max(ICON_BOX),
-    );
-    let rect = ui.allocate_exact_size(size, egui::Sense::hover()).0;
-    ui.painter()
-        .rect_filled(rect, RADIUS_XS, pal().warning.gamma_multiply(0.2));
-    warning_glyph(
-        ui.painter(),
-        egui::pos2(
-            rect.left() + PADDING + ICON_BOX / 2.0,
-            rect.top() + ICON_BOX / 2.0 + 1.0,
-        ),
-        5.0,
-        pal().warning,
-    );
-    ui.painter().galley(
-        egui::pos2(
-            rect.left() + PADDING * 2.0 + ICON_BOX,
-            rect.top() + PADDING / 2.0,
-        ),
-        galley,
-        pal().warning,
-    );
 }
 
 pub(crate) fn install_pill(ui: &mut egui::Ui, lang: Language, state: InstallState) {
@@ -917,6 +842,20 @@ pub(crate) fn radio_row(ui: &mut egui::Ui, name: &str, trailing: Option<&str>, c
     response.clicked()
 }
 
+/// `scroll_to_me` only on the frame focus arrives: repeating it every frame undoes finger drags.
+pub(crate) fn scroll_on_focus_arrival(ui: &egui::Ui, response: &egui::Response) {
+    let key = response.id.with("focus_pass");
+    let pass = ui.ctx().cumulative_pass_nr();
+    let previous = ui.ctx().data_mut(|d| {
+        let previous = d.get_temp::<u64>(key);
+        d.insert_temp(key, pass);
+        previous
+    });
+    if previous.is_none_or(|p| p + 1 < pass) {
+        response.scroll_to_me(None);
+    }
+}
+
 fn scroll_radio_on_focus_change(ui: &egui::Ui, response: &egui::Response) {
     let key = egui::Id::new("radio_last_focus");
     let changed = ui.ctx().data_mut(|d| {
@@ -926,5 +865,38 @@ fn scroll_radio_on_focus_change(ui: &egui::Ui, response: &egui::Response) {
     });
     if changed {
         response.scroll_to_me(None);
+    }
+}
+
+#[cfg(test)]
+mod focus_scroll_tests {
+    #[test]
+    fn a_drag_survives_a_focused_row() {
+        let ctx = egui::Context::default();
+        let at = |y| egui::pos2(100.0, y);
+        let down = egui::Event::PointerButton { pos: at(150.0), button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() };
+        let frames = [vec![], vec![], vec![], vec![egui::Event::PointerMoved(at(150.0)), down], vec![egui::Event::PointerMoved(at(80.0))], vec![egui::Event::PointerMoved(at(20.0))]];
+        let mut offset = 0.0;
+        for (i, events) in frames.into_iter().enumerate() {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(200.0, 200.0))),
+                time: Some(i as f64 * 0.016),
+                events,
+                ..Default::default()
+            };
+            let _ = ctx.run(input, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    offset = egui::ScrollArea::vertical().show(ui, |ui| {
+                        for row in 0..30 {
+                            let (_, response) = ui.allocate_exact_size(egui::vec2(180.0, 30.0), egui::Sense::click());
+                            if row == 0 {
+                                super::scroll_on_focus_arrival(ui, &response);
+                            }
+                        }
+                    }).state.offset.y;
+                });
+            });
+        }
+        assert!(offset > 50.0, "drag was snapped back: {offset}");
     }
 }

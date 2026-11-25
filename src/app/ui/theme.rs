@@ -737,6 +737,8 @@ pub fn apply_theme(ctx: &egui::Context) {
     style.spacing.scroll.bar_inner_margin = 0.0;
     style.spacing.button_padding = egui::vec2(10.0, 6.0);
     style.interaction.interact_radius = 8.0;
+    // A finger drag must scroll, not highlight text.
+    style.interaction.selectable_labels = false;
     style.animation_time = 0.12;
     style.scroll_animation = egui::style::ScrollAnimation::duration(0.08);
     ctx.set_style(style);

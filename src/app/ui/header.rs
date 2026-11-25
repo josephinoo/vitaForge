@@ -44,6 +44,7 @@ pub(crate) fn catalog_header(
                 commands.push(AppCommand::SetStoreTab(StoreTab::Roms));
             }
 
+            // Reached with L/R (or the footer chips): shown while active so L/R never lands on an invisible stop.
             if let crate::app::ui::UpdateAllUi::Running(label) = update_all {
                 ui.add_space(6.0);
                 ui.label(

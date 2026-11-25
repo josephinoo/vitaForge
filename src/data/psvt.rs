@@ -136,22 +136,18 @@ pub fn parse(html: &str) -> Vec<AppEntry> {
 pub enum Sort {
     #[default]
     Newest,
-    Trending,
     Popular,
     Downloads,
     Title,
-    Author,
 }
 
 impl Sort {
     fn param(self) -> &'static str {
         match self {
             Sort::Newest => "id",
-            Sort::Trending => "trending",
             Sort::Popular => "popular",
             Sort::Downloads => "downloads",
             Sort::Title => "title",
-            Sort::Author => "author",
         }
     }
 }
@@ -353,12 +349,6 @@ pub async fn search_merge(text: &str) -> Option<Vec<AppEntry>> {
     found.extend(b);
     merge(&mut loaded().items, found.clone(), false);
     Some(found)
-}
-
-/// True while psvt.ovh may still have pages we haven't loaded.
-pub fn has_more() -> bool {
-    let state = loaded();
-    state.pages > 0 && !state.done
 }
 
 /// Adds `fresh` to the list, newest first, skipping ids already there.

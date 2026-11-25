@@ -31,7 +31,8 @@ pub enum Row {
     Notifications,
     SoundEffects,
     Theme,
-    Roms3dsDir,
+    /// Index into `roms::ROM_CONSOLES`.
+    RomsDir(u8),
     ClearIcons,
     ClearCatalog,
     PurgeAll,
@@ -79,7 +80,7 @@ pub const SECTIONS: [(Section, &[Row]); 6] = [
         Section::Plugins,
         &[Row::PluginManager, Row::ConfigViewer, Row::ConfigBackups, Row::Profiles, Row::SafeMode, Row::MigrateConfig, Row::Reboot],
     ),
-    (Section::Storage, &[Row::Roms3dsDir, Row::ClearIcons, Row::ClearCatalog, Row::PurgeAll]),
+    (Section::Storage, &[Row::RomsDir(0), Row::RomsDir(1), Row::RomsDir(2), Row::RomsDir(3), Row::RomsDir(4), Row::RomsDir(5), Row::RomsDir(6), Row::RomsDir(7), Row::ClearIcons, Row::ClearCatalog, Row::PurgeAll]),
     (Section::About, &[]),
 ];
 
@@ -98,6 +99,18 @@ pub struct SettingsNav {
     pub list_len: usize,
     /// □ in the plugin list: ↑/↓ carry the focused line instead of moving focus.
     pub moving: bool,
+    /// The Account rows actually on screen; the d-pad must never land on a hidden one.
+    pub account: &'static [Row],
+}
+
+pub fn account_rows(logged_in: bool, register: bool, can_verify: bool) -> &'static [Row] {
+    use Row::*;
+    match (logged_in, register, can_verify) {
+        (true, _, true) => &[AccountLogout, AccountVerifier],
+        (true, _, false) => &[AccountLogout],
+        (false, true, _) => &[AccountUsername, AccountPassword, AccountEmail, AccountSubmit, AccountToggleMode],
+        (false, false, _) => &[AccountUsername, AccountPassword, AccountSubmit, AccountToggleMode],
+    }
 }
 
 impl SettingsNav {
@@ -105,17 +118,21 @@ impl SettingsNav {
         Self {
             section: 0,
             row: 0,
-            rail: false,
+            rail: true,
             sub: None,
             sub_index: 0,
             theme_before: active_theme(),
             list_len: 0,
             moving: false,
+            account: account_rows(false, false, false),
         }
     }
 
     pub fn rows(&self) -> &'static [Row] {
-        SECTIONS[self.section].1
+        match SECTIONS[self.section] {
+            (Section::Account, _) => self.account,
+            (_, rows) => rows,
+        }
     }
 
     pub fn current_row(&self) -> Option<Row> {
@@ -204,7 +221,7 @@ pub(crate) struct SettingsView<'a> {
     pub cache_notice: Option<&'a str>,
     pub install_notifications: bool,
     pub sound_effects: bool,
-    pub roms_3ds_dir: &'a str,
+    pub roms_dirs: &'a [String],
     pub purge_armed: bool,
     pub plugins: PluginsView<'a>,
     pub auth_form: &'a crate::app::AuthForm,
@@ -454,18 +471,21 @@ fn content(ui: &mut egui::Ui, view: &SettingsView, commands: &mut Vec<AppCommand
                 value(ui, theme_label(active_theme(), lang));
                 swatch(ui, active_theme().palette(), egui::vec2(34.0, 22.0));
             }),
-            Row::Roms3dsDir => setting_row(
-                ui,
-                ChromeIcon::Games,
-                "3DS ROMs folder",
-                "Default: ux0:data/azahar/roms",
-                focused,
-                false,
-                |ui| {
-                    chevron(ui);
-                    value(ui, view.roms_3ds_dir);
-                },
-            ),
+            Row::RomsDir(index) => {
+                let console = &crate::roms::ROM_CONSOLES[usize::from(*index)];
+                setting_row(
+                    ui,
+                    ChromeIcon::Games,
+                    &lang.tr_args("roms-folder", &[("console", console.label)]),
+                    &lang.tr_args("roms-folder-default", &[("path", console.default_dir)]),
+                    focused,
+                    false,
+                    |ui| {
+                        chevron(ui);
+                        value(ui, view.roms_dirs.get(usize::from(*index)).map_or("", String::as_str));
+                    },
+                )
+            }
             Row::ClearIcons | Row::ClearCatalog | Row::PurgeAll => {
                 let (icon, label, hint) = match row {
                     Row::ClearIcons => (ChromeIcon::Image, lang.settings_clear_icons(), lang.settings_clear_icons_hint()),
@@ -578,7 +598,7 @@ fn account_section(ui: &mut egui::Ui, view: &SettingsView, commands: &mut Vec<Ap
 
         card_frame.show(ui, |ui| {
             ui.vertical(|ui| {
-                ui.label(egui::RichText::new("Connected Account").size(FONT_BODY).color(pal().text_dim));
+                ui.label(egui::RichText::new(lang.tr("auth-account")).size(FONT_BODY).color(pal().text_dim));
                 ui.add_space(8.0);
 
                 ui.label(egui::RichText::new(&session.username).size(FONT_TITLE + 4.0).strong().color(pal().text));
@@ -589,20 +609,20 @@ fn account_section(ui: &mut egui::Ui, view: &SettingsView, commands: &mut Vec<Ap
                     // Online green dot
                     let (dot_rect, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
                     ui.painter().circle_filled(dot_rect.center(), 3.5, egui::Color32::from_rgb(34, 197, 94));
-                    ui.label(egui::RichText::new("Online").size(FONT_SMALL).color(egui::Color32::from_rgb(34, 197, 94)).strong());
+                    ui.label(egui::RichText::new(lang.tr("auth-online")).size(FONT_SMALL).color(egui::Color32::from_rgb(34, 197, 94)).strong());
                     ui.add_space(4.0);
-                    ui.label(egui::RichText::new("Connected to VitaForge").size(FONT_SMALL).color(pal().text_dim));
+                    ui.label(egui::RichText::new(lang.tr("auth-connected")).size(FONT_SMALL).color(pal().text_dim));
                 });
 
                 ui.add_space(3.0);
-                ui.label(egui::RichText::new(format!("User ID: {}", session.user_id)).size(FONT_SMALL).color(pal().text_faint));
+                ui.label(egui::RichText::new(lang.tr_args("auth-user-id", &[("id", &session.user_id.to_string())])).size(FONT_SMALL).color(pal().text_faint));
             });
         });
 
         ui.add_space(12.0);
 
         // Red bordered "Log out" button
-        let focused = !nav.rail && nav.row == 6; // Logout row index
+        let focused = nav.current_row() == Some(Row::AccountLogout);
         let logout_height = 54.0;
         let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), logout_height), egui::Sense::click());
         let bg_fill = if response.hovered() {
@@ -622,14 +642,21 @@ fn account_section(ui: &mut egui::Ui, view: &SettingsView, commands: &mut Vec<Ap
         }
 
         // Center content: "Log out" + icon, subtitle "Disconnect your VitaForge account from this console"
-        ui.painter().text(
-            egui::pos2(rect.center().x, rect.center().y - 8.0),
-            egui::Align2::CENTER_CENTER,
-            "Log out",
-            font(FONT_BODY),
+        let logout_galley = ui.fonts(|f| f.layout_no_wrap(lang.tr("auth-logout"), font(FONT_BODY), pal().danger));
+        let icon_w = 15.0;
+        let gap = 6.0;
+        let total_w = logout_galley.size().x + gap + icon_w;
+        let start_x = rect.center().x - total_w * 0.5;
+        let row_y = rect.center().y - 8.0;
+        ui.painter().galley(
+            egui::pos2(start_x, row_y - logout_galley.size().y * 0.5),
+            logout_galley.clone(),
             pal().danger,
         );
-        let icon_rect = egui::Rect::from_center_size(egui::pos2(rect.center().x + 36.0, rect.center().y - 8.0), egui::Vec2::splat(15.0));
+        let icon_rect = egui::Rect::from_center_size(
+            egui::pos2(start_x + logout_galley.size().x + gap + icon_w * 0.5, row_y),
+            egui::Vec2::splat(icon_w),
+        );
         chrome_icons::paint(ui, ChromeIcon::Trash, icon_rect, pal().danger);
 
         ui.painter().text(
@@ -660,7 +687,7 @@ fn account_section(ui: &mut egui::Ui, view: &SettingsView, commands: &mut Vec<Ap
         ui.add_space(4.0);
 
         // Row 1: Username
-        let focused_u = !nav.rail && nav.row == 1;
+        let focused_u = nav.current_row() == Some(Row::AccountUsername);
         let u_val = if form.username.is_empty() { lang.tr("auth-tap-to-enter") } else { form.username.clone() };
         if auth_input_row(ui, ChromeIcon::User, &lang.tr("auth-username"), &lang.tr("auth-username-hint"), &u_val, focused_u) {
             commands.push(AppCommand::RequestAuthInput(crate::input::TextTarget::AuthUsername));
@@ -669,7 +696,7 @@ fn account_section(ui: &mut egui::Ui, view: &SettingsView, commands: &mut Vec<Ap
         ui.add_space(2.0);
 
         // Row 2: Password
-        let focused_p = !nav.rail && nav.row == 2;
+        let focused_p = nav.current_row() == Some(Row::AccountPassword);
         let p_val = if form.password.is_empty() {
             lang.tr("auth-tap-to-enter")
         } else {
@@ -682,7 +709,7 @@ fn account_section(ui: &mut egui::Ui, view: &SettingsView, commands: &mut Vec<Ap
         // Row 3: Email (only if register)
         if is_reg {
             ui.add_space(2.0);
-            let focused_e = !nav.rail && nav.row == 3;
+            let focused_e = nav.current_row() == Some(Row::AccountEmail);
             let e_val = if form.email.is_empty() { lang.tr("auth-optional") } else { form.email.clone() };
             if auth_input_row(ui, ChromeIcon::Info, &lang.tr("auth-email"), &lang.tr("auth-email-hint"), &e_val, focused_e) {
                 commands.push(AppCommand::RequestAuthInput(crate::input::TextTarget::AuthEmail));
@@ -692,7 +719,7 @@ fn account_section(ui: &mut egui::Ui, view: &SettingsView, commands: &mut Vec<Ap
         ui.add_space(6.0);
 
         // Row 4: Submit action (blue full-width button)
-        let focused_s = !nav.rail && nav.row == 4;
+        let focused_s = nav.current_row() == Some(Row::AccountSubmit);
         let submit_title = if view.auth_busy {
             lang.tr("auth-connecting")
         } else if is_reg {
@@ -707,7 +734,7 @@ fn account_section(ui: &mut egui::Ui, view: &SettingsView, commands: &mut Vec<Ap
         ui.add_space(6.0);
 
         // Row 5: Toggle login / register (footer link)
-        let focused_t = !nav.rail && nav.row == 5;
+        let focused_t = nav.current_row() == Some(Row::AccountToggleMode);
         let toggle_title = if is_reg {
             lang.tr("auth-switch-to-login")
         } else {
@@ -741,7 +768,7 @@ fn verifier_card(ui: &mut egui::Ui, view: &SettingsView, commands: &mut Vec<AppC
     });
     if matches!(status, Some("not_applied" | "rejected" | "unavailable")) {
         ui.add_space(8.0);
-        let focused = !view.nav.rail && view.nav.row == 7; // AccountVerifier row index
+        let focused = view.nav.current_row() == Some(Row::AccountVerifier);
         if auth_button_row(ui, &lang.tr("verifier-apply"), Some(ChromeIcon::Check), false, focused) {
             commands.push(AppCommand::VerifierApply);
         }
@@ -1443,7 +1470,7 @@ mod tests {
                             cache_notice: None,
                             install_notifications: true,
                             sound_effects: true,
-                            roms_3ds_dir: "ux0:data/azahar/roms",
+                            roms_dirs: &[],
                             purge_armed: false,
                             plugins: PluginsView {
                                 tai: Some(&snapshot),
@@ -1498,7 +1525,7 @@ mod tests {
                     egui::TopBottomPanel::bottom("hints").exact_height(47.0).show(ctx, |_| {});
                     settings_page(ctx, SettingsView {
                         lang: Language::English, nav: &nav, catalog_count: 0, stats: &stats,
-                        cache_notice: None, install_notifications: true, sound_effects: true, roms_3ds_dir: "ux0:data/azahar/roms", purge_armed: false,
+                        cache_notice: None, install_notifications: true, sound_effects: true, roms_dirs: &[], purge_armed: false,
                         plugins: PluginsView { tai: Some(&snapshot), outdated: &[], pending_reboot: false,
                             reboot_armed: false, armed: false, notice: None },
                         appear: 1.0,
@@ -1515,6 +1542,17 @@ mod tests {
             assert!(rect.top() >= clip.top() - 1.0 && rect.bottom() <= clip.bottom() + 1.0,
                 "row {index} not visible: row {rect:?} clip {clip:?}");
         }
+    }
+
+    #[test]
+    fn account_focus_only_visits_visible_rows() {
+        let mut nav = SettingsNav::new();
+        assert!(nav.rail, "opening settings must not arm a row");
+        nav.rail = false;
+        nav.account = account_rows(true, false, false);
+        assert_eq!(nav.current_row(), Some(Row::AccountLogout));
+        assert_eq!(account_rows(false, false, false).len(), 4);
+        assert!(!account_rows(false, false, false).contains(&Row::AccountEmail));
     }
 
     #[test]

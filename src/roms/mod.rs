@@ -10,16 +10,40 @@ use tokio::sync::watch;
 
 pub const SNAPSHOT_API_BASE: &str = "https://vitaforge.josephinoo.dev/api/v1/roms/snapshot";
 pub const DEFAULT_ROM_TYPE: &str = "3ds";
-pub const AZAHAR_ROMS_DIR: &str = "ux0:data/azahar/roms";
-pub const ROM_CONSOLES: &[(&str, &str)] = &[
-    ("3ds", "Nintendo 3DS"),
+pub struct RomConsole {
+    pub code: &'static str,
+    pub label: &'static str,
+    /// Where the console's usual Vita emulator finds games; editable in Settings.
+    pub default_dir: &'static str,
+}
+
+const fn console(code: &'static str, label: &'static str, default_dir: &'static str) -> RomConsole {
+    RomConsole { code, label, default_dir }
+}
+
+/// Order of the ROMs sidebar and of the folder rows in Settings (`Row::RomsDir` indexes it).
+/// RetroArch has no fixed content folder, so its consoles sit next to its other data.
+pub const ROM_CONSOLES: [RomConsole; 8] = [
+    console("3ds", "Nintendo 3DS", "ux0:data/azahar/roms"),
+    // DSVita reads this folder only.
+    console("ds", "Nintendo DS", "ux0:data/dsvita"),
+    console("gba", "Game Boy Advance", "ux0:data/retroarch/roms/gba"),
+    console("snes", "Super Nintendo", "ux0:data/retroarch/roms/snes"),
+    console("n64", "Nintendo 64", "ux0:data/DaedalusX64/Roms"),
+    console("gb", "Game Boy", "ux0:data/retroarch/roms/gb"),
+    console("gbc", "Game Boy Color", "ux0:data/retroarch/roms/gbc"),
+    console("nes", "NES", "ux0:data/retroarch/roms/nes"),
 ];
 
+pub fn default_dir(rom_type: &str) -> String {
+    ROM_CONSOLES
+        .iter()
+        .find(|c| c.code == rom_type)
+        .map_or_else(|| format!("ux0:data/roms/{rom_type}"), |c| c.default_dir.to_owned())
+}
+
 pub fn storage_dir_for(rom_type: &str) -> PathBuf {
-    match rom_type {
-        "3ds" => PathBuf::from(crate::data::settings::roms_3ds_dir()),
-        other => PathBuf::from(format!("ux0:data/roms/{other}")),
-    }
+    PathBuf::from(crate::data::settings::roms_dir(rom_type))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -37,7 +61,29 @@ pub struct RomEntry {
 }
 
 impl RomEntry {
+    /// Regions from the No-Intro name, "Game (USA, Europe)"; the API sends no region field.
+    pub fn regions(&self) -> impl Iterator<Item = &str> {
+        self.title
+            .split_once('(')
+            .and_then(|(_, rest)| rest.split_once(')'))
+            .map(|(group, _)| group.split(", "))
+            .into_iter()
+            .flatten()
+    }
+
+    /// `needle` is already lowercase.
+    pub fn matches(&self, needle: &str, genre: Option<&str>, region: Option<&str>) -> bool {
+        (needle.is_empty() || self.title.to_lowercase().contains(needle))
+            && genre.is_none_or(|g| self.genres.iter().any(|own| own == g))
+            && region.is_none_or(|r| self.regions().any(|own| own == r))
+    }
+
     pub fn to_app_entry(&self, rom_type: &str) -> crate::data::AppEntry {
+        self.to_app_entry_in(rom_type, &storage_dir_for(rom_type))
+    }
+
+    /// For whole lists: the folder lookup reads the settings file, so do it once.
+    pub fn to_app_entry_in(&self, rom_type: &str, dir: &Path) -> crate::data::AppEntry {
         let upper = rom_type.to_uppercase();
         let mut entry = crate::data::AppEntry {
             id: self.id.clone(),
@@ -50,7 +96,7 @@ impl RomEntry {
             author: format!("{upper} ROM"),
             author_lower: format!("{rom_type} rom"),
             description_lower: String::new(),
-            description: format!("{} · {}", self.filename, storage_dir_for(rom_type).display()),
+            description: format!("{} · {}", self.filename, dir.display()),
             long_description: String::new(),
             requirements: String::new(),
             changelog: String::new(),
@@ -141,6 +187,25 @@ pub enum SnapshotFetch {
 
 pub fn snapshot_url(rom_type: &str) -> String {
     format!("{SNAPSHOT_API_BASE}?type={rom_type}")
+}
+
+/// Catalog size without downloading the snapshot: a one-item page carries `total`.
+pub async fn fetch_total(rom_type: &str) -> Result<usize> {
+    #[derive(Deserialize)]
+    struct Page {
+        total: usize,
+    }
+    let base = SNAPSHOT_API_BASE.trim_end_matches("/snapshot");
+    let page: Page = crate::net::client()
+        .get(format!("{base}?type={rom_type}&limit=1"))
+        .header("X-Client-ID", crate::data::client_id::get())
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    Ok(page.total)
 }
 
 pub fn parse_snapshot(json: &[u8]) -> Result<Vec<RomEntry>> {
@@ -289,6 +354,23 @@ pub fn extract_rom_zip(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_console_has_its_own_folder() {
+        let dirs: std::collections::HashSet<_> = ROM_CONSOLES.iter().map(|c| c.default_dir).collect();
+        assert_eq!(dirs.len(), ROM_CONSOLES.len());
+        assert_eq!(default_dir("ds"), "ux0:data/dsvita");
+    }
+
+    #[test]
+    fn region_comes_from_the_title() {
+        let mut rom = parse_snapshot(br#"{"data":[{"id":"a","title":"Game (USA, Europe) (Rev 1)","filename":"a.zip","download_url":"u"}]}"#).unwrap().remove(0);
+        assert_eq!(rom.regions().collect::<Vec<_>>(), ["USA", "Europe"]);
+        assert!(rom.matches("game", None, Some("Europe")));
+        assert!(!rom.matches("", None, Some("Japan")));
+        rom.title = "No region".to_owned();
+        assert_eq!(rom.regions().count(), 0);
+    }
 
     #[test]
     fn parses_vitaforge_snapshot_json() {

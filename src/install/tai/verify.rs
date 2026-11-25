@@ -6,11 +6,8 @@ use std::path::{Path, PathBuf};
 
 /// Rejects empty files and, for taiHEN modules, anything that isn't an ELF
 /// (a saved HTML error page would otherwise end up in config.txt).
-pub fn check_module(path: &Path, expected_size: Option<u64>) -> Result<()> {
-    check_as(path, path, expected_size)
-}
-
-/// Same, judging the file by the name it will have (`staged` is usually a `.tmp`).
+///
+/// Judges the file by the name it will have (`staged` is usually a `.tmp`).
 fn check_as(path: &Path, final_name: &Path, expected_size: Option<u64>) -> Result<()> {
     let len = std::fs::metadata(path).with_context(|| format!("couldn't read {}", path.display()))?.len();
     if len == 0 {
@@ -110,6 +107,10 @@ mod tests {
         d
     }
 
+    fn check_as_named(path: &Path, size: Option<u64>) -> Result<()> {
+        check_as(path, path, size)
+    }
+
     fn elf() -> Vec<u8> {
         let mut bytes = b"\x7fELF".to_vec();
         bytes.extend_from_slice(&[1; 60]);
@@ -121,26 +122,26 @@ mod tests {
         let d = dir("check");
         let empty = d.join("a.skprx");
         std::fs::write(&empty, b"").unwrap();
-        assert!(check_module(&empty, None).unwrap_err().to_string().contains("empty"));
+        assert!(check_as_named(&empty, None).unwrap_err().to_string().contains("empty"));
         let html = d.join("b.suprx");
         std::fs::write(&html, b"<html>404</html>").unwrap();
-        assert!(check_module(&html, None).unwrap_err().to_string().contains("valid plugin"));
+        assert!(check_as_named(&html, None).unwrap_err().to_string().contains("valid plugin"));
         let short = d.join("c.suprx");
         std::fs::write(&short, b"\x7f").unwrap();
-        assert!(check_module(&short, None).is_err());
+        assert!(check_as_named(&short, None).is_err());
         let signed = d.join("e.suprx");
         std::fs::write(&signed, [b"SCE\0".as_slice(), &[1; 60]].concat()).unwrap();
-        assert!(check_module(&signed, None).is_ok(), "SELF-packed modules are the normal case");
+        assert!(check_as_named(&signed, None).is_ok(), "SELF-packed modules are the normal case");
         let good = d.join("d.skprx");
         std::fs::write(&good, elf()).unwrap();
-        assert!(check_module(&good, None).is_ok());
-        assert!(check_module(&good, Some(64)).is_ok());
-        assert!(check_module(&good, Some(10)).unwrap_err().to_string().contains("expected 10"));
-        assert!(check_module(&good, Some(0)).is_ok(), "0 means unknown");
+        assert!(check_as_named(&good, None).is_ok());
+        assert!(check_as_named(&good, Some(64)).is_ok());
+        assert!(check_as_named(&good, Some(10)).unwrap_err().to_string().contains("expected 10"));
+        assert!(check_as_named(&good, Some(0)).is_ok(), "0 means unknown");
         let data = d.join("e.bin");
         std::fs::write(&data, b"anything").unwrap();
-        assert!(check_module(&data, None).is_ok(), "only modules need the ELF header");
-        assert!(check_module(&d.join("missing.skprx"), None).is_err());
+        assert!(check_as_named(&data, None).is_ok(), "only modules need the ELF header");
+        assert!(check_as_named(&d.join("missing.skprx"), None).is_err());
         let _ = std::fs::remove_dir_all(d);
     }
 

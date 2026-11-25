@@ -1,4 +1,5 @@
 pub mod detail_actions;
+pub mod disk_lru;
 pub mod i18n;
 pub mod icons;
 pub mod sysinfo;
@@ -20,6 +21,7 @@ pub(super) fn tile_art_url(app: &AppEntry) -> Option<&str> {
 
 const MAX_PRECACHE_PER_LAUNCH: usize = 150;
 const CATALOG_REFRESH_EVERY: std::time::Duration = std::time::Duration::from_secs(600);
+const CATALOG_RETRY_EMPTY_EVERY: std::time::Duration = std::time::Duration::from_secs(15);
 fn precache_art_urls(apps: &[AppEntry]) -> Vec<String> {
     apps.iter()
         .filter_map(tile_art_url)
@@ -449,75 +451,6 @@ impl CatalogState {
         true
     }
 
-    pub fn jump_letter(&mut self, forward: bool) -> bool {
-        if self.filtered_indices.is_empty() {
-            return false;
-        }
-        let current_char = self
-            .filtered_indices
-            .get(self.selected)
-            .and_then(|&idx| self.apps.get(idx))
-            .and_then(|app| app.name.trim_start().chars().next())
-            .map(|c| c.to_ascii_uppercase())
-            .unwrap_or('A');
-
-        if forward {
-            for (i, &idx) in self.filtered_indices.iter().enumerate() {
-                if let Some(app) = self.apps.get(idx) {
-                    let first = app
-                        .name
-                        .trim_start()
-                        .chars()
-                        .next()
-                        .map(|c| c.to_ascii_uppercase())
-                        .unwrap_or(' ');
-                    if first > current_char && first.is_ascii_alphanumeric() {
-                        self.selected = i;
-                        self.selection_active = true;
-                        self.scroll_to_selected = true;
-                        return true;
-                    }
-                }
-            }
-        } else {
-            let mut target_char = None;
-            for &idx in self.filtered_indices.iter().rev() {
-                if let Some(app) = self.apps.get(idx) {
-                    let first = app
-                        .name
-                        .trim_start()
-                        .chars()
-                        .next()
-                        .map(|c| c.to_ascii_uppercase())
-                        .unwrap_or(' ');
-                    if first < current_char && first.is_ascii_alphanumeric() {
-                        target_char = Some(first);
-                        break;
-                    }
-                }
-            }
-            if let Some(target) = target_char {
-                if let Some(pos) = self.filtered_indices.iter().position(|&idx| {
-                    self.apps
-                        .get(idx)
-                        .and_then(|a| a.name.trim_start().chars().next())
-                        .map(|c| c.to_ascii_uppercase())
-                        == Some(target)
-                }) {
-                    self.selected = pos;
-                    self.selection_active = true;
-                    self.scroll_to_selected = true;
-                    return true;
-                }
-            }
-        }
-        false
-    }
-
-    pub fn shows_category_pills(&self) -> bool {
-        self.tab == StoreTab::Categories
-    }
-
     pub fn shows_sidebar(&self) -> bool {
         self.tab == StoreTab::Categories
     }
@@ -540,11 +473,14 @@ impl CatalogState {
         self.focus_pane = FocusPane::Sidebar;
     }
 
-    fn leave_sidebar(&mut self) {
-        self.focus_pane = FocusPane::Grid;
-        if !self.filtered_indices.is_empty() {
-            self.selection_active = true;
+    /// False when the grid is empty: focus stays put so something is always highlighted.
+    fn leave_sidebar(&mut self) -> bool {
+        if self.filtered_indices.is_empty() {
+            return false;
         }
+        self.focus_pane = FocusPane::Grid;
+        self.selection_active = true;
+        true
     }
 
     fn move_sidebar_cursor(&mut self, delta: isize) -> bool {
@@ -559,7 +495,8 @@ impl CatalogState {
         }
         self.sidebar_cursor = next;
         self.focus_pane = FocusPane::Sidebar;
-        self.apply_sidebar_slot_at_cursor();
+        // Only moves the highlight: applying on the way down would drop the platform
+        // before the cursor reaches Featured/Downloads below it.
         true
     }
 
@@ -662,6 +599,61 @@ impl CatalogState {
 }
 
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PickerTarget {
+    RomGenre,
+    RomRegion,
+    GameGenre,
+}
+
+/// Controller-driven filter list; row 0 is "all", row n is option n-1.
+#[derive(Clone, Copy)]
+pub struct FilterPicker {
+    pub target: PickerTarget,
+    pub cursor: usize,
+}
+
+const PICKER_PAGE: usize = 8;
+
+/// Up/down wrap, left/right jump a page and stop at the ends.
+fn picker_step(cursor: usize, len: usize, input: InputCommand) -> usize {
+    match input {
+        InputCommand::MoveUp => (cursor + len - 1) % len,
+        InputCommand::MoveDown => (cursor + 1) % len,
+        InputCommand::MoveLeft => cursor.saturating_sub(PICKER_PAGE),
+        InputCommand::MoveRight => (cursor + PICKER_PAGE).min(len - 1),
+        _ => cursor,
+    }
+}
+
+#[cfg(test)]
+mod picker_tests {
+    use super::{picker_step, InputCommand};
+    #[test]
+    fn wraps_and_pages() {
+        assert_eq!(picker_step(0, 24, InputCommand::MoveUp), 23);
+        assert_eq!(picker_step(23, 24, InputCommand::MoveDown), 0);
+        assert_eq!(picker_step(3, 24, InputCommand::MoveLeft), 0);
+        assert_eq!(picker_step(20, 24, InputCommand::MoveRight), 23);
+    }
+}
+
+/// L/R walk the header left to right and wrap.
+fn ring_step(current: usize, len: usize, forward: bool) -> usize {
+    (current + if forward { 1 } else { len - 1 }) % len
+}
+
+#[cfg(test)]
+mod ring_tests {
+    use super::ring_step;
+    #[test]
+    fn wraps_and_is_symmetric() {
+        assert_eq!(ring_step(8, 9, true), 0);
+        assert_eq!(ring_step(0, 9, false), 8);
+        assert_eq!(ring_step(ring_step(3, 9, true), 9, false), 3);
+    }
+}
+
 fn is_collapsible_homebrew(app: &AppEntry) -> bool {
     !app.titleid_lower.is_empty() && !app.platform.is_commercial()
 }
@@ -742,6 +734,7 @@ pub enum AppState {
         data_step: DataStep,
         uninstall_prompt: bool,
         detail_focus: DetailFocus,
+        verified_tab: bool,
     },
     Settings {
         previous: Box<CatalogState>,
@@ -816,8 +809,11 @@ pub struct App {
     pub purge_armed: bool,
     /// Set by the first ○ during a download; a second ○ within 3 s cancels it.
     pub cancel_armed_at: Option<std::time::Instant>,
+    /// Scroll limit of the detail page as last drawn.
+    detail_max_scroll: f32,
+    detail_rating_at: f32,
     install_notifications: bool,
-    pub roms_3ds_dir: String,
+    pub roms_dirs: Vec<String>,
     update_queue: std::collections::VecDeque<AppEntry>,
     pub update_active: bool,
     pub update_total: usize,
@@ -827,6 +823,7 @@ pub struct App {
     pub report_notice: Option<String>,
     /// Focused item while the report picker is open: a category, then Cancel, then Submit.
     pub report_modal: Option<usize>,
+    pub filter_picker: Option<FilterPicker>,
     /// The checked category.
     pub report_choice: usize,
     /// The IME is up for the report message.
@@ -863,21 +860,23 @@ pub struct App {
 pub struct RomsUiState {
     pub rom_type: String,
     pub genre_filter: Option<String>,
-    pub query: String,
+    pub region_filter: Option<String>,
     pub loading: bool,
-    pub status: Option<String>,
+    pub failed: bool,
     pub entries: Vec<crate::roms::RomEntry>,
+    /// `entries` as grid tiles, same order.
+    tiles: Vec<AppEntry>,
     pub genre_counts: Vec<(String, usize)>,
+    pub region_counts: Vec<(String, usize)>,
+    /// Games per console code, for the sidebar.
+    totals: std::collections::HashMap<&'static str, usize>,
+    totals_rx: Option<std::sync::mpsc::Receiver<(&'static str, usize)>>,
     pub selected: usize,
     pub scroll_to_selected: bool,
     pub sidebar_focus: bool,
     pub sidebar_cursor: usize,
     etag: Option<String>,
     catalog_rx: Option<oneshot::Receiver<Result<crate::roms::SnapshotFetch>>>,
-    download_title: Option<String>,
-    download_rx: Option<watch::Receiver<crate::install::Progress>>,
-    download_progress: crate::install::Progress,
-    download_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl RomsUiState {
@@ -885,21 +884,21 @@ impl RomsUiState {
         Self {
             rom_type: crate::roms::DEFAULT_ROM_TYPE.to_owned(),
             genre_filter: None,
-            query: String::new(),
+            region_filter: None,
             loading: false,
-            status: None,
+            failed: false,
             entries: Vec::new(),
+            tiles: Vec::new(),
             genre_counts: Vec::new(),
+            region_counts: Vec::new(),
+            totals: Default::default(),
+            totals_rx: None,
             selected: 0,
             scroll_to_selected: false,
             sidebar_focus: false,
             sidebar_cursor: 0,
             etag: None,
             catalog_rx: None,
-            download_title: None,
-            download_rx: None,
-            download_progress: crate::install::Progress::Resolving,
-            download_cancel: None,
         }
     }
 
@@ -907,10 +906,14 @@ impl RomsUiState {
         ui::roms::RomsView {
             rom_type: &self.rom_type,
             genre_filter: self.genre_filter.as_deref(),
+            region_filter: self.region_filter.as_deref(),
             loading: self.loading,
-            status: self.status.as_deref(),
+            failed: self.failed,
             entries: &self.entries,
+            tiles: &self.tiles,
             genre_counts: &self.genre_counts,
+            region_counts: &self.region_counts,
+            totals: &self.totals,
             selected: self.selected,
             scroll_to_selected: self.scroll_to_selected,
             sidebar_focus: self.sidebar_focus,
@@ -923,42 +926,68 @@ impl RomsUiState {
         self.entries
             .iter()
             .enumerate()
-            .filter(|(_, e)| needle.is_empty() || e.title.to_lowercase().contains(&needle))
-            .filter(|(_, e)| {
-                self.genre_filter
-                    .as_deref()
-                    .is_none_or(|g| e.genres.iter().any(|eg| eg == g))
-            })
+            .filter(|(_, e)| e.matches(&needle, self.genre_filter.as_deref(), self.region_filter.as_deref()))
             .map(|(i, _)| i)
             .collect()
+    }
+
+    /// Once per session, and again only for consoles that never answered.
+    fn load_totals(&mut self) {
+        if self.totals_rx.is_some() {
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        for console in &crate::roms::ROM_CONSOLES {
+            if !self.totals.contains_key(console.code) {
+                let (tx, code) = (tx.clone(), console.code);
+                tokio::spawn(async move {
+                    if let Ok(total) = crate::roms::fetch_total(code).await {
+                        let _ = tx.send((code, total));
+                    }
+                });
+            }
+        }
+        self.totals_rx = Some(rx);
     }
 
     fn load_catalog(&mut self) {
         if self.loading {
             return;
         }
+        self.load_totals();
         let (tx, rx) = oneshot::channel();
         let etag = self.etag.clone();
         let rom_type = self.rom_type.clone();
         self.catalog_rx = Some(rx);
         self.loading = true;
-        self.status = Some(format!("Loading {} ROMs snapshot...", rom_type.to_uppercase()));
+        self.failed = false;
         tokio::spawn(async move {
             let _ = tx.send(crate::roms::fetch_snapshot(&rom_type, etag.as_deref()).await);
         });
     }
 
     fn poll(&mut self) {
+        if let Some(rx) = &self.totals_rx {
+            loop {
+                match rx.try_recv() {
+                    Ok((code, total)) => {
+                        self.totals.insert(code, total);
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        self.totals_rx = None;
+                        break;
+                    }
+                }
+            }
+        }
         if let Some(rx) = &mut self.catalog_rx {
             if let Ok(res) = rx.try_recv() {
                 self.catalog_rx = None;
                 self.loading = false;
                 match res {
-                    Ok(crate::roms::SnapshotFetch::NotModified) => {
-                        self.status = None;
-                    }
+                    Ok(crate::roms::SnapshotFetch::NotModified) => {}
                     Ok(crate::roms::SnapshotFetch::Updated { entries, etag }) => {
-                        self.status = None;
                         let mut counts = std::collections::BTreeMap::<String, usize>::new();
                         for e in &entries {
                             for g in &e.genres {
@@ -966,23 +995,27 @@ impl RomsUiState {
                             }
                         }
                         self.genre_counts = counts.into_iter().collect();
+                        // The loaded snapshot is the truth for the open console.
+                        if let Some(console) = crate::roms::ROM_CONSOLES.iter().find(|c| c.code == self.rom_type) {
+                            self.totals.insert(console.code, entries.len());
+                        }
+                        let mut regions = std::collections::BTreeMap::<String, usize>::new();
+                        for region in entries.iter().flat_map(|e| e.regions()) {
+                            *regions.entry(region.to_owned()).or_insert(0) += 1;
+                        }
+                        self.region_counts = regions.into_iter().collect();
+                        let dir = crate::roms::storage_dir_for(&self.rom_type);
+                        self.tiles = entries.iter().map(|e| e.to_app_entry_in(&self.rom_type, &dir)).collect();
                         self.entries = entries;
                         if etag.is_some() {
                             self.etag = etag;
                         }
                     }
-                    Err(err) => self.status = Some(format!("Catalog error: {err:#}")),
+                    Err(err) => {
+                        crate::install::log_file(&format!("rom catalog failed: {err:#}"));
+                        self.failed = true;
+                    }
                 }
-            }
-        }
-        if let Some(rx) = &mut self.download_rx {
-            self.download_progress = rx.borrow_and_update().clone();
-            if matches!(
-                self.download_progress,
-                crate::install::Progress::Done | crate::install::Progress::Failed(_)
-            ) {
-                self.download_rx = None;
-                self.download_cancel = None;
             }
         }
     }
@@ -1062,9 +1095,11 @@ impl App {
             cache_notice: None,
             purge_armed: false,
             cancel_armed_at: None,
+            detail_max_scroll: 0.0,
+            detail_rating_at: 0.0,
             icons_need_clear: false,
             install_notifications: settings.install_notifications,
-            roms_3ds_dir: settings.roms_3ds_dir,
+            roms_dirs: data::settings::all_roms_dirs(&settings),
             update_queue: std::collections::VecDeque::new(),
             update_active: false,
             update_total: 0,
@@ -1073,6 +1108,7 @@ impl App {
             uninstall_rx: None,
             report_notice: None,
             report_modal: None,
+            filter_picker: None,
             report_choice: 0,
             report_entry: false,
             profile_rename: None,
@@ -1426,6 +1462,7 @@ impl App {
             }
             ctx.request_repaint();
         }
+        self.sync_account_rows();
         if self.verifier_status.is_none()
             && self.verifier_rx.is_none()
             && crate::data::auth::is_logged_in()
@@ -1519,10 +1556,15 @@ impl App {
                 if matches!(self.state, AppState::Loading) && !self.install_busy() {
                     let apps = data::api::load_cached_catalog_sync().unwrap_or_default();
                     eprintln!("live catalog fetch failed; fallback to {} cached entries", apps.len());
+                    if apps.is_empty() {
+                        self.refresh_due_at = std::time::Instant::now() + CATALOG_RETRY_EMPTY_EVERY;
+                    }
                     let catalog = CatalogState::new(apps);
                     self.installed.force_refresh(ctx, &catalog.apps);
                     self.state = AppState::Catalog(catalog);
                     ctx.request_repaint();
+                } else if matches!(&self.state, AppState::Catalog(c) if c.apps.is_empty()) {
+                    self.refresh_due_at = std::time::Instant::now() + CATALOG_RETRY_EMPTY_EVERY;
                 }
             }
             Err(oneshot::error::TryRecvError::Empty) => {
@@ -1546,6 +1588,14 @@ impl App {
             Err(oneshot::error::TryRecvError::Closed) => self.load_rx = None,
         }
         Ok(())
+    }
+    fn sync_account_rows(&mut self) {
+        let can_verify = matches!(self.verifier_status.as_deref(), Some("not_applied" | "rejected" | "unavailable"));
+        let rows = ui::settings::account_rows(crate::data::auth::current().is_some(), self.auth_form.is_register, can_verify);
+        if let AppState::Settings { nav, .. } = &mut self.state {
+            nav.account = rows;
+            nav.row = nav.row.min(nav.rows().len().saturating_sub(1));
+        }
     }
     /// ✕ inside Settings: enter the rows, open a choice list, or run the row.
     fn settings_confirm(&mut self) -> Result<()> {
@@ -1593,8 +1643,8 @@ impl App {
                 nav.sub_index = ThemeId::ALL.iter().position(|&t| t == theme).unwrap_or(0);
                 return Ok(());
             }
-            Some(Row::Roms3dsDir) => {
-                AppCommand::RequestAuthInput(crate::input::TextTarget::Roms3dsDir)
+            Some(Row::RomsDir(index)) => {
+                AppCommand::RequestAuthInput(crate::input::TextTarget::RomsDir(index))
             }
             Some(Row::PluginManager | Row::ConfigViewer | Row::ConfigBackups | Row::Profiles) => {
                 let sub = match nav.current_row() {
@@ -2048,7 +2098,7 @@ impl App {
             AppCommand::Input(InputCommand::MoveLeft | InputCommand::MoveRight) if draft.focus >= 4 => {
                 draft.focus = if draft.focus == 4 { 5 } else { 4 };
             }
-            AppCommand::Input(InputCommand::Back) | AppCommand::CloseVerifyModal => {
+            AppCommand::Input(InputCommand::Back) => {
                 self.verify_modal = None;
                 self.audio.play(crate::audio::Sfx::HideModal);
             }
@@ -2089,6 +2139,62 @@ impl App {
                 }
             }
         }
+    }
+
+    /// `(options, current)` for a picker target.
+    pub(crate) fn picker_options(&self, target: PickerTarget) -> (&[(String, usize)], Option<&str>) {
+        match target {
+            PickerTarget::RomGenre => (&self.roms.genre_counts, self.roms.genre_filter.as_deref()),
+            PickerTarget::RomRegion => (&self.roms.region_counts, self.roms.region_filter.as_deref()),
+            PickerTarget::GameGenre => match &self.state {
+                AppState::Catalog(catalog) => (&catalog.genre_counts, catalog.genre_filter.as_deref()),
+                _ => (&[], None),
+            },
+        }
+    }
+
+    fn open_filter_picker(&mut self, target: PickerTarget) {
+        let (options, current) = self.picker_options(target);
+        if options.is_empty() {
+            return;
+        }
+        let cursor = current.and_then(|c| options.iter().position(|(o, _)| o == c)).map_or(0, |i| i + 1);
+        self.filter_picker = Some(FilterPicker { target, cursor });
+        self.audio.play(crate::audio::Sfx::ShowModal);
+    }
+
+    fn handle_filter_picker(&mut self, picker: FilterPicker, command: AppCommand) -> Result<()> {
+        let len = self.picker_options(picker.target).0.len() + 1;
+        let picked = match command {
+            AppCommand::Input(InputCommand::Confirm) => picker.cursor,
+            AppCommand::PickFilter(row) => row,
+            AppCommand::Input(InputCommand::Back)
+            | AppCommand::CloseFilterPicker
+            | AppCommand::CycleCategoryFilter => {
+                self.filter_picker = None;
+                self.audio.play(crate::audio::Sfx::HideModal);
+                return Ok(());
+            }
+            AppCommand::Input(input) => {
+                let cursor = picker_step(picker.cursor.min(len - 1), len, input);
+                if cursor != picker.cursor {
+                    self.filter_picker = Some(FilterPicker { cursor, ..picker });
+                    self.audio.play(crate::audio::Sfx::Navigate);
+                }
+                return Ok(());
+            }
+            _ => return Ok(()),
+        };
+        let choice = picked
+            .checked_sub(1)
+            .and_then(|i| self.picker_options(picker.target).0.get(i))
+            .map(|(option, _)| option.clone());
+        self.filter_picker = None;
+        self.handle_command(match picker.target {
+            PickerTarget::RomGenre => AppCommand::RomsSetGenre(choice),
+            PickerTarget::RomRegion => AppCommand::RomsSetRegion(choice),
+            PickerTarget::GameGenre => AppCommand::SetGenreFilter(choice),
+        })
     }
 
     /// Focus runs over the categories (two columns), then Cancel, then Submit.
@@ -2171,6 +2277,7 @@ impl App {
     }
 
     pub fn handle_command(&mut self, command: AppCommand) -> Result<()> {
+        self.sync_account_rows();
         if self.self_update_prompt {
             match command {
                 AppCommand::Input(InputCommand::Confirm) | AppCommand::SelfUpdate => {
@@ -2193,7 +2300,12 @@ impl App {
             self.handle_report_modal(selected, command);
             return Ok(());
         }
+        if let Some(picker) = self.filter_picker {
+            return self.handle_filter_picker(picker, command);
+        }
         match command {
+            AppCommand::PickFilter(_) | AppCommand::CloseFilterPicker => {}
+            AppCommand::RomsRetry => self.roms.load_catalog(),
             AppCommand::Input(InputCommand::Back) => {
                 if self.self_update_prompt {
                     return self.handle_command(AppCommand::DismissSelfUpdate);
@@ -2214,6 +2326,9 @@ impl App {
                     && !self.update_active
                     && self.install.as_ref().is_some_and(|job| job.progress.is_cancellable())
                 {
+                    if self.install.as_ref().is_some_and(|job| job.cancel.load(std::sync::atomic::Ordering::Relaxed)) {
+                        return Ok(());
+                    }
                     // ○ means "back" everywhere else, so one press must not throw away a download.
                     if !self.cancel_armed() {
                         self.cancel_armed_at = Some(std::time::Instant::now());
@@ -2231,8 +2346,9 @@ impl App {
                 }
                 if let AppState::Catalog(catalog) = &mut self.state {
                     if catalog.focus_pane == FocusPane::Sidebar {
-                        catalog.leave_sidebar();
-                        self.audio.play(crate::audio::Sfx::Navigate);
+                        if catalog.leave_sidebar() {
+                            self.audio.play(crate::audio::Sfx::Navigate);
+                        }
                         return Ok(());
                     }
                     if catalog.tab == StoreTab::Categories
@@ -2334,12 +2450,27 @@ impl App {
                 return Ok(());
             }
             AppCommand::FlipSortDirection if self.in_plugin_list() => return self.tai_start_move(),
+            AppCommand::CycleCategoryFilter if matches!(&self.state, AppState::Catalog(c) if c.tab == StoreTab::Roms) => {
+                self.open_filter_picker(PickerTarget::RomGenre);
+            }
+            AppCommand::FlipSortDirection if matches!(&self.state, AppState::Catalog(c) if c.tab == StoreTab::Roms) => {
+                self.open_filter_picker(PickerTarget::RomRegion);
+            }
             AppCommand::CycleCategoryFilter => {
                 if matches!(self.state, AppState::Detail { .. }) {
                     return self.handle_command(AppCommand::SecondaryAction);
                 }
                 if matches!(&self.state, AppState::Catalog(catalog) if catalog.tab == StoreTab::Updates) {
                     return self.handle_command(AppCommand::UpdateAll);
+                }
+                // Games: the sidebar already walks categories, so △ opens the genre list.
+                if let AppState::Catalog(catalog) = &self.state
+                    && catalog.tab == StoreTab::Categories
+                    && catalog.content_type_group == ContentTypeGroup::Games
+                    && !catalog.genre_counts.is_empty()
+                {
+                    self.open_filter_picker(PickerTarget::GameGenre);
+                    return Ok(());
                 }
                 if let AppState::Catalog(catalog) = &mut self.state {
                     if catalog.tab != StoreTab::Categories {
@@ -2569,32 +2700,19 @@ impl App {
                     *detail_focus = focus;
                 }
             }
-            AppCommand::AnalogScroll(delta) => {
-                if let AppState::Detail { scroll_delta, .. } = &mut self.state {
-                    *scroll_delta = (*scroll_delta + delta).max(0.0);
+            AppCommand::SetCommentTab(verified) => {
+                if let AppState::Detail { verified_tab, detail_focus, .. } = &mut self.state {
+                    *verified_tab = verified;
+                    if matches!(*detail_focus, DetailFocus::CommentReply(_)) {
+                        *detail_focus = DetailFocus::CommentTab;
+                    }
                 }
             }
+            AppCommand::SetDetailMaxScroll(max) => self.detail_max_scroll = max,
+            AppCommand::SetDetailRatingAt(offset) => self.detail_rating_at = offset,
             AppCommand::SetDetailScroll(offset) => {
                 if let AppState::Detail { scroll_delta, .. } = &mut self.state {
                     *scroll_delta = offset.max(0.0);
-                }
-            }
-            AppCommand::PageStep(step) => match &mut self.state {
-                AppState::Catalog(catalog) => {
-                    if catalog.focus_pane == FocusPane::Grid && catalog.move_selection(step as isize) {
-                        self.audio.play(crate::audio::Sfx::Navigate);
-                    }
-                }
-                AppState::Detail { scroll_delta, .. } => {
-                    *scroll_delta = (*scroll_delta + step as f32 * 20.0).max(0.0);
-                }
-                _ => {}
-            },
-            AppCommand::LetterJump(forward) => {
-                if let AppState::Catalog(catalog) = &mut self.state {
-                    if catalog.focus_pane == FocusPane::Grid && catalog.jump_letter(forward) {
-                        self.audio.play(crate::audio::Sfx::Activation);
-                    }
                 }
             }
             AppCommand::FlipSortDirection => {
@@ -2640,10 +2758,16 @@ impl App {
                 }
                 if let AppState::Catalog(catalog) = &self.state {
                     if catalog.tab == StoreTab::Roms {
-                        if self.roms.sidebar_focus {
-                            if let Some(&(code, _)) = crate::roms::ROM_CONSOLES.get(self.roms.sidebar_cursor) {
+                        let on_other_console = self.roms.sidebar_focus
+                            && crate::roms::ROM_CONSOLES
+                                .get(self.roms.sidebar_cursor)
+                                .is_some_and(|console| console.code != self.roms.rom_type);
+                        if self.roms.failed && !on_other_console {
+                            self.roms.load_catalog();
+                        } else if self.roms.sidebar_focus {
+                            if let Some(console) = crate::roms::ROM_CONSOLES.get(self.roms.sidebar_cursor) {
                                 self.roms.sidebar_focus = false;
-                                return self.handle_command(AppCommand::RomsSelectConsole(code.to_owned()));
+                                return self.handle_command(AppCommand::RomsSelectConsole(console.code.to_owned()));
                             }
                         } else {
                             let filtered = self.roms.filtered_indices(&catalog.search_query);
@@ -2665,8 +2789,8 @@ impl App {
                 if matches!(self.state, AppState::Detail { uninstall_prompt: true, .. }) {
                     return self.handle_command(AppCommand::ConfirmUninstall);
                 }
-                if let AppState::Detail { lightbox: None, app, detail_focus, previous, .. } = &self.state {
-                    match detail_focus {
+                if let AppState::Detail { lightbox: None, app, detail_focus, previous, comments, verified_tab, .. } = &self.state {
+                    match *detail_focus {
                         DetailFocus::Author => {
                             return self.handle_command(AppCommand::MoreByAuthor(app.author.clone()));
                         }
@@ -2686,6 +2810,25 @@ impl App {
                                 });
                             }
                         }
+                        DetailFocus::Like => return self.handle_command(AppCommand::ToggleLike),
+                        DetailFocus::Report => return self.handle_command(AppCommand::RequestReport),
+                        DetailFocus::Comment => return self.handle_command(AppCommand::RequestCommentEntry),
+                        DetailFocus::Verify => return self.handle_command(AppCommand::OpenVerifyModal),
+                        DetailFocus::Rating(star) => return self.handle_command(AppCommand::RateCurrent(star)),
+                        DetailFocus::CommentTab => {
+                            let next = !*verified_tab;
+                            return self.handle_command(AppCommand::SetCommentTab(next));
+                        }
+                        DetailFocus::CommentReply(idx) => {
+                            let reply_id = comments
+                                .iter()
+                                .filter(|c| c.parent_id.is_none() && c.verified == *verified_tab && !c.id.is_empty())
+                                .nth(idx)
+                                .map(|c| c.id.clone());
+                            if let Some(id) = reply_id {
+                                return self.handle_command(AppCommand::RequestCommentReply(id));
+                            }
+                        }
                         DetailFocus::Primary => {
                             let primary = detail_actions::primary(app, self.installed.state(app));
                             return match &self.install {
@@ -2703,8 +2846,10 @@ impl App {
                 }
                 if let AppState::Catalog(catalog) = &mut self.state {
                     if catalog.focus_pane == FocusPane::Sidebar {
-                        catalog.leave_sidebar();
-                        self.audio.play(crate::audio::Sfx::Navigate);
+                        catalog.apply_sidebar_slot_at_cursor();
+                        if catalog.leave_sidebar() {
+                            self.audio.play(crate::audio::Sfx::Navigate);
+                        }
                         return Ok(());
                     }
                 }
@@ -2762,66 +2907,27 @@ impl App {
                     nav.sub = None;
                 }
             }
-            AppCommand::Input(InputCommand::CategoryPrev) => {
+            AppCommand::Input(step @ (InputCommand::CategoryPrev | InputCommand::CategoryNext)) => {
+                let AppState::Catalog(catalog) = &self.state else { return Ok(()) };
+                let groups = ContentTypeGroup::ALL;
+                // Library/Updates are footer-chip only: not in the ring, L/R leaves them as ROMs would.
+                let current = match catalog.tab {
+                    StoreTab::Categories => groups.iter().position(|&g| g == catalog.content_type_group).unwrap_or(0),
+                    StoreTab::Roms | StoreTab::Library | StoreTab::Updates => groups.len(),
+                };
+                let next = ring_step(current, groups.len() + 1, step == InputCommand::CategoryNext);
+                let command = match groups.get(next) {
+                    Some(&group) => AppCommand::SetContentTypeGroup(group),
+                    None => AppCommand::SetStoreTab(StoreTab::Roms),
+                };
+                self.handle_command(command)?;
+                // Moving by buttons must leave something highlighted.
                 if let AppState::Catalog(catalog) = &mut self.state {
-                    match catalog.tab {
-                        StoreTab::Categories => {
-                            let groups = ContentTypeGroup::ALL;
-                            let idx = groups
-                                .iter()
-                                .position(|&g| g == catalog.content_type_group)
-                                .unwrap_or(0);
-                            if idx == 0 {
-                                return self.handle_command(AppCommand::SetStoreTab(StoreTab::Updates));
-                            }
-                            catalog.set_content_type_group(groups[idx - 1]);
-                            self.audio.play(crate::audio::Sfx::TabTransition);
-                            return Ok(());
-                        }
-                        StoreTab::Library => {
-                            let last = ContentTypeGroup::ALL[ContentTypeGroup::ALL.len() - 1];
-                            catalog.tab = StoreTab::Categories;
-                            catalog.set_content_type_group(last);
-                            self.audio.play(crate::audio::Sfx::TabTransition);
-                            return Ok(());
-                        }
-                        StoreTab::Updates => {
-                            return self.handle_command(AppCommand::SetStoreTab(StoreTab::Library));
-                        }
-                        StoreTab::Roms => {
-                            return self.handle_command(AppCommand::SetStoreTab(StoreTab::Updates));
-                        }
-                    }
-                }
-            }
-            AppCommand::Input(InputCommand::CategoryNext) => {
-                if let AppState::Catalog(catalog) = &mut self.state {
-                    match catalog.tab {
-                        StoreTab::Categories => {
-                            let groups = ContentTypeGroup::ALL;
-                            let idx = groups
-                                .iter()
-                                .position(|&g| g == catalog.content_type_group)
-                                .unwrap_or(0);
-                            if idx + 1 >= groups.len() {
-                                return self.handle_command(AppCommand::SetStoreTab(StoreTab::Library));
-                            }
-                            catalog.set_content_type_group(groups[idx + 1]);
-                            self.audio.play(crate::audio::Sfx::TabTransition);
-                            return Ok(());
-                        }
-                        StoreTab::Library => {
-                            return self.handle_command(AppCommand::SetStoreTab(StoreTab::Updates));
-                        }
-                        StoreTab::Updates => {
-                            return self.handle_command(AppCommand::SetStoreTab(StoreTab::Roms));
-                        }
-                        StoreTab::Roms => {
-                            catalog.tab = StoreTab::Categories;
-                            catalog.set_content_type_group(ContentTypeGroup::Home);
-                            self.audio.play(crate::audio::Sfx::TabTransition);
-                            return Ok(());
-                        }
+                    if catalog.filtered_indices.is_empty() {
+                        catalog.enter_sidebar();
+                    } else {
+                        catalog.selection_active = true;
+                        catalog.selected = 0;
                     }
                 }
             }
@@ -2844,7 +2950,7 @@ impl App {
                                         self.audio.play(crate::audio::Sfx::Navigate);
                                     }
                                 }
-                                InputCommand::MoveRight => {
+                                InputCommand::MoveRight if filtered_len > 0 => {
                                     self.roms.sidebar_focus = false;
                                     self.audio.play(crate::audio::Sfx::Navigate);
                                 }
@@ -2853,10 +2959,9 @@ impl App {
                             return Ok(());
                         }
                         if filtered_len == 0 {
-                            if matches!(direction, InputCommand::MoveLeft) {
-                                self.roms.sidebar_focus = true;
-                                self.audio.play(crate::audio::Sfx::Navigate);
-                            }
+                            // Nothing to select here: hand the cursor back to the console list.
+                            self.roms.sidebar_focus = true;
+                            self.audio.play(crate::audio::Sfx::Navigate);
                             return Ok(());
                         }
                         let cur = self.roms.selected.min(filtered_len - 1);
@@ -2912,8 +3017,9 @@ impl App {
                                     }
                                 }
                                 InputCommand::MoveRight => {
-                                    catalog.leave_sidebar();
-                                    self.audio.play(crate::audio::Sfx::Navigate);
+                                    if catalog.leave_sidebar() {
+                                        self.audio.play(crate::audio::Sfx::Navigate);
+                                    }
                                 }
                                 InputCommand::MoveLeft => {}
                                 _ => {}
@@ -2925,8 +3031,8 @@ impl App {
                         let columns = grid_columns as isize;
                         let at_left_edge = !catalog.selection_active
                             || catalog.selected % grid_columns == 0;
-                        if matches!(direction, InputCommand::MoveLeft)
-                            && at_left_edge
+                        if (catalog.filtered_indices.is_empty()
+                            || (matches!(direction, InputCommand::MoveLeft) && at_left_edge))
                             && catalog.shows_sidebar()
                         {
                             catalog.enter_sidebar();
@@ -2949,65 +3055,100 @@ impl App {
                         scroll_delta,
                         detail_focus,
                         app,
+                        previous,
+                        comments,
+                        verified_tab,
                         lightbox: None,
                         data_prompt: false,
                         uninstall_prompt: false,
                         ..
                     } => {
+                        // Only move to things that are actually on screen.
                         let has_shots = !app.screenshot_urls.is_empty();
-                        match direction {
-                            InputCommand::MoveRight => {
-                                if *detail_focus == DetailFocus::Primary || *detail_focus == DetailFocus::Author {
-                                    *detail_focus = if has_shots {
-                                        DetailFocus::Screenshots
-                                    } else {
-                                        DetailFocus::Requirements
-                                    };
-                                    self.audio.play(crate::audio::Sfx::Navigate);
-                                }
+                        // The "Get" button is only drawn for an installed app.
+                        let has_dep = self.installed.state(app) != crate::install::installed::InstallState::Absent
+                            && crate::install::requirements::cached_missing_dependency(&app.id, &previous.apps).is_some();
+                        let has_social = app.platform != data::Platform::Theme && app.source_catalog != "roms";
+                        let side = if has_shots {
+                            Some(DetailFocus::Screenshots)
+                        } else {
+                            has_dep.then_some(DetailFocus::Requirements)
+                        };
+                        let can_verify = self.verification.as_ref().is_some_and(|(id, v)| *id == app.id && v.can_verify);
+                        let replyable_count = comments
+                            .iter()
+                            .filter(|c| c.parent_id.is_none() && c.verified == *verified_tab && !c.id.is_empty())
+                            .count();
+                        let initial_star = app.user_rating.unwrap_or(5).clamp(1, 5);
+                        let max = self.detail_max_scroll;
+                        let rating_at = self.detail_rating_at.min(max);
+                        use DetailFocus as F;
+                        use InputCommand as I;
+                        let next = match (direction, *detail_focus) {
+                            (I::MoveRight, F::Like) => Some(F::Report),
+                            (I::MoveRight, F::Report) => Some(F::Comment),
+                            (I::MoveRight, F::Comment) if can_verify => Some(F::Verify),
+                            (I::MoveRight, F::Rating(star)) => Some(F::Rating((star + 1).min(5))),
+                            (I::MoveRight, F::CommentTab) => {
+                                *verified_tab = !*verified_tab;
+                                self.audio.play(crate::audio::Sfx::Navigate);
+                                None
                             }
-                            InputCommand::MoveLeft => {
-                                if *detail_focus == DetailFocus::Screenshots
-                                    || *detail_focus == DetailFocus::Requirements
-                                {
-                                    *detail_focus = DetailFocus::Primary;
-                                    self.audio.play(crate::audio::Sfx::Navigate);
-                                }
+                            (I::MoveRight, F::Primary | F::Author | F::Comment | F::Verify) => side,
+                            (I::MoveLeft, F::Verify) => Some(F::Comment),
+                            (I::MoveLeft, F::Comment) => Some(F::Report),
+                            (I::MoveLeft, F::Report) => Some(F::Like),
+                            (I::MoveLeft, F::Rating(star)) => Some(F::Rating(star.saturating_sub(1).max(1))),
+                            (I::MoveLeft, F::CommentTab) => {
+                                *verified_tab = !*verified_tab;
+                                self.audio.play(crate::audio::Sfx::Navigate);
+                                None
                             }
-                            InputCommand::MoveUp => match *detail_focus {
-                                DetailFocus::Primary => {
-                                    if *scroll_delta <= 0.0 {
-                                        *detail_focus = DetailFocus::Author;
-                                        self.audio.play(crate::audio::Sfx::Navigate);
-                                    } else {
-                                    *scroll_delta = (*scroll_delta - 60.0).max(0.0);
-                                    self.audio.play(crate::audio::Sfx::Navigate);
-                                    }
+                            (I::MoveLeft, F::Screenshots | F::Requirements) => Some(F::Primary),
+                            (I::MoveUp, F::Primary) if *scroll_delta > 0.0 => {
+                                *scroll_delta = (scroll_delta.min(max) - 60.0).max(0.0);
+                                self.audio.play(crate::audio::Sfx::Navigate);
+                                None
+                            }
+                            (I::MoveUp, F::Primary) => Some(if has_social { F::Like } else { F::Author }),
+                            (I::MoveUp, F::Like | F::Report | F::Comment | F::Verify) => Some(F::Author),
+                            (I::MoveUp, F::Requirements) => Some(if has_shots { F::Screenshots } else { F::Primary }),
+                            (I::MoveUp, F::Screenshots) => Some(F::Primary),
+                            (I::MoveUp, F::Rating(_)) => Some(F::Primary),
+                            (I::MoveUp, F::CommentTab) => Some(F::Rating(initial_star)),
+                            (I::MoveUp, F::CommentReply(0)) => Some(F::CommentTab),
+                            (I::MoveUp, F::CommentReply(i)) => Some(F::CommentReply(i - 1)),
+                            (I::MoveDown, F::Author) => Some(if has_social { F::Like } else { F::Primary }),
+                            (I::MoveDown, F::Like | F::Report | F::Comment | F::Verify) => Some(F::Primary),
+                            // Hand over as soon as the stars are on screen, so focus never jumps backwards.
+                            (I::MoveDown, F::Primary) if has_social && *scroll_delta >= rating_at - 0.5 => Some(F::Rating(initial_star)),
+                            (I::MoveDown, F::Primary) if *scroll_delta < max - 0.5 => {
+                                *scroll_delta = (*scroll_delta + 60.0).min(max);
+                                self.audio.play(crate::audio::Sfx::Navigate);
+                                None
+                            }
+                            (I::MoveDown, F::Primary) => {
+                                // Bottom of the page: carry on to the right column, which sits at the top.
+                                if side.is_some() {
+                                    *scroll_delta = 0.0;
                                 }
-                                DetailFocus::Requirements => {
-                                    if has_shots {
-                                        *detail_focus = DetailFocus::Screenshots;
-                                        self.audio.play(crate::audio::Sfx::Navigate);
-                                    }
-                                }
-                                _ => {}
-                            },
-                            InputCommand::MoveDown => match *detail_focus {
-                                DetailFocus::Author => {
-                                    *detail_focus = DetailFocus::Primary;
-                                    self.audio.play(crate::audio::Sfx::Navigate);
-                                }
-                                DetailFocus::Primary => {
-                                    *scroll_delta += 60.0;
-                                    self.audio.play(crate::audio::Sfx::Navigate);
-                                }
-                                DetailFocus::Screenshots => {
-                                    *detail_focus = DetailFocus::Requirements;
-                                    self.audio.play(crate::audio::Sfx::Navigate);
-                                }
-                                _ => {}
-                            },
-                            _ => {}
+                                side
+                            }
+                            (I::MoveDown, F::Rating(_)) => Some(F::CommentTab),
+                            (I::MoveDown, F::CommentTab) if replyable_count > 0 => Some(F::CommentReply(0)),
+                            (I::MoveDown, F::CommentReply(i)) if i + 1 < replyable_count => Some(F::CommentReply(i + 1)),
+                            (I::MoveDown, F::Screenshots) => has_dep.then_some(F::Requirements),
+                            // Nothing left to focus below: keep reading to the end of the page.
+                            (I::MoveDown, F::CommentTab | F::CommentReply(_)) if *scroll_delta < max - 0.5 => {
+                                *scroll_delta = (*scroll_delta + 60.0).min(max);
+                                self.audio.play(crate::audio::Sfx::Navigate);
+                                None
+                            }
+                            _ => None,
+                        };
+                        if let Some(next) = next {
+                            *detail_focus = next;
+                            self.audio.play(crate::audio::Sfx::Navigate);
                         }
                     }
                     AppState::Settings { nav, .. } => {
@@ -3062,65 +3203,35 @@ impl App {
                 }
             }
             AppCommand::SelectApp { index } => self.open_app(index),
-            AppCommand::SelectAppById(id) => self.open_app_by_id(&id),
-            AppCommand::RomsSetQuery(q) => {
-                self.roms.query = q;
-            }
-            AppCommand::RomsLoadCatalog => {
-                self.roms.load_catalog();
-            }
             AppCommand::RomsSelectConsole(console) => {
                 if self.roms.rom_type != console {
                     self.roms.rom_type = console;
                     self.roms.genre_filter = None;
+                    self.roms.region_filter = None;
+                    self.roms.genre_counts.clear();
+                    self.roms.region_counts.clear();
                     self.roms.selected = 0;
                     self.roms.entries.clear();
+                    self.roms.tiles.clear();
+                    self.roms.scroll_to_selected = true;
                     self.roms.etag = None;
                     self.roms.loading = false;
                     self.roms.load_catalog();
                 }
+            }
+            AppCommand::RomsSetRegion(region) => {
+                self.roms.region_filter = region;
+                self.roms.selected = 0;
+                self.roms.scroll_to_selected = true;
             }
             AppCommand::RomsSetGenre(genre) => {
                 self.roms.genre_filter = genre;
                 self.roms.selected = 0;
                 self.roms.scroll_to_selected = true;
             }
-            AppCommand::SetRoms3dsDir(dir) => {
-                self.roms_3ds_dir = dir.clone();
-                data::settings::set_roms_3ds_dir(dir);
-            }
             AppCommand::RomsOpen(idx) => {
                 if let Some(entry) = self.roms.entries.get(idx).map(|r| r.to_app_entry(&self.roms.rom_type)) {
                     self.open_entry(entry, None);
-                }
-            }
-            AppCommand::RomsDownload(idx) => {
-                if let Some(entry) = self.roms.entries.get(idx).cloned() {
-                    let (tx, rx) = watch::channel(crate::install::Progress::Resolving);
-                    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-                    let cancel_bg = cancel.clone();
-                    self.roms.download_title = Some(entry.title.clone());
-                    self.roms.download_progress = crate::install::Progress::Resolving;
-                    self.roms.download_rx = Some(rx);
-                    self.roms.download_cancel = Some(cancel);
-                    let storage = std::path::PathBuf::from(crate::roms::AZAHAR_ROMS_DIR);
-                    tokio::spawn(async move {
-                        if let Err(err) = crate::roms::download_rom(
-                            &entry,
-                            &storage,
-                            &tx,
-                            &cancel_bg,
-                        )
-                        .await
-                        {
-                            let _ = tx.send(crate::install::Progress::Failed(format!("{err:#}")));
-                        }
-                    });
-                }
-            }
-            AppCommand::RomsCancelDownload => {
-                if let Some(cancel) = &self.roms.download_cancel {
-                    cancel.store(true, std::sync::atomic::Ordering::Relaxed);
                 }
             }
             AppCommand::SetStoreTab(tab) => {
@@ -3466,7 +3577,7 @@ impl App {
                     self.audio.play(crate::audio::Sfx::ShowModal);
                 }
             }
-            AppCommand::VerifyActivate(_) | AppCommand::CloseVerifyModal | AppCommand::SubmitVerifyText(_) | AppCommand::CloseVerifyEntry => {}
+            AppCommand::VerifyActivate(_) | AppCommand::SubmitVerifyText(_) | AppCommand::CloseVerifyEntry => {}
             AppCommand::SubmitVerification { score, installs_ok, works_ok, note } => {
                 if let AppState::Detail { app, .. } = &self.state
                     && self.verification.as_ref().is_some_and(|(_, v)| v.can_verify)
@@ -3501,15 +3612,11 @@ impl App {
                 if let Some(target) = self.auth_input_target.take() {
                     match target {
                         crate::input::TextTarget::AuthUsername => self.auth_form.username = text.trim().to_owned(),
-                        crate::input::TextTarget::Roms3dsDir => {
-                            let dir = text.trim().trim_end_matches('/');
-                            let value = if dir.is_empty() {
-                                crate::roms::AZAHAR_ROMS_DIR.to_owned()
-                            } else {
-                                dir.to_owned()
-                            };
-                            self.roms_3ds_dir = value.clone();
-                            data::settings::set_roms_3ds_dir(value);
+                        crate::input::TextTarget::RomsDir(index) => {
+                            if let Some(console) = crate::roms::ROM_CONSOLES.get(index as usize) {
+                                data::settings::set_roms_dir(console.code, &text);
+                                self.roms_dirs[index as usize] = data::settings::roms_dir(console.code);
+                            }
                         }
                         crate::input::TextTarget::AuthPassword => self.auth_form.password = text,
                         crate::input::TextTarget::AuthEmail => self.auth_form.email = text.trim().to_owned(),
@@ -3681,21 +3788,6 @@ impl App {
         let Some(entry) = entry else { return };
         self.open_entry(entry, Some(filtered_index));
     }
-    fn open_app_by_id(&mut self, id: &str) {
-        let entry = match &self.state {
-            AppState::Catalog(catalog) => catalog.apps.iter().find(|app| app.id == id).cloned(),
-            _ => None,
-        };
-        let Some(entry) = entry else { return };
-        let filtered_index = match &self.state {
-            AppState::Catalog(catalog) => catalog
-                .filtered_indices
-                .iter()
-                .position(|&idx| catalog.apps.get(idx).is_some_and(|app| app.id == id)),
-            _ => None,
-        };
-        self.open_entry(entry, filtered_index);
-    }
     fn open_entry(&mut self, entry: AppEntry, filtered_index: Option<usize>) {
         let placeholder = AppState::Detail {
             app: entry.clone(),
@@ -3710,6 +3802,7 @@ impl App {
             uninstall_prompt: false,
             lightbox: None,
             detail_focus: DetailFocus::Primary,
+            verified_tab: false,
         };
         let AppState::Catalog(mut catalog) = std::mem::replace(&mut self.state, placeholder) else {
             unreachable!("checked above that self.state is Catalog")
@@ -3765,10 +3858,12 @@ impl App {
             uninstall_prompt: false,
             lightbox: None,
             detail_focus: DetailFocus::Primary,
+            verified_tab: false,
         };
         self.audio.play(crate::audio::Sfx::IntoDetail);
     }
     pub fn clear_one_shot_ui_state(&mut self) {
+        self.roms.scroll_to_selected = false;
         match &mut self.state {
             AppState::Catalog(catalog) => {
                 catalog.scroll_to_selected = false;
@@ -3965,25 +4060,6 @@ mod sort_tests {
         assert!(catalog.selection_active);
     }
 
-    #[test]
-    fn jump_letter_steps_forward_and_back() {
-        let mut a = entry("1", "vdb", 0, 0, 0.0, "");
-        a.name = "Aardvark".into();
-        let mut b = entry("2", "vdb", 0, 0, 0.0, "");
-        b.name = "Bear".into();
-        let mut c = entry("3", "vdb", 0, 0, 0.0, "");
-        c.name = "Cat".into();
-        let mut catalog = CatalogState::new(vec![a, b, c]);
-        catalog.filtered_indices = vec![0, 1, 2];
-        catalog.selected = 0;
-        assert!(catalog.jump_letter(true));
-        assert_eq!(catalog.selected, 1);
-        assert!(catalog.jump_letter(true));
-        assert_eq!(catalog.selected, 2);
-        assert!(catalog.jump_letter(false));
-        assert_eq!(catalog.selected, 1);
-    }
-
     fn entry_titled(id: &str, titleid: &str, source_catalog: &str, downloads: u64) -> AppEntry {
         let mut e = entry(id, source_catalog, 1_000_000, downloads, 4.0, "2024-06-01");
         e.titleid = titleid.to_owned();
@@ -4044,6 +4120,24 @@ mod sort_tests {
         assert_eq!(ids.len(), 2);
         assert!(ids.contains(&"hb".to_owned()));
         assert!(ids.contains(&"nps".to_owned()));
+    }
+
+    #[test]
+    fn moving_through_the_sidebar_keeps_the_platform() {
+        use crate::app::ui::sidebar::{sidebar_slots, SidebarSlot};
+        use crate::data::Category;
+        let mut state = CatalogState::new(vec![entry("1", "vitadb", 10, 100, 4.0, "2026-01-01")]);
+        state.group_category_counts = vec![(Category::PsVitaGame, 1), (Category::Port, 0)];
+        state.category_filter = Some(Category::PsVitaGame);
+        state.sync_sidebar_cursor();
+        let featured = sidebar_slots(&state.group_category_counts).iter().position(|&s| s == SidebarSlot::Featured).unwrap();
+        while state.sidebar_cursor < featured {
+            assert!(state.move_sidebar_cursor(1));
+        }
+        assert_eq!(state.category_filter, Some(Category::PsVitaGame));
+        state.apply_sidebar_slot_at_cursor();
+        assert_eq!(state.category_filter, Some(Category::PsVitaGame));
+        assert_eq!(state.sort_order, SortOrder::Rating);
     }
 
     #[test]

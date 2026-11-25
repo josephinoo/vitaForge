@@ -20,11 +20,14 @@ pub struct Settings {
     pub theme: crate::app::ui::theme::ThemeId,
     #[serde(default = "default_roms_3ds_dir")]
     pub roms_3ds_dir: String,
+    /// Folder overrides by console code. 3DS predates this and keeps its own field.
+    #[serde(default)]
+    pub roms_dirs: std::collections::BTreeMap<String, String>,
 }
 
 const fn default_install_notifications() -> bool { true }
 const fn default_sound_effects() -> bool { true }
-fn default_roms_3ds_dir() -> String { crate::roms::AZAHAR_ROMS_DIR.to_owned() }
+fn default_roms_3ds_dir() -> String { crate::roms::default_dir("3ds") }
 
 impl Default for Settings {
     fn default() -> Self {
@@ -36,6 +39,7 @@ impl Default for Settings {
             sound_effects: true,
             theme: Default::default(),
             roms_3ds_dir: default_roms_3ds_dir(),
+            roms_dirs: Default::default(),
         }
     }
 }
@@ -64,25 +68,37 @@ pub fn set_sound_effects(enabled: bool) {
     save(&settings);
 }
 
-pub fn set_roms_3ds_dir(dir: String) {
-    let trimmed = dir.trim();
-    let value = if trimmed.is_empty() {
-        crate::roms::AZAHAR_ROMS_DIR.to_owned()
-    } else {
-        trimmed.trim_end_matches('/').to_owned()
-    };
+/// An empty `dir` goes back to the console's default.
+pub fn set_roms_dir(rom_type: &str, dir: &str) {
+    let dir = dir.trim().trim_end_matches('/');
     let mut settings = load();
-    settings.roms_3ds_dir = value;
+    if rom_type == "3ds" {
+        settings.roms_3ds_dir = dir.to_owned();
+    } else {
+        settings.roms_dirs.insert(rom_type.to_owned(), dir.to_owned());
+    }
     save(&settings);
 }
 
-pub fn roms_3ds_dir() -> String {
-    let dir = load().roms_3ds_dir;
-    if dir.trim().is_empty() {
-        crate::roms::AZAHAR_ROMS_DIR.to_owned()
+pub fn roms_dir(rom_type: &str) -> String {
+    dir_in(&load(), rom_type)
+}
+
+/// Every console's folder, in `ROM_CONSOLES` order.
+pub fn all_roms_dirs(settings: &Settings) -> Vec<String> {
+    crate::roms::ROM_CONSOLES.iter().map(|c| dir_in(settings, c.code)).collect()
+}
+
+fn dir_in(settings: &Settings, rom_type: &str) -> String {
+    let saved = if rom_type == "3ds" {
+        Some(&settings.roms_3ds_dir)
     } else {
-        dir
-    }
+        settings.roms_dirs.get(rom_type)
+    };
+    saved
+        .filter(|dir| !dir.trim().is_empty())
+        .cloned()
+        .unwrap_or_else(|| crate::roms::default_dir(rom_type))
 }
 
 static SETTINGS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());

@@ -53,9 +53,9 @@ pub(crate) fn loading_screen(
                         if let Some(progress) = install_progress {
                             let tag = self_update.map_or("", |u| u.tag.as_str());
                             let title = if tag.is_empty() {
-                                "Installing...".to_owned()
+                                lang.tr("loading-installing")
                             } else {
-                                format!("Updating VitaForge {tag}...")
+                                lang.tr_args("loading-updating", &[("tag", tag)])
                             };
                             ui.label(
                                 egui::RichText::new(title)
@@ -71,9 +71,7 @@ pub(crate) fn loading_screen(
                             );
                         } else {
                             ui.label(
-                                egui::RichText::new(
-                                    "Bringing catalog information from databases...",
-                                )
+                                egui::RichText::new(lang.tr("loading-catalog"))
                                 .color(pal().text_dim)
                                 .size(FONT_BODY),
                             );

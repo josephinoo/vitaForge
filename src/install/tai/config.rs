@@ -154,11 +154,6 @@ impl TaiConfig {
         self.entries().into_iter().find(|e| e.section.as_deref() == Some(section) && same_path(&e.path, path))
     }
 
-    /// Every section that lists `path`, enabled or not.
-    pub fn sections_of(&self, path: &str) -> Vec<EntryView> {
-        self.entries().into_iter().filter(|e| same_path(&e.path, path)).collect()
-    }
-
     fn editable(&self, line: usize) -> Result<EntryView> {
         let Some(entry) = self.entry(line) else { bail!("that line is not a plugin") };
         if entry.protected {

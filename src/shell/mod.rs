@@ -17,14 +17,15 @@ mod vgl;
 pub(crate) mod vgl_splash_stub;
 #[cfg(target_os = "vita")]
 mod gl_egui_painter;
+#[cfg(not(target_os = "vita"))]
 mod egui_painter;
 mod ime;
 mod surface;
 use crate::app::App;
 use crate::app::ui::build_ui;
 use crate::input::{
-    AppCommand, Pointer, TextTarget, held_stick_direction, map_controller_button_event,
-    map_keyboard_event, open_first_controller, register_vita_controller_mapping, right_stick_axes,
+    AppCommand, Pointer, TextTarget, held_direction_of, map_controller_button_event,
+    map_keyboard_event, open_first_controller, register_vita_controller_mapping,
 };
 use anyhow::Result;
 use std::time::{Duration, Instant};
@@ -84,8 +85,6 @@ pub fn run(mut app: App) -> Result<()> {
     let mut held_direction = None;
     let mut held_since = Instant::now();
     let mut last_repeat_at = Instant::now();
-    let mut last_right_step = Instant::now();
-    let mut last_right_jump = Instant::now();
     let mut last_state_kind = std::mem::discriminant(&app.state);
     let mut transition_started_at = Instant::now();
     const SCREEN_FADE_SECS: f32 = 0.15;
@@ -176,7 +175,7 @@ pub fn run(mut app: App) -> Result<()> {
                         TextTarget::ProfileName => {
                             app.handle_command(AppCommand::SubmitProfileName(text))?;
                         }
-                        TextTarget::AuthUsername | TextTarget::AuthPassword | TextTarget::AuthEmail | TextTarget::Roms3dsDir => {
+                        TextTarget::AuthUsername | TextTarget::AuthPassword | TextTarget::AuthEmail | TextTarget::RomsDir(_) => {
                             app.handle_command(AppCommand::SubmitAuthInput(text))?;
                         }
                         TextTarget::VerifyScore | TextTarget::VerifyNote => {
@@ -193,7 +192,7 @@ pub fn run(mut app: App) -> Result<()> {
                     TextTarget::Comment => app.handle_command(AppCommand::CloseCommentEntry)?,
                     TextTarget::Report => app.handle_command(AppCommand::CloseReportEntry)?,
                     TextTarget::ProfileName => app.handle_command(AppCommand::CloseProfileEntry)?,
-                    TextTarget::AuthUsername | TextTarget::AuthPassword | TextTarget::AuthEmail | TextTarget::Roms3dsDir => {
+                    TextTarget::AuthUsername | TextTarget::AuthPassword | TextTarget::AuthEmail | TextTarget::RomsDir(_) => {
                         app.handle_command(AppCommand::CloseAuthInput)?
                     }
                     TextTarget::VerifyScore | TextTarget::VerifyNote => app.handle_command(AppCommand::CloseVerifyEntry)?,
@@ -216,26 +215,8 @@ pub fn run(mut app: App) -> Result<()> {
         let fade_alpha = fade_t * fade_t * (3.0 - 2.0 * fade_t);
         surface.set_frame_alpha(0.82 + 0.18 * fade_alpha);
         if ime.is_none() {
-            let (rx, ry) = right_stick_axes(controller.as_ref());
-            if rx != 0.0 || ry != 0.0 {
-                app.last_input_at = Instant::now();
-            }
-            if ry != 0.0 {
-                if matches!(app.state, crate::app::AppState::Detail { .. }) {
-                    direct_commands.push(AppCommand::AnalogScroll(ry * 14.0));
-                } else if last_right_step.elapsed() >= Duration::from_millis(160) {
-                    let step = if ry > 0.0 { 10 } else { -10 };
-                    direct_commands.push(AppCommand::PageStep(step));
-                    last_right_step = Instant::now();
-                }
-            }
-            if rx != 0.0 && last_right_jump.elapsed() >= Duration::from_millis(220) {
-                direct_commands.push(AppCommand::LetterJump(rx > 0.0));
-                last_right_jump = Instant::now();
-            }
-
-            match held_stick_direction(controller.as_ref()) {
-                Some(direction) if held_direction == Some(direction) => {
+            match held_direction_of(controller.as_ref(), held_direction) {
+                Some((direction, _)) if held_direction == Some(direction) => {
                     app.last_input_at = Instant::now();
                     if held_since.elapsed() >= STICK_REPEAT_DELAY
                         && last_repeat_at.elapsed() >= STICK_REPEAT_INTERVAL
@@ -244,9 +225,11 @@ pub fn run(mut app: App) -> Result<()> {
                         last_repeat_at = Instant::now();
                     }
                 }
-                Some(direction) => {
+                Some((direction, from_dpad)) => {
                     app.last_input_at = Instant::now();
-                    direct_commands.push(direction.into());
+                    if !from_dpad {
+                        direct_commands.push(direction.into());
+                    }
                     held_direction = Some(direction);
                     held_since = Instant::now();
                     last_repeat_at = Instant::now();
@@ -363,7 +346,7 @@ pub fn run(mut app: App) -> Result<()> {
                 TextTarget::AuthEmail => ime::ImePurpose::AuthEmail,
                 TextTarget::VerifyScore => ime::ImePurpose::VerifyScore,
                 TextTarget::VerifyNote => ime::ImePurpose::VerifyNote,
-                TextTarget::Roms3dsDir => ime::ImePurpose::ProfileName,
+                TextTarget::RomsDir(_) => ime::ImePurpose::ProfileName,
             };
             let query_before = match &app.state {
                 crate::app::AppState::Catalog(catalog) => catalog.search_query.clone(),
@@ -394,8 +377,8 @@ pub fn run(mut app: App) -> Result<()> {
                     initial_string = app.verify_modal.as_ref().map(|d| d.note.clone()).unwrap_or_default();
                     initial_string.as_str()
                 }
-                TextTarget::Roms3dsDir => {
-                    initial_string = app.roms_3ds_dir.clone();
+                TextTarget::RomsDir(index) => {
+                    initial_string = app.roms_dirs.get(index as usize).cloned().unwrap_or_default();
                     initial_string.as_str()
                 }
             };
@@ -411,7 +394,7 @@ pub fn run(mut app: App) -> Result<()> {
                     TextTarget::Comment => app.handle_command(AppCommand::CloseCommentEntry)?,
                     TextTarget::Report => app.handle_command(AppCommand::CloseReportEntry)?,
                     TextTarget::ProfileName => app.handle_command(AppCommand::CloseProfileEntry)?,
-                    TextTarget::AuthUsername | TextTarget::AuthPassword | TextTarget::AuthEmail | TextTarget::Roms3dsDir => {
+                    TextTarget::AuthUsername | TextTarget::AuthPassword | TextTarget::AuthEmail | TextTarget::RomsDir(_) => {
                         app.handle_command(AppCommand::CloseAuthInput)?
                     }
                     TextTarget::VerifyScore | TextTarget::VerifyNote => app.handle_command(AppCommand::CloseVerifyEntry)?,

@@ -41,6 +41,8 @@ const PLUGIN_DIR: &str = "ux0:data/vitaforge/plugins";
 #[derive(Clone, Debug, PartialEq)]
 pub enum Progress {
     Resolving,
+    /// Wi-Fi dropped mid-transfer; resumes by itself.
+    WaitingForNetwork,
     DownloadingData {
         received: u64,
         total: Option<u64>,
@@ -73,6 +75,8 @@ pub enum Progress {
     Done,
     RebootRequired,
     Restarting,
+    /// Shown by the UI between the confirmed cancel and the worker's end; never sent by it.
+    Cancelling,
     Failed(String),
 }
 pub const CANCELLED_MESSAGE: &str = "cancelled";
@@ -104,6 +108,7 @@ impl Progress {
         let text = |id: &str| lang.tr(id);
         match self {
             Self::Resolving => text("progress-resolving"),
+            Self::WaitingForNetwork => text("progress-waiting-network"),
             Self::Downloading { received, total, elapsed_secs }
             | Self::DownloadingData { received, total, elapsed_secs } => {
                 let phase = if matches!(self, Self::DownloadingData { .. }) {
@@ -142,6 +147,7 @@ impl Progress {
             Self::Done => text("progress-done"),
             Self::RebootRequired => text("progress-reboot"),
             Self::Restarting => text("progress-restarting"),
+            Self::Cancelling => text("progress-cancelling"),
             Self::Failed(err) if err == CANCELLED_MESSAGE => text("progress-cancelled"),
             Self::Failed(err) if err == PLUGIN_PENDING_MESSAGE => lang.plugin_pending().to_owned(),
             Self::Failed(err) => format!("{}: {err}", text("progress-failed")),
@@ -175,7 +181,7 @@ impl Progress {
         )
     }
     pub fn is_cancellable(&self) -> bool {
-        !self.is_finished() && !matches!(self, Progress::Installing { .. })
+        !self.is_finished() && !matches!(self, Progress::Installing { .. } | Progress::Cancelling)
     }
 }
 
@@ -224,6 +230,10 @@ pub fn process_pending_bgdl() {
         let Some(pending) = PENDING_BGDL.lock().unwrap().pop_front() else {
             return;
         };
+        // The waiter was cancelled: don't queue what the user backed out of.
+        if pending.done.is_closed() {
+            continue;
+        }
         #[cfg(target_os = "vita")]
         let result = bgdl::start_bgdl(
             &pending.title,
@@ -253,8 +263,13 @@ fn check_cancelled(cancel: &AtomicBool) -> Result<()> {
     }
     Ok(())
 }
+/// Game data is a zip that sits on the card next to its extracted files, hence 2.25x plus slack.
 fn required_bytes(size_bytes: u64, data_size_bytes: u64) -> u64 {
-    size_bytes.saturating_add(data_size_bytes).saturating_mul(2)
+    let data = match data_size_bytes {
+        0 => 0,
+        n => n.saturating_mul(2).saturating_add(n / 4).saturating_add(64 * 1024 * 1024),
+    };
+    size_bytes.saturating_mul(2).saturating_add(data)
 }
 fn shortfall(size_bytes: u64, data_size_bytes: u64, storage: Option<(u64, u64)>) -> Option<(u64, u64)> {
     let required = required_bytes(size_bytes, data_size_bytes);
@@ -282,6 +297,10 @@ fn check_free_space(
     data_size_bytes: u64,
     storage: Option<(u64, u64)>,
 ) -> Result<()> {
+    // A failed card query must not start an install that may run out halfway.
+    if storage.is_none() && cfg!(target_os = "vita") {
+        bail!("couldn't check the free space on the memory card, please try again");
+    }
     if let Some((required, available)) = shortfall(size_bytes, data_size_bytes, storage) {
         bail!(
             "not enough free space: {} required, {} available",
@@ -476,15 +495,17 @@ pub fn start(entry: AppEntry) -> (watch::Receiver<Progress>, Arc<AtomicBool>) {
             Err(err) => {
                 log_file(&format!("Install FAILED for '{}': {err:#}", entry.name));
                 eprintln!("install failed: {err:#}");
-                let cancelled = err.to_string() == CANCELLED_MESSAGE;
+                // The flag too: wrapped errors ("couldn't download the required game data") hide the message.
+                let cancelled = cancel_worker.load(Ordering::Relaxed) || err.to_string() == CANCELLED_MESSAGE;
                 let last = tx.borrow().clone();
                 let mid_download = matches!(
                     last,
                     Progress::Resolving
+                        | Progress::WaitingForNetwork
                         | Progress::Downloading { .. }
                         | Progress::DownloadingData { .. }
                 );
-                let mut message = format!("{err}");
+                let mut message = if cancelled { CANCELLED_MESSAGE.to_owned() } else { format!("{err}") };
                 let _ = std::fs::remove_dir_all(EXTRACT_DIR);
                 let _ = std::fs::remove_dir_all(DATA_STAGE_DIR);
                 if mid_download && !cancelled {
@@ -495,6 +516,9 @@ pub fn start(entry: AppEntry) -> (watch::Receiver<Progress>, Arc<AtomicBool>) {
                     }
                 } else {
                     discard_downloads();
+                }
+                if cancelled {
+                    discard_data_download(&temp_data_path(&entry));
                 }
                 installed::clear_pending_install(&installed::index_key(&entry));
                 Progress::Failed(message)
@@ -536,7 +560,7 @@ async fn run(
         crate::data::Platform::Psp => run_psp(entry, tx, cancel).await,
         crate::data::Platform::Plugin => run_plugin(entry, tx, cancel).await,
         crate::data::Platform::Theme => theme::run(entry, tx, cancel).await,
-        crate::data::Platform::NpsVita => run_nps_vita(entry, tx).await,
+        crate::data::Platform::NpsVita => download::or_cancelled(cancel, run_nps_vita(entry, tx)).await,
         crate::data::Platform::NpsPsp | crate::data::Platform::NpsPsx => {
             bail!("PSP/PS1 installs are temporarily unavailable")
         }
@@ -1087,7 +1111,7 @@ async fn run_vita(
     let _ = tx.send(Progress::Resolving);
     let resolving = std::time::Instant::now();
     let url = match entry.source.as_deref() {
-        Some(repo) => match github::latest_release(repo).await {
+        Some(repo) => match download::or_cancelled(cancel, async { Ok(github::latest_release(repo).await) }).await? {
             Some(release) => {
                 println!("using github release {} for {}", release.tag, entry.name);
                 release.vpk_url
@@ -1985,7 +2009,8 @@ mod tests {
     }
     #[test]
     fn required_space_accounts_for_download_and_extraction() {
-        assert_eq!(required_bytes(100, 50), 300);
+        assert_eq!(required_bytes(100, 0), 200);
+        assert_eq!(required_bytes(100, 400), 200 + 900 + 64 * 1024 * 1024);
         assert_eq!(required_bytes(0, 0), 0);
         assert_eq!(required_bytes(u64::MAX, 1), u64::MAX);
     }
@@ -1996,8 +2021,8 @@ mod tests {
     }
     #[test]
     fn compares_required_space_with_available_space() {
-        assert!(check_free_space(100, 50, Some((700, 1_000))).is_ok());
-        let error = check_free_space(100, 50, Some((701, 1_000))).unwrap_err();
+        assert!(check_free_space(150, 0, Some((700, 1_000))).is_ok());
+        let error = check_free_space(150, 0, Some((701, 1_000))).unwrap_err();
         assert_eq!(
             error.to_string(),
             "not enough free space: 300 B required, 299 B available"
