@@ -1,4 +1,5 @@
 pub mod detail_actions;
+pub mod disk_lru;
 pub mod i18n;
 pub mod icons;
 pub mod sysinfo;

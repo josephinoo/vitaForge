@@ -1,4 +1,5 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use crate::app::disk_lru::{self, DiskLru};
+use std::collections::{HashMap, VecDeque};
 use std::io::Cursor;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -72,7 +73,7 @@ fn texture_name(url: &str, max_side: u32) -> String {
 #[derive(Clone)]
 pub struct IconCache {
     entries: Arc<Mutex<HashMap<u32, Bucket>>>,
-    disk_index: Arc<Mutex<HashSet<String>>>,
+    disk_index: Arc<Mutex<DiskLru>>,
     fetch_limit: Arc<Semaphore>,
     decode_limit: Arc<Semaphore>,
     clock: Arc<Mutex<u64>>,
@@ -92,13 +93,12 @@ pub struct IconCache {
 impl IconCache {
     pub fn new() -> Self {
         let far_past = Instant::now() - LIVE_PRIORITY_WINDOW - Duration::from_secs(1);
-        let disk_index = Arc::new(Mutex::new(HashSet::new()));
+        let disk_index = Arc::new(Mutex::new(DiskLru::new(CACHE_DIR, disk_lru::MAX_BYTES)));
         let scan_into = disk_index.clone();
         std::thread::spawn(move || {
-            let scanned = scan_disk_index();
-            if let Ok(mut guard) = scan_into.lock() {
-                guard.extend(scanned);
-            }
+            let found = disk_lru::scan(std::path::Path::new(CACHE_DIR));
+            let pending = lock(&scan_into).load(found);
+            pending.run();
         });
         Self {
             entries: Arc::new(Mutex::new(HashMap::new())),
@@ -126,15 +126,13 @@ impl IconCache {
             .map(|g| g.contains(digest))
             .unwrap_or(false)
     }
-    fn disk_remember(&self, digest: String) {
-        if let Ok(mut g) = self.disk_index.lock() {
-            g.insert(digest);
-        }
+    /// Call off the render thread: it may delete old files.
+    fn disk_remember(&self, digest: String, size: u64) {
+        let pending = lock(&self.disk_index).insert(digest, size);
+        pending.run();
     }
     pub fn clear_disk_index(&self) {
-        if let Ok(mut g) = self.disk_index.lock() {
-            g.clear();
-        }
+        lock(&self.disk_index).clear();
     }
     pub fn set_gpu_backlog(&self, n: usize) {
         self.gpu_backlog.store(n, Ordering::Relaxed);
@@ -566,12 +564,13 @@ async fn warm_disk_cache(url: &str, cache: &IconCache) -> WarmOutcome {
         }
         FetchOutcome::Failed => return WarmOutcome::Continue,
     };
-    let wrote = tokio::task::spawn_blocking(move || write_cache_file(&path, &bytes).is_ok())
-        .await
-        .unwrap_or(false);
-    if wrote {
-        cache.disk_remember(digest);
-    }
+    let cache = cache.clone();
+    let _ = tokio::task::spawn_blocking(move || {
+        if write_cache_file(&path, &bytes).is_ok() {
+            cache.disk_remember(digest, bytes.len() as u64);
+        }
+    })
+    .await;
     WarmOutcome::Continue
 }
 fn prune_meta(entries: &mut HashMap<u32, Bucket>) {
@@ -669,36 +668,6 @@ fn evict_stale(
     ready_count.store(ready, Ordering::Relaxed);
     resident_bytes_atom.store(resident_bytes, Ordering::Relaxed);
 }
-fn scan_disk_index() -> HashSet<String> {
-    let mut out = HashSet::new();
-    let Ok(root) = std::fs::read_dir(CACHE_DIR) else {
-        return out;
-    };
-    for entry in root.flatten() {
-        let Ok(ft) = entry.file_type() else { continue };
-        if !ft.is_dir() {
-            continue;
-        }
-        let prefix = entry.file_name();
-        let prefix = prefix.to_string_lossy();
-        if prefix.len() != 2 {
-            continue;
-        }
-        let Ok(files) = std::fs::read_dir(entry.path()) else { continue };
-        for file in files.flatten() {
-            let Ok(ft) = file.file_type() else { continue };
-            if !ft.is_file() {
-                continue;
-            }
-            let name = file.file_name();
-            let name = name.to_string_lossy();
-            if name.len() == 30 && name.chars().all(|c| c.is_ascii_hexdigit()) {
-                out.insert(format!("{prefix}{name}"));
-            }
-        }
-    }
-    out
-}
 fn cache_digest(url: &str) -> Option<String> {
     use md5::Digest;
     // wsrv.nl serves every image from `/?url=...`, so the query is the identity there.
@@ -710,10 +679,7 @@ fn cache_digest(url: &str) -> Option<String> {
     Some(digest.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 fn cache_path_for_digest(digest: &str) -> Option<PathBuf> {
-    if digest.len() != 32 {
-        return None;
-    }
-    Some(PathBuf::from(CACHE_DIR).join(&digest[..2]).join(&digest[2..]))
+    disk_lru::file_path(std::path::Path::new(CACHE_DIR), digest)
 }
 enum LoadOutcome {
     Ready(egui::ColorImage),
@@ -733,6 +699,8 @@ async fn load_icon(url: &str, max_side: u32, cache: &IconCache, skip_disk: bool)
             let Ok(_decode_permit) = cache.decode_limit.acquire().await else {
                 return LoadOutcome::Deferred { retry_in: RETRY_DEFERRED };
             };
+            let reader = cache.clone();
+            let read_digest = digest.clone().unwrap_or_default();
             let cached = tokio::task::spawn_blocking(move || {
                 let bytes = std::fs::read(&path).ok()?;
                 if bytes.is_empty() {
@@ -743,6 +711,9 @@ async fn load_icon(url: &str, max_side: u32, cache: &IconCache, skip_disk: bool)
                 if decoded.is_none() {
                     eprintln!("cached image {} didn't decode, dropping it", path.display());
                     let _ = std::fs::remove_file(&path);
+                } else {
+                    let pending = lock(&reader.disk_index).touch(&read_digest);
+                    pending.run();
                 }
                 decoded
             })
@@ -751,9 +722,7 @@ async fn load_icon(url: &str, max_side: u32, cache: &IconCache, skip_disk: bool)
                 Ok(Some(image)) => return LoadOutcome::Ready(image),
                 Ok(None) => {
                     if let Some(d) = digest.as_ref() {
-                        if let Ok(mut g) = cache.disk_index.lock() {
-                            g.remove(d);
-                        }
+                        lock(&cache.disk_index).remove(d);
                     }
                 }
                 Err(err) => eprintln!("image cache worker crashed: {err}"),
@@ -809,7 +778,7 @@ async fn load_icon(url: &str, max_side: u32, cache: &IconCache, skip_disk: bool)
         }
     };
     let digest_for_write = digest.clone();
-    let disk_index = cache.disk_index.clone();
+    let writer = cache.clone();
     let Ok(_decode_permit) = cache.decode_limit.acquire().await else {
         return LoadOutcome::Deferred { retry_in: RETRY_DEFERRED };
     };
@@ -821,10 +790,8 @@ async fn load_icon(url: &str, max_side: u32, cache: &IconCache, skip_disk: bool)
         if let Some(path) = path {
             if let Err(err) = write_cache_file(&path, &bytes) {
                 eprintln!("couldn't cache {}: {err}", path.display());
-            } else if let Some(d) = digest_for_write
-                && let Ok(mut g) = disk_index.lock()
-            {
-                g.insert(d);
+            } else if let Some(d) = digest_for_write {
+                writer.disk_remember(d, bytes.len() as u64);
             }
         }
         Some(decoded)
