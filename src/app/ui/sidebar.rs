@@ -118,9 +118,9 @@ pub(crate) fn catalog_sidebar(
                 let clicked = match slot {
                     SidebarSlot::All => sidebar_row(
                         ui,
-                        ChromeIcon::All,
+                        |ui, rect, tint| chrome_icons::paint(ui, ChromeIcon::All, rect, tint),
                         lang.category_label(None),
-                        total,
+                        Some(total),
                         selected.is_none()
                             && !favorites_filter
                             && !matches!(
@@ -128,7 +128,8 @@ pub(crate) fn catalog_sidebar(
                                 SortOrder::Rating | SortOrder::Downloads | SortOrder::Recent
                             ),
                         focused,
-                    ),
+                    )
+                    .clicked(),
                     SidebarSlot::Category(category) => {
                         let count = category_counts
                             .iter()
@@ -137,12 +138,13 @@ pub(crate) fn catalog_sidebar(
                             .unwrap_or(0);
                         sidebar_row(
                             ui,
-                            ChromeIcon::for_category(category),
+                            |ui, rect, tint| chrome_icons::paint(ui, ChromeIcon::for_category(category), rect, tint),
                             lang.sidebar_platform_label(category),
-                            count,
+                            Some(count),
                             selected == Some(category) && !favorites_filter,
                             focused,
                         )
+                        .clicked()
                     }
                     SidebarSlot::Featured => sidebar_action_row(
                         ui,
@@ -246,14 +248,14 @@ fn sidebar_action_row(
     response.clicked()
 }
 
-fn sidebar_row(
+pub(crate) fn sidebar_row(
     ui: &mut egui::Ui,
-    icon: ChromeIcon,
+    paint_icon: impl FnOnce(&egui::Ui, egui::Rect, egui::Color32),
     label: &str,
-    count: usize,
+    count: Option<usize>,
     active: bool,
     focused: bool,
-) -> bool {
+) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), SIDEBAR_ROW_HEIGHT),
         egui::Sense::click(),
@@ -294,7 +296,7 @@ fn sidebar_row(
         ),
         egui::vec2(chrome_icons::SIDEBAR_ICON, chrome_icons::SIDEBAR_ICON),
     );
-    chrome_icons::paint(ui, icon, icon_rect, color);
+    paint_icon(ui, icon_rect, color);
     ui.painter().text(
         rect.left_center() + egui::vec2(4.0 + chrome_icons::SIDEBAR_ICON + 6.0, 0.0),
         egui::Align2::LEFT_CENTER,
@@ -302,16 +304,18 @@ fn sidebar_row(
         font(FONT_BODY),
         color,
     );
-    ui.painter().text(
-        rect.right_center() - egui::vec2(4.0, 0.0),
-        egui::Align2::RIGHT_CENTER,
-        count.to_string(),
-        font(FONT_SMALL),
-        if active || focused {
-            pal().text
-        } else {
-            pal().text_faint
-        },
-    );
-    response.clicked()
+    if let Some(count) = count {
+        ui.painter().text(
+            rect.right_center() - egui::vec2(4.0, 0.0),
+            egui::Align2::RIGHT_CENTER,
+            count.to_string(),
+            font(FONT_SMALL),
+            if active || focused {
+                pal().text
+            } else {
+                pal().text_faint
+            },
+        );
+    }
+    response
 }

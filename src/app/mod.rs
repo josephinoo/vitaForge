@@ -840,9 +840,7 @@ pub struct App {
     /// Scroll limit of the detail page as last drawn.
     detail_max_scroll: f32,
     install_notifications: bool,
-    pub roms_3ds_dir: String,
-    pub roms_ds_dir: String,
-    pub roms_gba_dir: String,
+    pub roms_dirs: Vec<String>,
     update_queue: std::collections::VecDeque<AppEntry>,
     pub update_active: bool,
     pub update_total: usize,
@@ -1076,9 +1074,7 @@ impl App {
             detail_max_scroll: 0.0,
             icons_need_clear: false,
             install_notifications: settings.install_notifications,
-            roms_3ds_dir: settings.roms_3ds_dir,
-            roms_ds_dir: settings.roms_ds_dir,
-            roms_gba_dir: settings.roms_gba_dir,
+            roms_dirs: data::settings::all_roms_dirs(&settings),
             update_queue: std::collections::VecDeque::new(),
             update_active: false,
             update_total: 0,
@@ -1607,14 +1603,8 @@ impl App {
                 nav.sub_index = ThemeId::ALL.iter().position(|&t| t == theme).unwrap_or(0);
                 return Ok(());
             }
-            Some(Row::RomsDsDir) => {
-                AppCommand::RequestAuthInput(crate::input::TextTarget::RomsDsDir)
-            }
-            Some(Row::RomsGbaDir) => {
-                AppCommand::RequestAuthInput(crate::input::TextTarget::RomsGbaDir)
-            }
-            Some(Row::Roms3dsDir) => {
-                AppCommand::RequestAuthInput(crate::input::TextTarget::Roms3dsDir)
+            Some(Row::RomsDir(index)) => {
+                AppCommand::RequestAuthInput(crate::input::TextTarget::RomsDir(index))
             }
             Some(Row::PluginManager | Row::ConfigViewer | Row::ConfigBackups | Row::Profiles) => {
                 let sub = match nav.current_row() {
@@ -2683,9 +2673,9 @@ impl App {
                 if let AppState::Catalog(catalog) = &self.state {
                     if catalog.tab == StoreTab::Roms {
                         if self.roms.sidebar_focus {
-                            if let Some(&(code, _)) = crate::roms::ROM_CONSOLES.get(self.roms.sidebar_cursor) {
+                            if let Some(console) = crate::roms::ROM_CONSOLES.get(self.roms.sidebar_cursor) {
                                 self.roms.sidebar_focus = false;
-                                return self.handle_command(AppCommand::RomsSelectConsole(code.to_owned()));
+                                return self.handle_command(AppCommand::RomsSelectConsole(console.code.to_owned()));
                             }
                         } else {
                             let filtered = self.roms.filtered_indices(&catalog.search_query);
@@ -3478,23 +3468,11 @@ impl App {
                 if let Some(target) = self.auth_input_target.take() {
                     match target {
                         crate::input::TextTarget::AuthUsername => self.auth_form.username = text.trim().to_owned(),
-                        crate::input::TextTarget::RomsDsDir => {
-                            data::settings::set_roms_ds_dir(text);
-                            self.roms_ds_dir = data::settings::roms_ds_dir();
-                        }
-                        crate::input::TextTarget::RomsGbaDir => {
-                            data::settings::set_roms_gba_dir(text);
-                            self.roms_gba_dir = data::settings::roms_gba_dir();
-                        }
-                        crate::input::TextTarget::Roms3dsDir => {
-                            let dir = text.trim().trim_end_matches('/');
-                            let value = if dir.is_empty() {
-                                crate::roms::AZAHAR_ROMS_DIR.to_owned()
-                            } else {
-                                dir.to_owned()
-                            };
-                            self.roms_3ds_dir = value.clone();
-                            data::settings::set_roms_3ds_dir(value);
+                        crate::input::TextTarget::RomsDir(index) => {
+                            if let Some(console) = crate::roms::ROM_CONSOLES.get(index as usize) {
+                                data::settings::set_roms_dir(console.code, &text);
+                                self.roms_dirs[index as usize] = data::settings::roms_dir(console.code);
+                            }
                         }
                         crate::input::TextTarget::AuthPassword => self.auth_form.password = text,
                         crate::input::TextTarget::AuthEmail => self.auth_form.email = text.trim().to_owned(),

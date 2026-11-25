@@ -118,9 +118,7 @@ pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
                     cache_notice: app.cache_notice.as_deref(),
                     install_notifications: app.install_notifications,
                     sound_effects: app.audio.is_enabled(),
-                    roms_3ds_dir: &app.roms_3ds_dir,
-                    roms_ds_dir: &app.roms_ds_dir,
-                    roms_gba_dir: &app.roms_gba_dir,
+                    roms_dirs: &app.roms_dirs,
                     purge_armed: app.purge_armed,
                     plugins: settings::PluginsView {
                         tai: app.tai.as_ref(),

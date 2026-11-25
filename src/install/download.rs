@@ -313,7 +313,9 @@ fn archive_parts(url: &str) -> Option<(String, String)> {
         .strip_prefix("https://archive.org/download/")
         .or_else(|| url.strip_prefix("http://archive.org/download/"))?;
     let (id, file) = rest.split_once('/')?;
-    (!id.is_empty() && !file.is_empty()).then(|| (id.to_owned(), file.to_owned()))
+    // "pack.zip/game.nds" is unzipped on the fly by archive.org: no node, md5 or Range for it.
+    let inside_zip = file.to_ascii_lowercase().contains(".zip/");
+    (!id.is_empty() && !file.is_empty() && !inside_zip).then(|| (id.to_owned(), file.to_owned()))
 }
 
 /// archive.org's redirect picks one storage node, often a slow one; its mirrors
@@ -971,6 +973,7 @@ mod tests {
     }
     #[test]
     fn archive_parts_splits_id_and_encoded_file() {
+        assert_eq!(super::archive_parts("https://archive.org/download/pack/a.zip/a.nds"), None);
         assert_eq!(
             archive_parts("https://archive.org/download/mkwiita/Game%20Files.zip"),
             Some(("mkwiita".into(), "Game%20Files.zip".into()))

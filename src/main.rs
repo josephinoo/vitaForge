@@ -94,8 +94,8 @@ fn run() -> anyhow::Result<()> {
         .build()?;
     let _guard = runtime.enter();
     // Emulators expect their ROM folder to exist before the first launch.
-    for console in ["ds", "gba"] {
-        let _ = std::fs::create_dir_all(roms::storage_dir_for(console));
+    for console in &roms::ROM_CONSOLES {
+        let _ = std::fs::create_dir_all(roms::storage_dir_for(console.code));
     }
     install::log_file("boot: creating app");
     let app = App::new()?;

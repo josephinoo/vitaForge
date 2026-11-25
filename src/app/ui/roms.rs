@@ -1,9 +1,9 @@
 use crate::app::icons::IconCache;
-use crate::app::ui::chrome_icons::{self, ChromeIcon};
+use crate::app::ui::sidebar::sidebar_row;
 use crate::app::ui::grid::cover_fit_uv;
 use crate::app::ui::theme::*;
 use crate::input::AppCommand;
-use crate::roms::{ROM_CONSOLES, RomEntry};
+use crate::roms::{ROM_CONSOLES, RomConsole, RomEntry};
 
 pub struct RomsView<'a> {
     pub rom_type: &'a str,
@@ -35,23 +35,40 @@ pub(crate) fn roms_view(
             ui.spacing_mut().item_spacing = egui::vec2(12.0, 0.0);
 
             // Left console sidebar (matching VitaForge catalog sidebar)
-            let sidebar_w = 178.0;
-            egui::Frame::new()
-                .fill(pal().bg_card.gamma_multiply(0.75))
-                .corner_radius(egui::CornerRadius::same(12))
-                .inner_margin(egui::Margin::same(10))
+            // Same panel and rows as the catalog sidebar.
+            egui::Frame::NONE
+                .fill(pal().bg_header)
+                .corner_radius(RADIUS_MD)
+                .inner_margin(egui::Margin::symmetric(4, 4))
                 .show(ui, |ui| {
-                    ui.set_width(sidebar_w - 20.0);
+                    ui.set_width(SIDEBAR_WIDTH - 8.0);
+                    // The parent lays out left to right, and a ScrollArea inherits that without this.
                     ui.vertical(|ui| {
-                        ui.spacing_mut().item_spacing = egui::vec2(0.0, 4.0);
-                        for (i, &(code, label)) in ROM_CONSOLES.iter().enumerate() {
-                            let active = view.rom_type == code;
-                            let focused = view.sidebar_focus && view.sidebar_cursor == i;
-                            let count = active.then_some(view.entries.len());
-                            if console_sidebar_row(ui, label, count, active, focused) && !active {
-                                commands.push(AppCommand::RomsSelectConsole(code.to_owned()));
-                            }
-                        }
+                        egui::ScrollArea::vertical()
+                            .id_salt("roms_consoles")
+                            .max_height(total_h - 8.0)
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                ui.spacing_mut().item_spacing.y = 0.0;
+                                for (i, &RomConsole { code, .. }) in ROM_CONSOLES.iter().enumerate() {
+                                    let active = view.rom_type == code;
+                                    let focused = view.sidebar_focus && view.sidebar_cursor == i;
+                                    let response = sidebar_row(
+                                        ui,
+                                        |ui, rect, tint| paint_console_icon(ui, code, rect.expand(2.0), tint),
+                                        &code.to_uppercase(),
+                                        (active && !view.entries.is_empty()).then_some(view.entries.len()),
+                                        active,
+                                        focused,
+                                    );
+                                    if focused {
+                                        response.scroll_to_me(None);
+                                    }
+                                    if response.clicked() && !active {
+                                        commands.push(AppCommand::RomsSelectConsole(code.to_owned()));
+                                    }
+                                }
+                            });
                     });
                 });
 
@@ -182,52 +199,37 @@ fn filter_combo(
     picked
 }
 
-fn console_sidebar_row(
-    ui: &mut egui::Ui,
-    label: &str,
-    count: Option<usize>,
-    active: bool,
-    focused: bool,
-) -> bool {
-    let h = 34.0;
-    let w = ui.available_width();
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::click());
-    if active {
-        ui.painter().rect_filled(rect, 8.0, pal().primary);
-    } else if focused || resp.hovered() {
-        ui.painter().rect_filled(rect, 8.0, pal().bg_card_hover);
+/// libretro's monochrome system icons (CC BY 4.0), named by console code.
+fn console_png(code: &str) -> Option<&'static [u8]> {
+    macro_rules! png {
+        ($($code:literal),*) => {
+            match code {
+                $($code => Some(include_bytes!(concat!("../../../assets/consoles/", $code, ".png")).as_slice()),)*
+                _ => None,
+            }
+        };
     }
-    if focused {
-        ui.painter().rect_stroke(
-            rect,
-            8.0,
-            egui::Stroke::new(2.0, egui::Color32::WHITE),
-            egui::StrokeKind::Inside,
-        );
+    png!("3ds", "ds", "gba", "snes", "n64", "gb", "gbc", "nes")
+}
+
+fn paint_console_icon(ui: &egui::Ui, code: &str, rect: egui::Rect, tint: egui::Color32) {
+    let id = egui::Id::new(("console_icon", code));
+    let texture = ui.ctx().data(|d| d.get_temp::<egui::TextureHandle>(id)).or_else(|| {
+        // Downscaled once: sampling 256 px into a 20 px square shimmers.
+        let small = image::load_from_memory(console_png(code)?)
+            .ok()?
+            .resize(48, 48, image::imageops::FilterType::Lanczos3)
+            .to_rgba8();
+        let size = [small.width() as usize, small.height() as usize];
+        let pixels = egui::ColorImage::from_rgba_unmultiplied(size, small.as_raw());
+        let texture = ui.ctx().load_texture(format!("console_{code}"), pixels, egui::TextureOptions::LINEAR);
+        ui.ctx().data_mut(|d| d.insert_temp(id, texture.clone()));
+        Some(texture)
+    });
+    if let Some(texture) = texture {
+        let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+        ui.painter().image(texture.id(), rect, uv, tint);
     }
-    let text_color = if active || focused { egui::Color32::WHITE } else { pal().text_dim };
-    let ic_rect = egui::Rect::from_center_size(
-        egui::pos2(rect.left() + 18.0, rect.center().y),
-        egui::Vec2::splat(16.0),
-    );
-    chrome_icons::paint(ui, ChromeIcon::Games, ic_rect, text_color);
-    ui.painter().text(
-        egui::pos2(rect.left() + 34.0, rect.center().y),
-        egui::Align2::LEFT_CENTER,
-        label,
-        font(FONT_SMALL),
-        text_color,
-    );
-    if let Some(n) = count {
-        ui.painter().text(
-            egui::pos2(rect.right() - 8.0, rect.center().y),
-            egui::Align2::RIGHT_CENTER,
-            n.to_string(),
-            font(FONT_MICRO),
-            if active { egui::Color32::WHITE } else { pal().text_faint },
-        );
-    }
-    resp.clicked()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -311,4 +313,39 @@ fn rom_card(
     );
 
     resp
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn consoles_are_listed_top_to_bottom() {
+        let ctx = egui::Context::default();
+        apply_theme(&ctx);
+        let icons = IconCache::new();
+        let mut ys = Vec::new();
+        for _ in 0..2 {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(640.0, 362.0))),
+                ..Default::default()
+            };
+            let output = ctx.run(input, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let view = RomsView {
+                        rom_type: "3ds", genre_filter: None, region_filter: None, loading: false, status: None,
+                        entries: &[], genre_counts: &[], region_counts: &[], selected: 0,
+                        scroll_to_selected: false, sidebar_focus: false, sidebar_cursor: 0,
+                    };
+                    roms_view(ui, &icons, "", view, &mut Vec::new());
+                });
+            });
+            ys = output.shapes.iter().filter_map(|c| match &c.shape {
+                egui::Shape::Text(t) if ROM_CONSOLES.iter().any(|k| k.code.to_uppercase() == t.galley.text()) => Some(t.pos.y),
+                _ => None,
+            }).collect();
+        }
+        assert!(ROM_CONSOLES.iter().all(|c| console_png(c.code).is_some_and(|png| image::load_from_memory(png).is_ok())));
+        assert!(ys.len() > 1 && ys.windows(2).all(|w| w[1] > w[0] + 20.0), "{ys:?}");
+    }
 }

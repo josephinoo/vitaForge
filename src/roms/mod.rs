@@ -10,24 +10,40 @@ use tokio::sync::watch;
 
 pub const SNAPSHOT_API_BASE: &str = "https://vitaforge.josephinoo.dev/api/v1/roms/snapshot";
 pub const DEFAULT_ROM_TYPE: &str = "3ds";
-pub const AZAHAR_ROMS_DIR: &str = "ux0:data/azahar/roms";
-/// Where DSVita looks for `.nds` files.
-pub const DSVITA_ROMS_DIR: &str = "ux0:data/dsvita";
-/// RetroArch has no fixed content folder; this keeps GBA next to its other data.
-pub const GBA_ROMS_DIR: &str = "ux0:data/retroarch/roms/gba";
-pub const ROM_CONSOLES: &[(&str, &str)] = &[
-    ("3ds", "Nintendo 3DS"),
-    ("ds", "Nintendo DS"),
-    ("gba", "Game Boy Advance"),
+pub struct RomConsole {
+    pub code: &'static str,
+    pub label: &'static str,
+    /// Where the console's usual Vita emulator finds games; editable in Settings.
+    pub default_dir: &'static str,
+}
+
+const fn console(code: &'static str, label: &'static str, default_dir: &'static str) -> RomConsole {
+    RomConsole { code, label, default_dir }
+}
+
+/// Order of the ROMs sidebar and of the folder rows in Settings (`Row::RomsDir` indexes it).
+/// RetroArch has no fixed content folder, so its consoles sit next to its other data.
+pub const ROM_CONSOLES: [RomConsole; 8] = [
+    console("3ds", "Nintendo 3DS", "ux0:data/azahar/roms"),
+    // DSVita reads this folder only.
+    console("ds", "Nintendo DS", "ux0:data/dsvita"),
+    console("gba", "Game Boy Advance", "ux0:data/retroarch/roms/gba"),
+    console("snes", "Super Nintendo", "ux0:data/retroarch/roms/snes"),
+    console("n64", "Nintendo 64", "ux0:data/DaedalusX64/Roms"),
+    console("gb", "Game Boy", "ux0:data/retroarch/roms/gb"),
+    console("gbc", "Game Boy Color", "ux0:data/retroarch/roms/gbc"),
+    console("nes", "NES", "ux0:data/retroarch/roms/nes"),
 ];
 
+pub fn default_dir(rom_type: &str) -> String {
+    ROM_CONSOLES
+        .iter()
+        .find(|c| c.code == rom_type)
+        .map_or_else(|| format!("ux0:data/roms/{rom_type}"), |c| c.default_dir.to_owned())
+}
+
 pub fn storage_dir_for(rom_type: &str) -> PathBuf {
-    match rom_type {
-        "3ds" => PathBuf::from(crate::data::settings::roms_3ds_dir()),
-        "ds" => PathBuf::from(crate::data::settings::roms_ds_dir()),
-        "gba" => PathBuf::from(crate::data::settings::roms_gba_dir()),
-        other => PathBuf::from(format!("ux0:data/roms/{other}")),
-    }
+    PathBuf::from(crate::data::settings::roms_dir(rom_type))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -316,8 +332,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ds_roms_go_where_dsvita_reads_them() {
-        assert_eq!(storage_dir_for("ds"), PathBuf::from("ux0:data/dsvita"));
+    fn every_console_has_its_own_folder() {
+        let dirs: std::collections::HashSet<_> = ROM_CONSOLES.iter().map(|c| c.default_dir).collect();
+        assert_eq!(dirs.len(), ROM_CONSOLES.len());
+        assert_eq!(default_dir("ds"), "ux0:data/dsvita");
     }
 
     #[test]

@@ -35,9 +35,8 @@ pub enum TextTarget {
     AuthEmail,
     VerifyScore,
     VerifyNote,
-    Roms3dsDir,
-    RomsDsDir,
-    RomsGbaDir,
+    /// Index into `roms::ROM_CONSOLES`.
+    RomsDir(u8),
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DetailFocus {
