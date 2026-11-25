@@ -451,71 +451,6 @@ impl CatalogState {
         true
     }
 
-    pub fn jump_letter(&mut self, forward: bool) -> bool {
-        if self.filtered_indices.is_empty() {
-            return false;
-        }
-        let current_char = self
-            .filtered_indices
-            .get(self.selected)
-            .and_then(|&idx| self.apps.get(idx))
-            .and_then(|app| app.name.trim_start().chars().next())
-            .map(|c| c.to_ascii_uppercase())
-            .unwrap_or('A');
-
-        if forward {
-            for (i, &idx) in self.filtered_indices.iter().enumerate() {
-                if let Some(app) = self.apps.get(idx) {
-                    let first = app
-                        .name
-                        .trim_start()
-                        .chars()
-                        .next()
-                        .map(|c| c.to_ascii_uppercase())
-                        .unwrap_or(' ');
-                    if first > current_char && first.is_ascii_alphanumeric() {
-                        self.selected = i;
-                        self.selection_active = true;
-                        self.scroll_to_selected = true;
-                        return true;
-                    }
-                }
-            }
-        } else {
-            let mut target_char = None;
-            for &idx in self.filtered_indices.iter().rev() {
-                if let Some(app) = self.apps.get(idx) {
-                    let first = app
-                        .name
-                        .trim_start()
-                        .chars()
-                        .next()
-                        .map(|c| c.to_ascii_uppercase())
-                        .unwrap_or(' ');
-                    if first < current_char && first.is_ascii_alphanumeric() {
-                        target_char = Some(first);
-                        break;
-                    }
-                }
-            }
-            if let Some(target) = target_char {
-                if let Some(pos) = self.filtered_indices.iter().position(|&idx| {
-                    self.apps
-                        .get(idx)
-                        .and_then(|a| a.name.trim_start().chars().next())
-                        .map(|c| c.to_ascii_uppercase())
-                        == Some(target)
-                }) {
-                    self.selected = pos;
-                    self.selection_active = true;
-                    self.scroll_to_selected = true;
-                    return true;
-                }
-            }
-        }
-        false
-    }
-
     pub fn shows_sidebar(&self) -> bool {
         self.tab == StoreTab::Categories
     }
@@ -4123,25 +4058,6 @@ mod sort_tests {
         catalog.set_sort(SortOrder::Name);
         assert_eq!(catalog.selected, 0);
         assert!(catalog.selection_active);
-    }
-
-    #[test]
-    fn jump_letter_steps_forward_and_back() {
-        let mut a = entry("1", "vdb", 0, 0, 0.0, "");
-        a.name = "Aardvark".into();
-        let mut b = entry("2", "vdb", 0, 0, 0.0, "");
-        b.name = "Bear".into();
-        let mut c = entry("3", "vdb", 0, 0, 0.0, "");
-        c.name = "Cat".into();
-        let mut catalog = CatalogState::new(vec![a, b, c]);
-        catalog.filtered_indices = vec![0, 1, 2];
-        catalog.selected = 0;
-        assert!(catalog.jump_letter(true));
-        assert_eq!(catalog.selected, 1);
-        assert!(catalog.jump_letter(true));
-        assert_eq!(catalog.selected, 2);
-        assert!(catalog.jump_letter(false));
-        assert_eq!(catalog.selected, 1);
     }
 
     fn entry_titled(id: &str, titleid: &str, source_catalog: &str, downloads: u64) -> AppEntry {

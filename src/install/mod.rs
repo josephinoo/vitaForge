@@ -495,7 +495,8 @@ pub fn start(entry: AppEntry) -> (watch::Receiver<Progress>, Arc<AtomicBool>) {
             Err(err) => {
                 log_file(&format!("Install FAILED for '{}': {err:#}", entry.name));
                 eprintln!("install failed: {err:#}");
-                let cancelled = err.to_string() == CANCELLED_MESSAGE;
+                // The flag too: wrapped errors ("couldn't download the required game data") hide the message.
+                let cancelled = cancel_worker.load(Ordering::Relaxed) || err.to_string() == CANCELLED_MESSAGE;
                 let last = tx.borrow().clone();
                 let mid_download = matches!(
                     last,
@@ -504,7 +505,7 @@ pub fn start(entry: AppEntry) -> (watch::Receiver<Progress>, Arc<AtomicBool>) {
                         | Progress::Downloading { .. }
                         | Progress::DownloadingData { .. }
                 );
-                let mut message = format!("{err}");
+                let mut message = if cancelled { CANCELLED_MESSAGE.to_owned() } else { format!("{err}") };
                 let _ = std::fs::remove_dir_all(EXTRACT_DIR);
                 let _ = std::fs::remove_dir_all(DATA_STAGE_DIR);
                 if mid_download && !cancelled {
@@ -515,6 +516,9 @@ pub fn start(entry: AppEntry) -> (watch::Receiver<Progress>, Arc<AtomicBool>) {
                     }
                 } else {
                     discard_downloads();
+                }
+                if cancelled {
+                    discard_data_download(&temp_data_path(&entry));
                 }
                 installed::clear_pending_install(&installed::index_key(&entry));
                 Progress::Failed(message)

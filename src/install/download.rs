@@ -533,7 +533,6 @@ pub struct HashingReader<R> {
 }
 struct Md5Worker {
     tx: std::sync::mpsc::SyncSender<Vec<u8>>,
-    tx_free: std::sync::mpsc::SyncSender<Vec<u8>>,
     rx_free: std::sync::mpsc::Receiver<Vec<u8>>,
     handle: std::thread::JoinHandle<String>,
 }
@@ -546,7 +545,6 @@ impl Md5Worker {
         for _ in 0..SLOTS {
             let _ = tx_free.send(vec![0u8; BUF_SIZE]);
         }
-        let tx_recycle = tx_free.clone();
         let handle = std::thread::spawn(move || {
             use md5::Digest;
             let mut hasher = md5::Md5::new();
@@ -554,12 +552,12 @@ impl Md5Worker {
                 hasher.update(&chunk);
                 if chunk.capacity() >= BUF_SIZE {
                     chunk.clear();
-                    let _ = tx_recycle.try_send(chunk);
+                    let _ = tx_free.try_send(chunk);
                 }
             }
             format!("{:x}", hasher.finalize())
         });
-        Self { tx, tx_free, rx_free, handle }
+        Self { tx, rx_free, handle }
     }
     fn update(&self, data: &[u8]) {
         let mut buf = self.rx_free.try_recv().unwrap_or_default();

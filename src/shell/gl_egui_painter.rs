@@ -283,13 +283,11 @@ impl GlEguiPainter {
             clip: [i32; 4],
             index_start: usize,
             index_count: i32,
-            vertex_count: u32,
         }
         let mut draw_ranges: Vec<DrawRange> = Vec::with_capacity(64);
         self.vertices.clear();
         self.indices.clear();
         let mut range_index_start = 0usize;
-        let mut range_vert_start = 0usize;
 
         for clipped_primitive in primitives {
             let Some(clip_rect) =
@@ -316,17 +314,13 @@ impl GlEguiPainter {
                 if let Some(clip) = current_clip {
                     let index_count = self.indices.len() - range_index_start;
                     if index_count > 0 {
-                        let vertex_count =
-                            ((self.vertices.len() / VERTEX_STRIDE) - range_vert_start) as u32;
                         draw_ranges.push(DrawRange {
                             texture_id: current_texture_id,
                             clip,
                             index_start: range_index_start,
                             index_count: index_count as i32,
-                            vertex_count,
                         });
                         range_index_start = self.indices.len();
-                        range_vert_start = self.vertices.len() / VERTEX_STRIDE;
                     }
                 }
                 current_clip = Some(clip_rect);
@@ -360,14 +354,11 @@ impl GlEguiPainter {
         if let Some(clip) = current_clip {
             let index_count = self.indices.len() - range_index_start;
             if index_count > 0 {
-                let vertex_count =
-                    ((self.vertices.len() / VERTEX_STRIDE) - range_vert_start) as u32;
                 draw_ranges.push(DrawRange {
                     texture_id: current_texture_id,
                     clip,
                     index_start: range_index_start,
                     index_count: index_count as i32,
-                    vertex_count,
                 });
             }
         }

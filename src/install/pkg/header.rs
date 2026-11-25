@@ -28,12 +28,9 @@ impl ContentType {
 }
 #[derive(Debug, Clone)]
 pub struct PkgHeader {
-    pub content_id: String,
-    pub title_id: String,
     pub item_count: u32,
     pub total_size: u64,
     pub enc_offset: u64,
-    pub enc_size: u64,
     pub iv: [u8; 16],
     pub key_type: u32,
     pub content_type: ContentType,
@@ -67,12 +64,6 @@ pub fn parse(
     let item_count = get_u32be(&probe[20..24]);
     let total_size = get_u64be(&probe[24..32]);
     let enc_offset = get_u64be(&probe[32..40]);
-    let enc_size = get_u64be(&probe[40..48]);
-    let content_id: String = probe[0x30..0x30 + 0x30]
-        .iter()
-        .take_while(|&&b| b != 0)
-        .map(|&b| b as char)
-        .collect();
     let mut iv = [0u8; 16];
     iv.copy_from_slice(&probe[0x70..0x80]);
     let key_type = (probe[0xE7] & 7) as u32;
@@ -109,14 +100,10 @@ pub fn parse(
             "pkg item table size mismatch: {item_count} items implies {expected_items_size} bytes, header says {items_size}"
         );
     }
-    let title_id = content_id.get(7..16).unwrap_or_default().to_owned();
     Ok(PkgHeader {
-        content_id,
-        title_id,
         item_count,
         total_size,
         enc_offset,
-        enc_size,
         iv,
         key_type,
         content_type,
@@ -184,8 +171,6 @@ mod tests {
         buf[24..32].copy_from_slice(&u64be(enc_offset + items_size as u64 + 1000));
         buf[32..40].copy_from_slice(&u64be(enc_offset));
         buf[40..48].copy_from_slice(&u64be(1000));
-        let content_id = b"UP4459-PCSE00487_00-GRAVITYBADGERSHD";
-        buf[0x30..0x30 + content_id.len()].copy_from_slice(content_id);
         buf[HEADER_SIZE..HEADER_SIZE + 4].copy_from_slice(&u32be(EXT_MAGIC));
         buf[0xE7] = 2;
         buf
@@ -215,8 +200,6 @@ mod tests {
         assert_eq!(header.enc_offset, enc_offset);
         assert_eq!(header.items_offset, enc_offset);
         assert_eq!(header.items_size, items_size as u64);
-        assert_eq!(header.title_id, "PCSE00487");
-        assert_eq!(header.content_id, "UP4459-PCSE00487_00-GRAVITYBADGERSHD");
     }
     #[test]
     fn rejects_bad_magic() {

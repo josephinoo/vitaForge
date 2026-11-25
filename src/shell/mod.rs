@@ -17,6 +17,7 @@ mod vgl;
 pub(crate) mod vgl_splash_stub;
 #[cfg(target_os = "vita")]
 mod gl_egui_painter;
+#[cfg(not(target_os = "vita"))]
 mod egui_painter;
 mod ime;
 mod surface;

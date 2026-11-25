@@ -212,8 +212,8 @@ mod sys {
         let mut methods = RW_METHODS.load(Ordering::Acquire);
         if methods.is_null() {
             let mut copy = unsafe { *(*file).methods };
-            copy.slots[SLOT_WRITE] = rw_write as usize;
-            copy.slots[SLOT_SYNC] = rw_sync as usize;
+            copy.slots[SLOT_WRITE] = rw_write as *const () as usize;
+            copy.slots[SLOT_SYNC] = rw_sync as *const () as usize;
             methods = Box::into_raw(Box::new(copy));
             RW_METHODS.store(methods, Ordering::Release);
         }
