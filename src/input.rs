@@ -225,11 +225,9 @@ pub enum AppCommand {
     UpdateAll,
     ScreenshotStep(i32),
     SetDetailFocus(DetailFocus),
-    AnalogScroll(f32),
     SetDetailScroll(f32),
     SetDetailMaxScroll(f32),
-    PageStep(i32),
-    LetterJump(bool),
+    SetDetailRatingAt(f32),
     SecondaryAction,
     TertiaryAction,
 }
@@ -286,17 +284,6 @@ pub fn map_controller_button_event(event: &Event) -> Option<AppCommand> {
 const STICK_DEADZONE: f32 = 0.6;
 const STICK_RELEASE: f32 = 0.35;
 const STICK_AXIS_BIAS: f32 = 1.3;
-pub fn right_stick_axes(controller: Option<&GameController>) -> (f32, f32) {
-    let Some(controller) = controller else {
-        return (0.0, 0.0);
-    };
-    let x = controller.axis(Axis::RightX) as f32 / i16::MAX as f32;
-    let y = controller.axis(Axis::RightY) as f32 / i16::MAX as f32;
-    (
-        if x.abs() >= STICK_DEADZONE { x } else { 0.0 },
-        if y.abs() >= STICK_DEADZONE { y } else { 0.0 },
-    )
-}
 /// Left stick as a direction. `held` is last frame's answer: it keeps the axis
 /// until clearly released or overtaken, so jitter and diagonals don't re-press.
 pub fn stick_direction(x: f32, y: f32, held: Option<InputCommand>) -> Option<InputCommand> {
@@ -511,11 +498,6 @@ mod tests {
     #[test]
     fn detail_focus_defaults_to_primary() {
         assert_eq!(super::DetailFocus::default(), super::DetailFocus::Primary);
-    }
-
-    #[test]
-    fn right_stick_axes_zero_when_none() {
-        assert_eq!(super::right_stick_axes(None), (0.0, 0.0));
     }
 
     #[test]

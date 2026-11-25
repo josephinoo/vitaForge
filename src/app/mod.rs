@@ -560,7 +560,8 @@ impl CatalogState {
         }
         self.sidebar_cursor = next;
         self.focus_pane = FocusPane::Sidebar;
-        self.apply_sidebar_slot_at_cursor();
+        // Only moves the highlight: applying on the way down would drop the platform
+        // before the cursor reaches Featured/Downloads below it.
         true
     }
 
@@ -875,6 +876,7 @@ pub struct App {
     pub cancel_armed_at: Option<std::time::Instant>,
     /// Scroll limit of the detail page as last drawn.
     detail_max_scroll: f32,
+    detail_rating_at: f32,
     install_notifications: bool,
     pub roms_dirs: Vec<String>,
     update_queue: std::collections::VecDeque<AppEntry>,
@@ -1159,6 +1161,7 @@ impl App {
             purge_armed: false,
             cancel_armed_at: None,
             detail_max_scroll: 0.0,
+            detail_rating_at: 0.0,
             icons_need_clear: false,
             install_notifications: settings.install_notifications,
             roms_dirs: data::settings::all_roms_dirs(&settings),
@@ -2771,32 +2774,10 @@ impl App {
                 }
             }
             AppCommand::SetDetailMaxScroll(max) => self.detail_max_scroll = max,
-            AppCommand::AnalogScroll(delta) => {
-                if let AppState::Detail { scroll_delta, .. } = &mut self.state {
-                    *scroll_delta = (*scroll_delta + delta).max(0.0);
-                }
-            }
+            AppCommand::SetDetailRatingAt(offset) => self.detail_rating_at = offset,
             AppCommand::SetDetailScroll(offset) => {
                 if let AppState::Detail { scroll_delta, .. } = &mut self.state {
                     *scroll_delta = offset.max(0.0);
-                }
-            }
-            AppCommand::PageStep(step) => match &mut self.state {
-                AppState::Catalog(catalog) => {
-                    if catalog.focus_pane == FocusPane::Grid && catalog.move_selection(step as isize) {
-                        self.audio.play(crate::audio::Sfx::Navigate);
-                    }
-                }
-                AppState::Detail { scroll_delta, .. } => {
-                    *scroll_delta = (*scroll_delta + step as f32 * 20.0).max(0.0);
-                }
-                _ => {}
-            },
-            AppCommand::LetterJump(forward) => {
-                if let AppState::Catalog(catalog) = &mut self.state {
-                    if catalog.focus_pane == FocusPane::Grid && catalog.jump_letter(forward) {
-                        self.audio.play(crate::audio::Sfx::Activation);
-                    }
                 }
             }
             AppCommand::FlipSortDirection => {
@@ -2930,6 +2911,7 @@ impl App {
                 }
                 if let AppState::Catalog(catalog) = &mut self.state {
                     if catalog.focus_pane == FocusPane::Sidebar {
+                        catalog.apply_sidebar_slot_at_cursor();
                         if catalog.leave_sidebar() {
                             self.audio.play(crate::audio::Sfx::Navigate);
                         }
@@ -3164,6 +3146,7 @@ impl App {
                             .count();
                         let initial_star = app.user_rating.unwrap_or(5).clamp(1, 5);
                         let max = self.detail_max_scroll;
+                        let rating_at = self.detail_rating_at.min(max);
                         use DetailFocus as F;
                         use InputCommand as I;
                         let next = match (direction, *detail_focus) {
@@ -3202,12 +3185,13 @@ impl App {
                             (I::MoveUp, F::CommentReply(i)) => Some(F::CommentReply(i - 1)),
                             (I::MoveDown, F::Author) => Some(if has_social { F::Like } else { F::Primary }),
                             (I::MoveDown, F::Like | F::Report | F::Comment | F::Verify) => Some(F::Primary),
+                            // Hand over as soon as the stars are on screen, so focus never jumps backwards.
+                            (I::MoveDown, F::Primary) if has_social && *scroll_delta >= rating_at - 0.5 => Some(F::Rating(initial_star)),
                             (I::MoveDown, F::Primary) if *scroll_delta < max - 0.5 => {
                                 *scroll_delta = (*scroll_delta + 60.0).min(max);
                                 self.audio.play(crate::audio::Sfx::Navigate);
                                 None
                             }
-                            (I::MoveDown, F::Primary) if has_social => Some(F::Rating(initial_star)),
                             (I::MoveDown, F::Primary) => {
                                 // Bottom of the page: carry on to the right column, which sits at the top.
                                 if side.is_some() {
@@ -3219,6 +3203,12 @@ impl App {
                             (I::MoveDown, F::CommentTab) if replyable_count > 0 => Some(F::CommentReply(0)),
                             (I::MoveDown, F::CommentReply(i)) if i + 1 < replyable_count => Some(F::CommentReply(i + 1)),
                             (I::MoveDown, F::Screenshots) => has_dep.then_some(F::Requirements),
+                            // Nothing left to focus below: keep reading to the end of the page.
+                            (I::MoveDown, F::CommentTab | F::CommentReply(_)) if *scroll_delta < max - 0.5 => {
+                                *scroll_delta = (*scroll_delta + 60.0).min(max);
+                                self.audio.play(crate::audio::Sfx::Navigate);
+                                None
+                            }
                             _ => None,
                         };
                         if let Some(next) = next {
@@ -4214,6 +4204,24 @@ mod sort_tests {
         assert_eq!(ids.len(), 2);
         assert!(ids.contains(&"hb".to_owned()));
         assert!(ids.contains(&"nps".to_owned()));
+    }
+
+    #[test]
+    fn moving_through_the_sidebar_keeps_the_platform() {
+        use crate::app::ui::sidebar::{sidebar_slots, SidebarSlot};
+        use crate::data::Category;
+        let mut state = CatalogState::new(vec![entry("1", "vitadb", 10, 100, 4.0, "2026-01-01")]);
+        state.group_category_counts = vec![(Category::PsVitaGame, 1), (Category::Port, 0)];
+        state.category_filter = Some(Category::PsVitaGame);
+        state.sync_sidebar_cursor();
+        let featured = sidebar_slots(&state.group_category_counts).iter().position(|&s| s == SidebarSlot::Featured).unwrap();
+        while state.sidebar_cursor < featured {
+            assert!(state.move_sidebar_cursor(1));
+        }
+        assert_eq!(state.category_filter, Some(Category::PsVitaGame));
+        state.apply_sidebar_slot_at_cursor();
+        assert_eq!(state.category_filter, Some(Category::PsVitaGame));
+        assert_eq!(state.sort_order, SortOrder::Rating);
     }
 
     #[test]

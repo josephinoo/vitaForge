@@ -419,7 +419,7 @@ pub(crate) fn detail_screen(
                         DetailFocus::Rating(star) => Some(star),
                         _ => None,
                     };
-                    ui.horizontal(|ui| {
+                    let rating = ui.horizontal(|ui| {
                         ui.label(
                             egui::RichText::new(lang.your_rating())
                                 .size(FONT_BODY)
@@ -430,6 +430,9 @@ pub(crate) fn detail_screen(
                             commands.push(AppCommand::RateCurrent(score));
                         }
                     });
+                    // Scroll offset from which the rating row is fully on screen.
+                    let rating_at = (rating.response.rect.bottom() - ui.min_rect().top() + 8.0 - scroll_h).max(0.0);
+                    commands.push(AppCommand::SetDetailRatingAt(rating_at));
                     info_row(ui, lang.ratings_count(), &entry.ratings_count.to_string());
                     ui.add_space(16.0);
                     ui.horizontal(|ui| {
