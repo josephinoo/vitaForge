@@ -395,7 +395,13 @@ pub fn hash_file_path(titleid: &str) -> PathBuf {
 pub fn version_file_path(titleid: &str) -> PathBuf {
     PathBuf::from(HASH_CACHE_DIR).join(format!("{}.ver", titleid.trim().to_uppercase()))
 }
-pub fn stamp_pending_install(titleid: &str, hash: &str, version: &str, extract_dir: Option<&Path>) {
+pub fn stamp_pending_install(
+    titleid: &str,
+    hash: &str,
+    hash2: &str,
+    version: &str,
+    extract_dir: Option<&Path>,
+) {
     if titleid.is_empty() {
         return;
     }
@@ -414,10 +420,18 @@ pub fn stamp_pending_install(titleid: &str, hash: &str, version: &str, extract_d
     } else {
         let _ = std::fs::write(version_file_path(titleid), version);
     }
-    if let Some(extract_dir) = extract_dir
-        && !lower_hash.is_empty()
-    {
-        let _ = std::fs::write(extract_dir.join("hash.vdb"), &lower_hash);
+    if let Some(extract_dir) = extract_dir {
+        if !lower_hash.is_empty() {
+            let _ = std::fs::write(extract_dir.join("hash.vdb"), &lower_hash);
+        }
+        stamp_aux_hash(extract_dir, hash2);
+    }
+}
+/// Records the catalog's asset digest, so a runtime port reads as current until the catalog moves.
+pub fn stamp_aux_hash(app_dir: &Path, hash2: &str) {
+    let hash2 = hash2.trim();
+    if hash2.len() == HASH_LEN {
+        let _ = std::fs::write(app_dir.join("aux_hash.vdb"), hash2.to_lowercase());
     }
 }
 
@@ -885,9 +899,7 @@ fn aux_state(app_dir: &Path, expected: &str) -> Option<InstallState> {
         .map(|name| app_dir.join(name))
         .find(|path| path.is_file())?;
     let cache = app_dir.join("aux_hash.vdb");
-    if is_cache_fresh(&cache, &asset)
-        && let Some(cached) = read_hash_file(&cache)
-    {
+    if let Some(cached) = read_hash_file(&cache) {
         return Some(compare(&cached, expected));
     }
     let digest = md5_file(&asset)?;
@@ -895,20 +907,14 @@ fn aux_state(app_dir: &Path, expected: &str) -> Option<InstallState> {
     Some(compare(&digest, expected))
 }
 fn executable_state(titleid: &str, app_dir: &Path, expected: &str) -> InstallState {
+    // Like VitaDB-Downloader, a readable cache is trusted as is: ux0 mtimes can't be relied on.
     let caches = [app_dir.join("hash.vdb"), app_dir.join("HASH.VDB")];
-    let Some(executable) = find_executable(app_dir) else {
-        return caches
-            .iter()
-            .find_map(|cache| read_hash_file(cache))
-            .map_or(InstallState::Installed, |cached| compare(&cached, expected));
-    };
-    let cached = caches
-        .iter()
-        .find(|cache| is_cache_fresh(cache, &executable))
-        .and_then(|cache| read_hash_file(cache));
-    if let Some(cached) = cached {
+    if let Some(cached) = caches.iter().find_map(|cache| read_hash_file(cache)) {
         return compare(&cached, expected);
     }
+    let Some(executable) = find_executable(app_dir) else {
+        return InstallState::Installed;
+    };
     let Some(digest) = md5_file(&executable) else {
         return InstallState::Installed;
     };
@@ -916,16 +922,6 @@ fn executable_state(titleid: &str, app_dir: &Path, expected: &str) -> InstallSta
     let _ = std::fs::write(hash_file_path(titleid), &digest);
     let _ = std::fs::write(app_dir.join("hash.vdb"), &digest);
     compare(&digest, expected)
-}
-fn is_cache_fresh(cache: &Path, described: &Path) -> bool {
-    let (Ok(cache_meta), Ok(described_meta)) = (cache.metadata(), described.metadata()) else {
-        return false;
-    };
-    let (Ok(cache_time), Ok(described_time)) = (cache_meta.modified(), described_meta.modified())
-    else {
-        return true;
-    };
-    cache_time >= described_time
 }
 fn find_executable(app_dir: &Path) -> Option<PathBuf> {
     for name in &[
@@ -1147,20 +1143,26 @@ mod tests {
     }
 
     #[test]
-    fn a_hash_vdb_older_than_a_reinstall_done_elsewhere_is_ignored() {
-        let dir = scratch_app_dir("elsewhere");
+    fn a_cached_digest_is_trusted_even_when_the_files_are_newer() {
+        let dir = scratch_app_dir("trusted");
         std::fs::write(dir.join("hash.vdb"), CURRENT).unwrap();
+        std::fs::write(dir.join("aux_hash.vdb"), ALTERNATE).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(10));
-        std::fs::write(dir.join("eboot.bin"), b"a fresh reinstall").unwrap();
-        let fresh_digest = md5_file(&dir.join("eboot.bin")).unwrap();
-        assert_eq!(
-            hash_state("TESTID06", &dir, &fresh_digest, ""),
-            InstallState::Installed
-        );
-        assert_eq!(
-            read_hash_file(&dir.join("hash.vdb")).as_deref(),
-            Some(fresh_digest.as_str())
-        );
+        std::fs::write(dir.join("eboot.bin"), b"newer than the cache").unwrap();
+        std::fs::write(dir.join("index.lua"), b"newer than the cache").unwrap();
+        assert_eq!(hash_state("TESTID06", &dir, CURRENT, ""), InstallState::Installed);
+        assert_eq!(hash_state("TESTID06", &dir, CURRENT, ALTERNATE), InstallState::Installed);
+        assert_eq!(hash_state("TESTID06", &dir, CURRENT, CURRENT), InstallState::Outdated);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn stamping_writes_the_asset_digest_only_when_published() {
+        let dir = scratch_app_dir("stampaux");
+        super::stamp_aux_hash(&dir, "");
+        assert!(!dir.join("aux_hash.vdb").exists());
+        super::stamp_aux_hash(&dir, &ALTERNATE.to_uppercase());
+        assert_eq!(read_hash_file(&dir.join("aux_hash.vdb")).as_deref(), Some(ALTERNATE));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
