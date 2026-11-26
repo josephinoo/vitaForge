@@ -634,6 +634,7 @@ async fn install_pbp_pkg(
     installed::stamp_pending_install(
         &installed::index_key(entry),
         &entry.hash,
+        &entry.hash2,
         &entry.version,
         None,
     );
@@ -701,8 +702,9 @@ async fn run_psp(
     installed::stamp_pending_install(
         &installed::index_key(entry),
         &entry.hash,
+        &entry.hash2,
         &entry.version,
-        None,
+        Some(&PathBuf::from(PSP_GAME_DIR).join(&entry.id)),
     );
     Ok(Progress::Done)
 }
@@ -1047,6 +1049,7 @@ async fn run_self_update(
     installed::stamp_pending_install(
         &installed::index_key(entry),
         &entry.hash,
+        &entry.hash2,
         &entry.version,
         Some(Path::new(SELF_APP_DIR)),
     );
@@ -1190,6 +1193,7 @@ async fn run_vita(
     installed::stamp_pending_install(
         &installed::index_key(entry),
         &entry.hash,
+        &entry.hash2,
         &entry.version,
         Some(Path::new(EXTRACT_DIR)),
     );
@@ -1207,6 +1211,10 @@ async fn run_vita(
     }
     if let (Some(md5), Some((_, data_dest))) = (deferred_md5, &data_plan) {
         extract_after_promote(&temp_data_path(entry), data_dest, md5, tx, cancel).await?;
+        // The data may have replaced the asset or its stamp, so stamp again, last.
+        if defer {
+            installed::stamp_aux_hash(&Path::new("ux0:app").join(&titleid), &entry.hash2);
+        }
     }
     Ok(Progress::Done)
 }
@@ -1355,13 +1363,17 @@ fn spawn_data_extract(
         verdict
     })
 }
-/// Previous-install dirs to wipe before a fresh install; none when the game
-/// data lives inside the app dir (`defer`), so saves and assets survive an update.
+/// Leftover dirs to wipe before a fresh install. An installed app (it has an eboot) is
+/// never wiped: updates go over it. None either when the game data lives inside it (`defer`).
 fn app_dirs_to_clear(titleid: &str, defer: bool) -> Vec<String> {
     if titleid.is_empty() || defer {
         return Vec::new();
     }
-    ["ux0:app", "ur0:app", "uma0:app"].iter().map(|root| format!("{root}/{titleid}")).collect()
+    ["ux0:app", "ur0:app", "uma0:app"]
+        .iter()
+        .map(|root| format!("{root}/{titleid}"))
+        .filter(|dir| !Path::new(dir).join("eboot.bin").exists())
+        .collect()
 }
 /// Deferred game-data extraction, run once the app is promoted. The app stays
 /// installed on failure, so the error says so; a cancel passes through as-is.
