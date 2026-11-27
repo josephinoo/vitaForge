@@ -455,8 +455,18 @@ impl CatalogState {
         self.tab == StoreTab::Categories
     }
 
+    fn sidebar_category_counts(&self) -> &[(Category, usize)] {
+        match self.content_type_group {
+            // Home keeps the 3 console platforms (8 rows total, fits without shrinking).
+            ContentTypeGroup::Home => &self.group_category_counts[..self.group_category_counts.len().min(3)],
+            // Games shows all 5 platform/category filters as horizontal pills above the grid.
+            ContentTypeGroup::Games => &[],
+            _ => &self.group_category_counts,
+        }
+    }
+
     pub fn sync_sidebar_cursor(&mut self) {
-        let slots = crate::app::ui::sidebar::sidebar_slots(&self.group_category_counts);
+        let slots = crate::app::ui::sidebar::sidebar_slots(self.sidebar_category_counts());
         self.sidebar_cursor = crate::app::ui::sidebar::active_sidebar_index(
             &slots,
             self.category_filter,
@@ -484,7 +494,7 @@ impl CatalogState {
     }
 
     fn move_sidebar_cursor(&mut self, delta: isize) -> bool {
-        let slots = crate::app::ui::sidebar::sidebar_slots(&self.group_category_counts);
+        let slots = crate::app::ui::sidebar::sidebar_slots(self.sidebar_category_counts());
         if slots.is_empty() {
             return false;
         }
@@ -501,7 +511,7 @@ impl CatalogState {
     }
 
     fn apply_sidebar_slot_at_cursor(&mut self) {
-        let slots = crate::app::ui::sidebar::sidebar_slots(&self.group_category_counts);
+        let slots = crate::app::ui::sidebar::sidebar_slots(self.sidebar_category_counts());
         let Some(slot) = slots.get(self.sidebar_cursor).copied() else {
             return;
         };
@@ -813,6 +823,8 @@ pub struct App {
     detail_max_scroll: f32,
     detail_rating_at: f32,
     install_notifications: bool,
+    psp_install_target: data::settings::PspInstallTarget,
+    psp_storage: data::settings::PspStorage,
     pub roms_dirs: Vec<String>,
     update_queue: std::collections::VecDeque<AppEntry>,
     pub update_active: bool,
@@ -1099,6 +1111,8 @@ impl App {
             detail_rating_at: 0.0,
             icons_need_clear: false,
             install_notifications: settings.install_notifications,
+            psp_install_target: settings.psp_install_target,
+            psp_storage: settings.psp_storage,
             roms_dirs: data::settings::all_roms_dirs(&settings),
             update_queue: std::collections::VecDeque::new(),
             update_active: false,
@@ -1689,6 +1703,8 @@ impl App {
             }
             Some(Row::Notifications) => AppCommand::ToggleInstallNotifications,
             Some(Row::SoundEffects) => AppCommand::ToggleSoundEffects,
+            Some(Row::PspTarget) => AppCommand::TogglePspInstallTarget,
+            Some(Row::PspStorage) => AppCommand::TogglePspStorage,
             Some(Row::ClearIcons) => AppCommand::ClearIconCache,
             Some(Row::ClearCatalog) => AppCommand::ClearCatalogCache,
             Some(Row::PurgeAll) => AppCommand::PurgeAllCache,
@@ -3442,6 +3458,14 @@ impl App {
                 self.audio.set_enabled(enabled);
                 data::settings::set_sound_effects(enabled);
             }
+            AppCommand::TogglePspInstallTarget => {
+                self.psp_install_target = self.psp_install_target.toggle();
+                data::settings::set_psp_install_target(self.psp_install_target);
+            }
+            AppCommand::TogglePspStorage => {
+                self.psp_storage = self.psp_storage.toggle();
+                data::settings::set_psp_storage(self.psp_storage);
+            }
             AppCommand::ClearIconCache => {
                 let freed = data::cache_manager::clear_icon_cache();
                 self.icons.clear_disk_index();
@@ -4130,7 +4154,7 @@ mod sort_tests {
         state.group_category_counts = vec![(Category::PsVitaGame, 1), (Category::Port, 0)];
         state.category_filter = Some(Category::PsVitaGame);
         state.sync_sidebar_cursor();
-        let featured = sidebar_slots(&state.group_category_counts).iter().position(|&s| s == SidebarSlot::Featured).unwrap();
+        let featured = sidebar_slots(state.sidebar_category_counts()).iter().position(|&s| s == SidebarSlot::Featured).unwrap();
         while state.sidebar_cursor < featured {
             assert!(state.move_sidebar_cursor(1));
         }

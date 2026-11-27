@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 const APP_ROOTS: &[&str] = &["ux0:app", "ur0:app", "uma0:app"];
-const PSP_ROOTS: &[&str] = &["ux0:pspemu/PSP/GAME", "ur0:pspemu/PSP/GAME"];
+const PSP_ROOTS: &[&str] = &["ux0:pspemu/PSP/GAME", "uma0:pspemu/PSP/GAME", "ur0:pspemu/PSP/GAME"];
 const META_ROOTS: &[&str] = &["ux0:appmeta", "ur0:appmeta"];
 const WORK_DIR: &str = "ux0:data/vitaforge";
 const HASH_CACHE_DIR: &str = "ux0:data/vitaforge/hashes";

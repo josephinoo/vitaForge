@@ -120,6 +120,8 @@ pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
                     cache_notice: app.cache_notice.as_deref(),
                     install_notifications: app.install_notifications,
                     sound_effects: app.audio.is_enabled(),
+                    psp_install_target: app.psp_install_target,
+                    psp_storage: app.psp_storage,
                     roms_dirs: &app.roms_dirs,
                     purge_armed: app.purge_armed,
                     plugins: settings::PluginsView {
@@ -469,6 +471,11 @@ fn catalog_screen(
             ui.horizontal_top(|ui| {
                 if show_sidebar {
                     let focus_index = sidebar_focus.then_some(sidebar_cursor);
+                    let sidebar_categories = match content_type_group {
+                        ContentTypeGroup::Home => &category_counts[..category_counts.len().min(3)],
+                        ContentTypeGroup::Games => &[][..],
+                        _ => category_counts,
+                    };
                     ui.allocate_ui_with_layout(
                         egui::vec2(SIDEBAR_WIDTH, ui.available_height()),
                         egui::Layout::top_down(egui::Align::Min),
@@ -477,7 +484,7 @@ fn catalog_screen(
                                 ui,
                                 lang,
                                 group_total,
-                                category_counts,
+                                sidebar_categories,
                                 category_filter,
                                 favorites_filter,
                                 sort_order,
@@ -493,6 +500,28 @@ fn catalog_screen(
                     if tab == StoreTab::Categories
                         && content_type_group == ContentTypeGroup::Games
                     {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 6.0;
+                            if platform_pill(
+                                ui,
+                                lang.category_label(None),
+                                category_filter.is_none() && !favorites_filter,
+                            ) {
+                                commands.push(AppCommand::SetFavoritesFilter(false));
+                                commands.push(AppCommand::SetCategoryFilter(None));
+                            }
+                            for &(category, _) in category_counts {
+                                if platform_pill(
+                                    ui,
+                                    lang.sidebar_platform_label(category),
+                                    category_filter == Some(category) && !favorites_filter,
+                                ) {
+                                    commands.push(AppCommand::SetFavoritesFilter(false));
+                                    commands.push(AppCommand::SetCategoryFilter(Some(category)));
+                                }
+                            }
+                        });
+                        ui.add_space(4.0);
                         ui.horizontal(|ui| {
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
@@ -510,7 +539,7 @@ fn catalog_screen(
                                 },
                             );
                         });
-                        ui.add_space(6.0);
+                        ui.add_space(4.0);
                     }
 
                     if tab == StoreTab::Roms {
@@ -584,4 +613,36 @@ fn catalog_screen(
             });
         });
     commands
+}
+
+fn platform_pill(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
+    let galley = ui.painter().layout_no_wrap(
+        label.to_owned(),
+        font(FONT_SMALL),
+        if active { pal().text } else { pal().text_dim },
+    );
+    let size = egui::vec2(galley.size().x + 18.0, 26.0);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    let fill = if active {
+        pal().primary
+    } else if response.hovered() {
+        pal().bg_card_hover
+    } else {
+        pal().bg_card
+    };
+    ui.painter().rect_filled(rect, 13.0, fill);
+    if !active {
+        ui.painter().rect_stroke(
+            rect,
+            13.0,
+            egui::Stroke::new(1.0, pal().separator),
+            egui::StrokeKind::Inside,
+        );
+    }
+    ui.painter().galley(
+        rect.center() - galley.size() * 0.5,
+        galley,
+        if active { pal().text } else { pal().text_dim },
+    );
+    response.clicked()
 }

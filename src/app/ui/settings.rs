@@ -30,6 +30,8 @@ pub enum Row {
     Language,
     Notifications,
     SoundEffects,
+    PspTarget,
+    PspStorage,
     Theme,
     /// Index into `roms::ROM_CONSOLES`.
     RomsDir(u8),
@@ -74,7 +76,7 @@ pub const SECTIONS: [(Section, &[Row]); 6] = [
             Row::AccountVerifier,
         ],
     ),
-    (Section::General, &[Row::Language, Row::Notifications, Row::SoundEffects]),
+    (Section::General, &[Row::Language, Row::Notifications, Row::SoundEffects, Row::PspTarget, Row::PspStorage]),
     (Section::Appearance, &[Row::Theme]),
     (
         Section::Plugins,
@@ -221,6 +223,8 @@ pub(crate) struct SettingsView<'a> {
     pub cache_notice: Option<&'a str>,
     pub install_notifications: bool,
     pub sound_effects: bool,
+    pub psp_install_target: crate::data::settings::PspInstallTarget,
+    pub psp_storage: crate::data::settings::PspStorage,
     pub roms_dirs: &'a [String],
     pub purge_armed: bool,
     pub plugins: PluginsView<'a>,
@@ -465,6 +469,12 @@ fn content(ui: &mut egui::Ui, view: &SettingsView, commands: &mut Vec<AppCommand
             }),
             Row::SoundEffects => setting_row(ui, ChromeIcon::Sliders, lang.settings_sound_effects(), lang.settings_sound_effects_hint(), focused, false, |ui| {
                 toggle(ui, view.sound_effects);
+            }),
+            Row::PspTarget => setting_row(ui, ChromeIcon::Games, &lang.tr("settings-psp-target"), &lang.tr("settings-psp-target-hint"), focused, false, |ui| {
+                value(ui, view.psp_install_target.label());
+            }),
+            Row::PspStorage => setting_row(ui, ChromeIcon::Storage, &lang.tr("settings-psp-storage"), &lang.tr("settings-psp-storage-hint"), focused, false, |ui| {
+                value(ui, view.psp_storage.mount());
             }),
             Row::Theme => setting_row(ui, ChromeIcon::Palette, lang.settings_theme(), lang.settings_theme_hint(), focused, false, |ui| {
                 chevron(ui);
@@ -1470,6 +1480,8 @@ mod tests {
                             cache_notice: None,
                             install_notifications: true,
                             sound_effects: true,
+                            psp_install_target: crate::data::settings::PspInstallTarget::Adrenaline,
+                            psp_storage: crate::data::settings::PspStorage::Ux0,
                             roms_dirs: &[],
                             purge_armed: false,
                             plugins: PluginsView {
@@ -1525,7 +1537,9 @@ mod tests {
                     egui::TopBottomPanel::bottom("hints").exact_height(47.0).show(ctx, |_| {});
                     settings_page(ctx, SettingsView {
                         lang: Language::English, nav: &nav, catalog_count: 0, stats: &stats,
-                        cache_notice: None, install_notifications: true, sound_effects: true, roms_dirs: &[], purge_armed: false,
+                        cache_notice: None, install_notifications: true, sound_effects: true,
+                        psp_install_target: crate::data::settings::PspInstallTarget::Adrenaline,
+                        psp_storage: crate::data::settings::PspStorage::Ux0, roms_dirs: &[], purge_armed: false,
                         plugins: PluginsView { tai: Some(&snapshot), outdated: &[], pending_reboot: false,
                             reboot_armed: false, armed: false, notice: None },
                         appear: 1.0,
@@ -1561,6 +1575,8 @@ mod tests {
             Row::Language,
             Row::Notifications,
             Row::SoundEffects,
+            Row::PspTarget,
+            Row::PspStorage,
             Row::Theme,
             Row::ClearIcons,
             Row::ClearCatalog,

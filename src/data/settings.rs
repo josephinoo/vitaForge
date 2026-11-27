@@ -4,6 +4,54 @@ use serde::{Deserialize, Serialize};
 #[cfg(not(test))]
 const SETTINGS_PATH: &str = "ux0:data/vitaforge/settings.json";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PspInstallTarget {
+    #[default]
+    Adrenaline,
+    LiveArea,
+}
+
+impl PspInstallTarget {
+    pub const fn toggle(self) -> Self {
+        match self {
+            Self::Adrenaline => Self::LiveArea,
+            Self::LiveArea => Self::Adrenaline,
+        }
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Adrenaline => "Adrenaline",
+            Self::LiveArea => "LiveArea (BGDL)",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PspStorage {
+    #[default]
+    Ux0,
+    Uma0,
+}
+
+impl PspStorage {
+    pub const fn toggle(self) -> Self {
+        match self {
+            Self::Ux0 => Self::Uma0,
+            Self::Uma0 => Self::Ux0,
+        }
+    }
+
+    pub const fn mount(self) -> &'static str {
+        match self {
+            Self::Ux0 => "ux0:",
+            Self::Uma0 => "uma0:",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default)]
@@ -23,6 +71,10 @@ pub struct Settings {
     /// Folder overrides by console code. 3DS predates this and keeps its own field.
     #[serde(default)]
     pub roms_dirs: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    pub psp_install_target: PspInstallTarget,
+    #[serde(default)]
+    pub psp_storage: PspStorage,
 }
 
 const fn default_install_notifications() -> bool { true }
@@ -40,8 +92,22 @@ impl Default for Settings {
             theme: Default::default(),
             roms_3ds_dir: default_roms_3ds_dir(),
             roms_dirs: Default::default(),
+            psp_install_target: PspInstallTarget::default(),
+            psp_storage: PspStorage::default(),
         }
     }
+}
+
+pub fn set_psp_install_target(target: PspInstallTarget) {
+    let mut settings = load();
+    settings.psp_install_target = target;
+    save(&settings);
+}
+
+pub fn set_psp_storage(storage: PspStorage) {
+    let mut settings = load();
+    settings.psp_storage = storage;
+    save(&settings);
 }
 
 pub fn set_language(language: crate::app::i18n::Language) {
@@ -225,5 +291,9 @@ mod tests {
         let invalid = r#"{"theme":"something_weird"}"#;
         let s: Settings = serde_json::from_str(invalid).unwrap();
         assert_eq!(s.theme, crate::app::ui::theme::ThemeId::Midnight);
+        assert_eq!(s.psp_install_target, PspInstallTarget::Adrenaline);
+        assert_eq!(s.psp_storage, PspStorage::Ux0);
+        assert_eq!(s.psp_install_target.toggle(), PspInstallTarget::LiveArea);
+        assert_eq!(s.psp_storage.toggle(), PspStorage::Uma0);
     }
 }

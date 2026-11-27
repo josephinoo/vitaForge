@@ -415,3 +415,8 @@ auth-connected = Ligado ao VitaForge
 auth-user-id = ID de utilizador: { $id }
 roms-folder = Pasta de ROMs de { $console }
 roms-folder-default = Predefinida: { $path }
+
+settings-psp-target = Destino de instalação PSP/PS1
+settings-psp-target-hint = Adrenaline extrai EBOOT.PBP em pspemu; LiveArea usa BGDL (requer NoPspEmuDrm)
+settings-psp-storage = Armazenamento PSP/PS1
+settings-psp-storage-hint = Partição para instalações do Adrenaline (ux0: ou uma0:)

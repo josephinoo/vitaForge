@@ -113,6 +113,8 @@ impl ContentTypeGroup {
         match self {
             ContentTypeGroup::Home | ContentTypeGroup::Games => &[
                 Category::PsVitaGame,
+                Category::PspGame,
+                Category::Ps1Game,
                 Category::Port,
                 Category::Original,
             ],
@@ -183,6 +185,8 @@ pub enum AppCommand {
     SetLanguage(crate::app::i18n::Language),
     ToggleInstallNotifications,
     ToggleSoundEffects,
+    TogglePspInstallTarget,
+    TogglePspStorage,
     ClearIconCache,
     ClearCatalogCache,
     PurgeAllCache,

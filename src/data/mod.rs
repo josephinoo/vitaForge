@@ -23,10 +23,12 @@ pub enum Category {
     Other,
 }
 impl Category {
-    pub const ALL: [Category; 7] = [
+    pub const ALL: [Category; 9] = [
         Category::Emulator,
         Category::Original,
         Category::PsVitaGame,
+        Category::PspGame,
+        Category::Ps1Game,
         Category::Plugin,
         Category::Port,
         Category::Utility,
