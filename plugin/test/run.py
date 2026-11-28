@@ -5,8 +5,9 @@ CLI = sys.argv[1]
 root = tempfile.mkdtemp(prefix="zipx_")
 fails = 0
 
-def run(zp, dest, ow=0):
-    return int(subprocess.run([CLI, zp, dest, str(ow)], capture_output=True, text=True).stdout.strip())
+def run(zp, dest, ow=0, *extra, free=None):
+    env = dict(os.environ, PLAT_FREE=str(free)) if free is not None else None
+    return int(subprocess.run([CLI, zp, dest, str(ow), *extra], capture_output=True, text=True, env=env).stdout.strip())
 
 def check(name, cond):
     global fails
@@ -66,6 +67,36 @@ check("overwrite: replaced", run(zp, d, 1) == 0 and open(d + "/keep.txt").read()
 open(d + "/other.txt.vfpart", "w").write("half")  # leftover of a crashed run
 os.remove(d + "/other.txt")
 check("resume: leftover .vfpart replaced", run(zp, d, 0) == 0 and open(d + "/other.txt").read() == "new" and not os.path.exists(d + "/other.txt.vfpart"))
+
+# Unsafe ':' is rejected; a leading "./" stays inside the destination
+check("colon: rejected (-3)", run(mk("colon", [("ux0:evil", b"x")]), os.path.join(root, "out_colon")) == -3)
+d = os.path.join(root, "out_dot")
+check("dot-slash: extracted inside dest", run(mk("dot", [("./a.txt", b"x")]), d) == 0 and os.path.exists(d + "/a.txt"))
+
+# Cancel from the progress callback (-6) leaves nothing half-written
+d = os.path.join(root, "out_cancel")
+check("cancel: rc -6", run(mk("cancel", [("c.bin", big)]), d, 0, "cancel") == -6)
+check("cancel: no final or .vfpart file", os.listdir(d) == [])
+
+# More than 65535 entries (ZIP64 end of central directory)
+zp = mk("many", [(f"m/{i}", b"") for i in range(66000)], zipfile.ZIP_STORED)
+d = os.path.join(root, "out_many")
+check("many entries: all extracted", run(zp, d) == 0 and len(os.listdir(d + "/m")) == 66000)
+
+# Free space: existing files don't count twice
+two = [("a.bin", bytes(3_000_000)), ("b.bin", bytes(3_000_000))]
+zp = mk("space", two)
+d = os.path.join(root, "out_space")
+check("space: too small (-4)", run(zp, d, 0, free=5_000_000) == -4)
+check("space: fits", run(zp, d, 0, free=8_000_000) == 0)
+check("space: nothing new to write", run(zp, d, 0, free=1_100_000) == 0)
+check("space: update needs only one file of headroom", run(zp, d, 1, free=4_200_000) == 0)
+check("space: update without headroom (-4)", run(zp, d, 1, free=2_000_000) == -4)
+
+# Paths longer than 512 bytes
+long = "/".join(["x" * 100] * 7) + "/f"
+d = os.path.join(root, "out_long")
+check("long path: extracted", run(mk("long", [(long, b"x")]), d) == 0)
 
 shutil.rmtree(root)
 print("zipx: all passed" if not fails else f"zipx: {fails} FAILED")

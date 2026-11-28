@@ -9,6 +9,9 @@ use std::sync::OnceLock;
 #[cfg(target_os = "vita")]
 use vitasdk_sys::*;
 pub const BGDL_TYPE_PSP: u32 = 0x00;
+/// Media type used to smuggle homebrew through SceDownload (see docs/plans/bgdl-homebrew.md).
+#[cfg(target_os = "vita")]
+const BGDL_TYPE_PHOTO: u32 = 0x01;
 #[allow(dead_code)]
 pub const BGDL_TYPE_PSM: u32 = 0x06;
 pub const BGDL_TYPE_GAME: u32 = 0x16;
@@ -302,6 +305,75 @@ fn probe_fs() {
 fn probe_fs_once() {
     static PROBED: OnceLock<()> = OnceLock::new();
     PROBED.get_or_init(probe_fs);
+}
+/// Phase 0 hardware check: if `bgdl_probe.txt` holds a URL, queue it once as a photo and log
+/// which `ux0:bgdl/t` folder appeared. Call from the main thread.
+#[cfg(target_os = "vita")]
+pub fn run_photo_probe() {
+    const TRIGGER: &str = "ux0:data/vitaforge/bgdl_probe.txt";
+    let Ok(text) = std::fs::read_to_string(TRIGGER) else {
+        return;
+    };
+    // removed first so a crash can't repeat the probe on every boot
+    if let Err(err) = std::fs::remove_file(TRIGGER) {
+        log_probe(&format!("photo probe skipped, can't remove trigger: {err}"));
+        return;
+    }
+    let folders = || vita_fs::list_dir("ux0:bgdl/t").unwrap_or_default();
+    let before = folders();
+    let result = start_bgdl("BGDL photo probe", text.trim(), None, BGDL_TYPE_PHOTO);
+    std::thread::sleep(std::time::Duration::from_millis(800));
+    let new: Vec<String> = folders()
+        .into_iter()
+        .filter(|name| !before.contains(name))
+        .collect();
+    log_probe(&format!("photo probe: result={result:?}, new folders={new:?}"));
+}
+/// Hardware test of the whole native-bar path: `bgdl_zip.txt` holds three lines
+/// (zip URL, extract folder, size in bytes). Runs once, from the main thread.
+#[cfg(target_os = "vita")]
+pub fn run_zip_trigger() {
+    use super::bg_jobs::{self, Job, Kind};
+    const TRIGGER: &str = "ux0:data/vitaforge/bgdl_zip.txt";
+    let Ok(text) = std::fs::read_to_string(TRIGGER) else {
+        return;
+    };
+    if let Err(err) = std::fs::remove_file(TRIGGER) {
+        log_probe(&format!("zip test skipped, can't remove trigger: {err}"));
+        return;
+    }
+    let mut lines = text.lines().map(str::trim);
+    let (Some(url), Some(extract_to), Some(Ok(size))) =
+        (lines.next(), lines.next(), lines.next().map(str::parse))
+    else {
+        log_probe("zip test: expected url, extract folder and size on three lines");
+        return;
+    };
+    let dir = std::path::Path::new(bg_jobs::QUEUE_DIR);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    if !bg_jobs::native_ready(dir, now) {
+        log_probe("zip test: the plugin isn't running or couldn't hook this firmware");
+        return;
+    }
+    let job = Job {
+        url: url.to_owned(),
+        dest: format!("{}/bgdl_test.zip", bg_jobs::QUEUE_DIR),
+        extract_to: extract_to.to_owned(),
+        name: "BGDL ZIP test".to_owned(),
+        md5: String::new(),
+        kind: Kind::Data,
+        size,
+        overwrite: true,
+    };
+    // a leftover from an earlier run would look like this download already finished
+    let _ = std::fs::remove_file(&job.dest);
+    let result = bg_jobs::enqueue_native(dir, &job).and_then(|(id, local)| {
+        start_bgdl(&job.name, &local, None, BGDL_TYPE_PHOTO)
+            .inspect_err(|_| bg_jobs::discard(dir, &id))
+    });
+    log_probe(&format!("zip test: {result:?}"));
 }
 #[cfg(target_os = "vita")]
 pub fn start_bgdl(title: &str, url: &str, rif: Option<&[u8]>, bgdl_type: u32) -> Result<()> {

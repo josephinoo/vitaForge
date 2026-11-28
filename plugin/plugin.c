@@ -7,6 +7,7 @@
 #include <psp2/io/stat.h>
 #include <psp2/rtc.h>
 #include "worker.h"
+#include "proxy_vita.h"
 #ifdef WITH_QM /* Quick Menu row: off by default, it hung the shell at boot once */
 #include "qmr/qm_reborn.h"
 #endif
@@ -57,6 +58,12 @@ static int worker_thread(SceSize args, void *argp)
 	sceIoMkdir(DIR_, 0777);
 	sceIoMkdir(DIR_ "/bg", 0777);
 	log_line("START", 0);
+	/* "hook" exists only while the native bar can really deliver; VitaForge checks it */
+	sceIoRemove(QDIR "hook");
+	if (proxy_start(QDIR) >= 0 && hook_start(QDIR)) {
+		SceUID fd = sceIoOpen(QDIR "hook", SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0777);
+		if (fd >= 0) sceIoClose(fd);
+	}
 	for (unsigned n = 1;; n++) {
 		worker_heartbeat(QDIR);
 		if (!worker_tick(QDIR)) sceKernelDelayThread(2 * 1000 * 1000); /* idle */
@@ -103,6 +110,7 @@ int module_start(SceSize args, const void *argp)
 
 int module_stop(SceSize args, const void *argp)
 {
+	hook_stop();
 #ifdef WITH_QM
 	QuickMenuRebornUnregisterWidget(STATUS_ID);
 	QuickMenuRebornUnregisterWidget(LABEL_ID);

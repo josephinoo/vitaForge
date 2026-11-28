@@ -5,6 +5,9 @@
 #include <stdint.h>
 #include <stddef.h>
 
+/* longest path zipx builds; plat_mkdir_p must accept it */
+#define PLAT_PATH_MAX 1552
+
 enum { PLAT_R = 0, PLAT_W = 1, PLAT_A = 2 }; /* read / create+truncate / append */
 
 int      plat_open(const char *path, int mode);          /* fd >= 0 or < 0 */

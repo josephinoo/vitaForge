@@ -16,6 +16,7 @@ typedef struct {
                                 "vpk": file kept at dest */
 	uint64_t size;           /* 0 = unknown */
 	int overwrite;
+	int bgdl;                /* downloaded by the native bar; the hook delivers `dest` */
 	uint64_t created;
 } job_t;
 

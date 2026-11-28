@@ -47,7 +47,7 @@ int plat_exists(const char *p)
 
 int plat_mkdir_p(const char *path)
 {
-	char t[512];
+	char t[PLAT_PATH_MAX];
 	size_t n = strlen(path);
 	if (n >= sizeof(t)) return -1;
 	memcpy(t, path, n + 1);

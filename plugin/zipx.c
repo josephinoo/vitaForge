@@ -7,7 +7,7 @@
 
 #define CHUNK 32768
 static unsigned char in_buf[CHUNK], out_buf[CHUNK];
-static char name_buf[1024], path_buf[1536 + 16];
+static char name_buf[1024], path_buf[PLAT_PATH_MAX];
 
 static uint32_t u16(const unsigned char *p) { return p[0] | p[1] << 8; }
 static uint32_t u32(const unsigned char *p) { return p[0] | p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24; }
@@ -216,6 +216,9 @@ int zipx_extract(const char *zip_path, const char *dest_dir, int overwrite, zipx
 	uint64_t count;
 	int rc = find_cd(fd, fsize, &cd, &count);
 	uint64_t total = 0;
+	/* space: only what the card has to grow by, plus the biggest old file that
+	 * coexists with its .vfpart while being replaced */
+	uint64_t grow = 0, headroom = 0;
 	entry_t e;
 	/* pass 1: validate every name and total the size before writing anything */
 	for (uint64_t i = 0, off = (uint64_t)cd; rc == ZIPX_OK && i < count; i++) {
@@ -223,13 +226,23 @@ int zipx_extract(const char *zip_path, const char *dest_dir, int overwrite, zipx
 		if (rc) break;
 		if (!zipx_name_ok(name_buf, e.name_len)) { rc = ZIPX_E_PATH; break; }
 		total += e.usize;
+		if (join(dest_dir, name_buf, "")) { rc = ZIPX_E_PATH; break; }
+		int64_t old = plat_file_size(path_buf);
+		if (old < 0) grow += e.usize;
+		else if (overwrite) {
+			uint64_t o = (uint64_t)old, both = o < e.usize ? o : e.usize;
+			if (e.usize > o) grow += e.usize - o;
+			if (both > headroom) headroom = both;
+		}
 		off += e.next_off_delta;
 	}
 	if (rc == ZIPX_OK) {
 		if (plat_mkdir_p(dest_dir)) rc = ZIPX_E_IO;
 		else {
 			int64_t free_b = plat_free_space(dest_dir);
-			if (free_b >= 0 && (uint64_t)free_b < total + total / 50 + 1048576) rc = ZIPX_E_SPACE;
+			uint64_t need = grow + headroom;
+			if (free_b < 0) plat_log("zipx free space unknown", free_b);
+			else if ((uint64_t)free_b < need + need / 50 + 1048576) rc = ZIPX_E_SPACE;
 		}
 	}
 	/* pass 2: extract */

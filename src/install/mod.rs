@@ -214,6 +214,14 @@ async fn queue_livearea_install(
         .unwrap_or_else(|_| bail!("the BGDL queue was dropped before it ran"))
 }
 pub fn process_pending_bgdl() {
+    #[cfg(target_os = "vita")]
+    {
+        static PROBE: std::sync::Once = std::sync::Once::new();
+        PROBE.call_once(|| {
+            bgdl::run_photo_probe();
+            bgdl::run_zip_trigger();
+        });
+    }
     {
         let mut delay = PENDING_BGDL_DELAY.lock().unwrap();
         if *delay > 0 {

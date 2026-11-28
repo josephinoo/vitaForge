@@ -25,12 +25,14 @@ int plat_exists(const char *p) { struct stat s; return stat(p, &s) == 0; }
 int64_t plat_file_size(const char *p) { struct stat s; return stat(p, &s) ? -1 : (int64_t)s.st_size; }
 int64_t plat_free_space(const char *p)
 {
+	const char *fake = getenv("PLAT_FREE"); /* tests simulate a nearly full card */
+	if (fake) return atoll(fake);
 	struct statvfs v;
 	return statvfs(p, &v) ? -1 : (int64_t)v.f_bavail * (int64_t)v.f_frsize;
 }
 int plat_mkdir_p(const char *path)
 {
-	char t[1024];
+	char t[PLAT_PATH_MAX];
 	size_t n = strlen(path);
 	if (n >= sizeof(t)) return -1;
 	memcpy(t, path, n + 1);

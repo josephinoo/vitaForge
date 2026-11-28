@@ -45,6 +45,49 @@ static void u64s(char *out, uint64_t v)
 	strcpy(out, t + i);
 }
 
+int dl_init(void) { return net_up(); }
+
+int dl_stream(const char *url, int ranged, uint64_t start, uint64_t end, unsigned char *buf, uint32_t cap,
+              int (*sink)(const void *data, int n, void *user), void *user)
+{
+	int tmpl = -1, conn = -1, req = -1, rc = DL_E_NET, code = 0;
+	tmpl = sceHttpCreateTemplate("VitaForge-BG/1", SCE_HTTP_VERSION_1_1, 1);
+	if (tmpl < 0) return DL_E_NET;
+	sceHttpSetAutoRedirect(tmpl, 1);
+	/* same trade-off as dl_get; the job md5, when present, is what protects the content */
+	sceHttpsSetSslCallback(tmpl, ssl_accept_all, NULL);
+	conn = sceHttpCreateConnectionWithURL(tmpl, url, 0);
+	if (conn < 0) goto done;
+	req = sceHttpCreateRequestWithURL(conn, SCE_HTTP_METHOD_GET, url, 0);
+	if (req < 0) goto done;
+	if (ranged) {
+		char v[64] = "bytes=";
+		u64s(v + 6, start);
+		strcpy(v + strlen(v), "-");
+		u64s(v + strlen(v), end);
+		sceHttpAddRequestHeader(req, "Range", v, SCE_HTTP_HEADER_OVERWRITE);
+	}
+	if (sceHttpSendRequest(req, NULL, 0) < 0) goto done;
+	sceHttpGetStatusCode(req, &code);
+	plat_log("stream status", code);
+	/* a 200 to a mid-file range would splice the wrong bytes into the download */
+	if (code != 206 && !(code == 200 && (!ranged || start == 0))) { rc = DL_E_HTTP; goto done; }
+	uint64_t left = end - (ranged ? start : 0) + 1;
+	while (left) {
+		int n = sceHttpReadData(req, buf, cap);
+		if (n <= 0) goto done;
+		if ((uint64_t)n > left) n = (int)left;
+		if (sink(buf, n, user)) { rc = DL_E_CANCEL; goto done; }
+		left -= (uint64_t)n;
+	}
+	rc = DL_OK;
+done:
+	if (req >= 0) sceHttpDeleteRequest(req);
+	if (conn >= 0) sceHttpDeleteConnection(conn);
+	if (tmpl >= 0) sceHttpDeleteTemplate(tmpl);
+	return rc;
+}
+
 int dl_get(const char *url, const char *part, dl_progress cb, void *user, int *status)
 {
 	int up = net_up();

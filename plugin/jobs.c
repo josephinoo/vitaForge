@@ -91,6 +91,7 @@ int job_read(const char *path, job_t *j)
 	if (strcmp(j->kind, "data") && strcmp(j->kind, "vpk")) return -2;
 	if (kv_get(buf, "size", t, sizeof(t))) j->size = to_u64(t);
 	if (kv_get(buf, "overwrite", t, sizeof(t))) j->overwrite = t[0] == '1';
+	if (kv_get(buf, "bgdl", t, sizeof(t))) j->bgdl = t[0] == '1';
 	if (kv_get(buf, "created", t, sizeof(t))) j->created = to_u64(t);
 	return 0;
 }
@@ -107,6 +108,7 @@ int job_write(const char *path, const job_t *j)
 	n = put_s(buf, sizeof(buf), n, "kind", j->kind);     if (n < 0) return -1;
 	n = put_u(buf, sizeof(buf), n, "size", j->size);     if (n < 0) return -1;
 	n = put_u(buf, sizeof(buf), n, "overwrite", (uint64_t)j->overwrite); if (n < 0) return -1;
+	n = put_u(buf, sizeof(buf), n, "bgdl", (uint64_t)j->bgdl); if (n < 0) return -1;
 	n = put_u(buf, sizeof(buf), n, "created", j->created); if (n < 0) return -1;
 	return atomic_write(path, buf, n);
 }

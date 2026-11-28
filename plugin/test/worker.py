@@ -103,6 +103,13 @@ r = run(q); check("recovery: restarts extraction without downloading", state(q, 
 q, w = new_case(); open(q + "bad.job", "w").write("nonsense")
 run(q); check("invalid job: reported failed", state(q, "bad")["status"] == "failed")
 
+# 12. native-bar job: waits without downloading, extracts once the file is delivered
+q, w = new_case(); job(q, w, "j12", "file://" + good, size=good_size)
+open(q + "j12.job", "a").write("bgdl=1\n")
+r = run(q); check("native: waits for the shell", r == (0, 0) and state(q, "j12")["status"] == "downloading")
+shutil.copy(good, w + "/j12.zip")
+r = run(q); check("native: extracts the delivered file", state(q, "j12")["status"] == "completed" and r[1] == 0 and os.path.exists(w + "/out/a.txt"))
+
 shutil.rmtree(root)
 print("worker: all passed" if not fails else f"worker: {fails} FAILED")
 sys.exit(1 if fails else 0)

@@ -219,6 +219,10 @@ int worker_tick(const char *qdir)
 			if (C.st.status != JS_PAUSED) set(JS_PAUSED, NULL);
 			continue;
 		}
+		if (C.job.bgdl && plat_file_size(C.job.dest) < 0) { /* the shell is still downloading it */
+			if (C.st.status != JS_DOWNLOADING) set(JS_DOWNLOADING, NULL);
+			continue;
+		}
 		run();
 		return 1;
 	}

@@ -10,6 +10,8 @@ use std::path::{Path, PathBuf};
 
 /// Where jobs live on the console (the plugin watches this exact directory).
 pub const QUEUE_DIR: &str = "ux0:data/vitaforge/bg";
+/// Loopback port the plugin serves native-bar downloads on (`proxy_vita.h`).
+pub const PROXY_PORT: u16 = 19851;
 /// The plugin is considered running if its heartbeat is newer than this.
 const ALIVE_SECS: u64 = 30;
 
@@ -110,10 +112,33 @@ fn write_atomic(target: &Path, body: &str) -> Result<()> {
 
 /// Queues a job; returns its id. The plugin picks it up within ~2 s.
 pub fn enqueue(dir: &Path, job: &Job) -> Result<String> {
+    enqueue_with(dir, job, false)
+}
+
+/// Queues a job whose bytes the native download bar fetches; returns the id and the
+/// loopback URL to hand to SceDownload. The size is required: the proxy announces it.
+pub fn enqueue_native(dir: &Path, job: &Job) -> Result<(String, String)> {
+    anyhow::ensure!(job.size > 0, "a native-bar download needs its size");
+    let id = enqueue_with(dir, job, true)?;
+    let url = format!("http://127.0.0.1:{PROXY_PORT}/dl/{id}.jpg");
+    Ok((id, url))
+}
+
+/// Forgets a job that SceDownload refused.
+pub fn discard(dir: &Path, id: &str) {
+    let _ = std::fs::remove_file(path(dir, id, "job"));
+}
+
+/// The plugin runs and its export hook is installed.
+pub fn native_ready(dir: &Path, now_unix: u64) -> bool {
+    plugin_alive(dir, now_unix) && dir.join("hook").exists()
+}
+
+fn enqueue_with(dir: &Path, job: &Job, native: bool) -> Result<String> {
     std::fs::create_dir_all(dir).with_context(|| format!("couldn't create {}", dir.display()))?;
     let id = format!("{:x}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_millis());
     let body = format!(
-        "url={}\ndest={}\nextract_to={}\nname={}\nmd5={}\nkind={}\nsize={}\noverwrite={}\ncreated={}\n",
+        "url={}\ndest={}\nextract_to={}\nname={}\nmd5={}\nkind={}\nsize={}\noverwrite={}\ncreated={}\nbgdl={}\n",
         one_line(&job.url)?,
         one_line(&job.dest)?,
         one_line(&job.extract_to)?,
@@ -123,6 +148,7 @@ pub fn enqueue(dir: &Path, job: &Job) -> Result<String> {
         job.size,
         u8::from(job.overwrite),
         id,
+        u8::from(native),
     );
     write_atomic(&path(dir, &id, "job"), &body)?;
     Ok(id)
@@ -272,6 +298,22 @@ mod tests {
         assert!(!plugin_alive(&dir, 1100), "stale for 110 s");
         std::fs::write(dir.join("heartbeat"), "garbage").unwrap();
         assert!(!plugin_alive(&dir, 1000));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn native_jobs_point_the_shell_at_the_proxy() {
+        let dir = scratch("native");
+        let (id, url) = enqueue_native(&dir, &job()).unwrap();
+        assert_eq!(url, format!("http://127.0.0.1:19851/dl/{id}.jpg"));
+        assert!(std::fs::read_to_string(dir.join(format!("{id}.job"))).unwrap().contains("\nbgdl=1\n"));
+        assert!(enqueue_native(&dir, &Job { size: 0, ..job() }).is_err());
+        std::fs::write(dir.join("heartbeat"), "1000").unwrap();
+        assert!(!native_ready(&dir, 1000), "no hook");
+        std::fs::write(dir.join("hook"), "").unwrap();
+        assert!(native_ready(&dir, 1000));
+        discard(&dir, &id);
+        assert!(list(&dir).is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
