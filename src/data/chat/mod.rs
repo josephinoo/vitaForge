@@ -2,6 +2,7 @@
 //! snapshots for the UI. Nothing here runs on the render thread.
 
 pub mod crypto;
+mod live;
 
 use std::collections::{BTreeMap, HashMap};
 use std::time::{Duration, Instant};
@@ -60,8 +61,6 @@ pub struct Line {
 pub struct Thread {
     pub conversation: Conversation,
     pub lines: Vec<Line>,
-    /// (username, key fingerprint) of the other members.
-    pub fingerprints: Vec<(String, String)>,
     /// Someone's key differs from the one this console saw before.
     pub key_changed: Option<String>,
     pub waiting_for_key: bool,
@@ -79,7 +78,6 @@ pub struct Snapshot {
     pub inbox: Vec<Conversation>,
     pub thread: Option<Thread>,
     pub notice: Option<Notice>,
-    pub my_fingerprint: String,
 }
 
 #[derive(Debug)]
@@ -182,7 +180,6 @@ struct OpenThread {
     cursor: i64,
     messages: BTreeMap<i64, RawMessage>,
     keys: HashMap<i64, [u8; KEY_LEN]>,
-    fingerprints: Vec<(String, String)>,
     key_changed: Option<String>,
     waiting_for_key: bool,
 }
@@ -239,6 +236,12 @@ fn load_secret(username: &str) -> anyhow::Result<[u8; KEY_LEN]> {
     }
 }
 
+enum Wake {
+    Command(Command),
+    Live(live::Event),
+    Poll,
+}
+
 struct Worker {
     me: String,
     my_id: i64,
@@ -275,11 +278,21 @@ impl Worker {
             self.pins = serde_json::from_slice(&bytes).unwrap_or_default();
         }
         let mut next = Instant::now() + Duration::from_secs(5);
+        let (events_tx, mut events) = mpsc::unbounded_channel();
+        // The socket exists only while the chat screen is open.
+        let mut socket = None;
+        let mut live_up = false;
         loop {
-            let wait = next.saturating_duration_since(Instant::now());
-            match tokio::time::timeout(wait, commands.recv()).await {
-                Ok(None) => return,
-                Ok(Some(command)) => {
+            let wake = tokio::select! {
+                command = commands.recv() => match command {
+                    Some(command) => Wake::Command(command),
+                    None => return,
+                },
+                Some(event) = events.recv() => Wake::Live(event),
+                _ = tokio::time::sleep_until(next.into()) => Wake::Poll,
+            };
+            match wake {
+                Wake::Command(command) => {
                     self.state.notice = None;
                     let result = match self.handle(command).await {
                         Ok(()) if self.visible => self.refresh().await,
@@ -289,17 +302,40 @@ impl Worker {
                         self.state.notice = Some(Notice::Error(format!("{err:#}")));
                     }
                 }
-                Err(_) => {
+                wake => {
+                    if let Wake::Live(first) = wake {
+                        // One refresh covers a burst of events.
+                        let mut changed = first != live::Event::Down;
+                        live_up = changed;
+                        while let Ok(event) = events.try_recv() {
+                            live_up = event != live::Event::Down;
+                            changed |= live_up;
+                        }
+                        if !changed || !self.visible {
+                            next = Instant::now() + self.interval(live_up);
+                            continue;
+                        }
+                    }
                     let result = if self.visible { self.refresh().await } else { self.check_unread().await };
                     if let Err(err) = result {
-                        crate::install::log_file(&format!("chat poll failed: {err:#}"));
+                        crate::install::log_file(&format!("chat refresh failed: {err:#}"));
                     }
                 }
             }
-            let interval = if self.visible && self.thread.is_some() { THREAD_POLL } else { IDLE_POLL };
-            next = Instant::now() + interval;
+            if !self.visible {
+                socket = None;
+                live_up = false;
+            } else if socket.is_none() && self.secret.is_some() {
+                socket = Some(live::open(events_tx.clone()));
+            }
+            next = Instant::now() + self.interval(live_up);
             let _ = self.out.send(self.state.clone());
         }
+    }
+
+    /// Fast polling is only the fallback for an open thread without a socket.
+    fn interval(&self, live_up: bool) -> Duration {
+        if self.visible && self.thread.is_some() && !live_up { THREAD_POLL } else { IDLE_POLL }
     }
 
     async fn check_unread(&mut self) -> anyhow::Result<()> {
@@ -320,7 +356,6 @@ impl Worker {
         let secret = load_secret(&self.me)?;
         let public = crypto::public_key(&secret);
         call(Method::PUT, "/me/key", Some(json!({ "public_key": to_hex(&public) }))).await?;
-        self.state.my_fingerprint = crypto::fingerprint(&public);
         self.secret = Some(secret);
         Ok(secret)
     }
@@ -467,7 +502,6 @@ impl Worker {
         thread.waiting_for_key = !thread.keys.contains_key(&info.version);
 
         let mut pins_changed = false;
-        thread.fingerprints.clear();
         for member in info.members.iter().filter(|m| m.user_id != self.my_id) {
             let Some(public) = member.key() else { continue };
             let fingerprint = crypto::fingerprint(&public);
@@ -482,7 +516,6 @@ impl Worker {
                     }
                 }
             }
-            thread.fingerprints.push((name, fingerprint));
         }
         if pins_changed {
             if let Err(err) = std::fs::write(data_file("pins", &self.me), serde_json::to_vec(&self.pins)?) {
@@ -578,7 +611,6 @@ impl Worker {
         self.state.thread = Some(Thread {
             conversation,
             lines,
-            fingerprints: thread.fingerprints.clone(),
             key_changed: thread.key_changed.clone(),
             waiting_for_key: thread.waiting_for_key,
         });

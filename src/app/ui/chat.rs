@@ -1,7 +1,9 @@
 //! The chat screen: conversations on the left, the open thread on the right.
 
-use crate::app::chat::{ChatScreen, Row, rows};
+use crate::app::chat::{ChatScreen, Row};
 use crate::app::i18n::Language;
+use crate::app::ui::chrome_icons::{self, ChromeIcon};
+use crate::app::ui::footer::{Glyph, button_hints};
 use crate::app::ui::theme::*;
 use crate::data::chat::{Client, Line, Notice, Snapshot, Thread};
 use crate::input::AppCommand;
@@ -13,32 +15,57 @@ pub(crate) fn chat_page(ctx: &egui::Context, lang: Language, screen: &ChatScreen
     let mut commands = Vec::new();
     let snapshot = client.snapshot();
     let thread = snapshot.thread.as_ref().filter(|t| screen.open.is_some_and(|id| id < 0 || t.conversation.id == id));
-    let rows = rows(screen.open, &snapshot);
+    let rows = screen.rows(&snapshot);
     let focused = rows.get(screen.focused(&rows)).copied();
     // Worker updates arrive without input events.
     ctx.request_repaint_after(std::time::Duration::from_millis(500));
 
     let panel = |fill| egui::Frame::NONE.fill(fill).inner_margin(8.0);
+    // Added first so it spans the whole bottom edge.
+    let action = match focused {
+        Some(Row::Write) => "chat-write",
+        Some(Row::Line(i)) if thread.and_then(|t| t.lines.get(i)).is_some_and(|l| l.mine && l.text.is_some()) => "chat-edit",
+        Some(Row::Line(_)) => "",
+        _ => "chat-select",
+    };
+    let (action, back) = (if action.is_empty() { String::new() } else { lang.tr(action) }, lang.tr("chat-back"));
+    let mut hints = vec![(Glyph::Circle, back.as_str())];
+    if !action.is_empty() {
+        hints.insert(0, (Glyph::Cross, action.as_str()));
+    }
+    commands.extend(button_hints(ctx, lang, &hints, None));
     egui::SidePanel::left("chat_aside")
         .exact_width(ASIDE_WIDTH)
         .resizable(false)
         .frame(panel(pal().bg_header))
         .show(ctx, |ui| aside(ui, lang, screen, client, &snapshot, focused, &mut commands));
-    if let Some(thread) = thread {
+    if thread.is_some() {
         egui::TopBottomPanel::bottom("chat_composer")
             .frame(panel(pal().bg_deep))
-            .show(ctx, |ui| composer(ui, lang, screen, thread, &rows, focused, &mut commands));
+            .show(ctx, |ui| composer(ui, lang, focused, &mut commands));
     }
     egui::CentralPanel::default().frame(panel(pal().bg_deep)).show(ctx, |ui| {
+        if thread.is_some() {
+            dots(ui, screen, focused, &mut commands);
+        }
         header(ui, lang, client, &snapshot, thread);
         match thread {
             Some(thread) => messages(ui, lang, thread, focused, &mut commands),
             None => {
-                let key = if screen.open.is_some() || !snapshot.loaded { "chat-loading" } else { "chat-pick" };
+                let key = if screen.open.is_some() || !snapshot.loaded {
+                    "chat-loading"
+                } else if snapshot.inbox.is_empty() {
+                    "chat-empty"
+                } else {
+                    "chat-pick"
+                };
                 ui.centered_and_justified(|ui| ui.label(text(lang.tr(key), FONT_BODY, pal().text_dim)));
             }
         }
     });
+    if screen.menu && thread.is_some() {
+        menu(ctx, lang, screen, &rows, focused, &mut commands);
+    }
     commands
 }
 
@@ -46,8 +73,16 @@ fn text(value: impl Into<String>, size: f32, color: egui::Color32) -> egui::Rich
     egui::RichText::new(value).size(size).color(color)
 }
 
+fn icon(ui: &mut egui::Ui, glyph: ChromeIcon, side: f32, tint: egui::Color32) {
+    let (rect, _) = ui.allocate_exact_size(egui::Vec2::splat(side), egui::Sense::hover());
+    chrome_icons::paint(ui, glyph, rect, tint);
+}
+
 fn avatar(painter: &egui::Painter, center: egui::Pos2, name: &str) {
-    painter.circle_filled(center, AVATAR / 2.0, pal().primary);
+    // A stable colour per name tells people apart at a glance.
+    let colors = [pal().primary, pal().accent, pal().success_hover, pal().warning_hover];
+    let color = colors[name.bytes().map(usize::from).sum::<usize>() % colors.len()];
+    painter.circle_filled(center, AVATAR / 2.0, color);
     let initial = name.chars().next().map_or('?', |c| c.to_ascii_uppercase());
     painter.text(center, egui::Align2::CENTER_CENTER, initial, font(FONT_LARGE), egui::Color32::WHITE);
 }
@@ -71,21 +106,25 @@ fn aside(
     commands: &mut Vec<AppCommand>,
 ) {
     ui.horizontal(|ui| {
-        if ui.button(lang.tr("chat-back")).clicked() {
+        let (back, response) = ui.allocate_exact_size(egui::Vec2::splat(32.0), egui::Sense::click());
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, lang.tr("chat-back")));
+        ui.painter().rect_filled(back, RADIUS_MD, pal().bg_card);
+        chrome_icons::paint(ui, ChromeIcon::ChevronLeft, back.shrink(6.0), pal().text);
+        if response.clicked() {
             commands.push(AppCommand::CloseChat);
         }
+        icon(ui, ChromeIcon::Messages, 20.0, pal().accent_soft);
         ui.label(text(lang.tr("chat-title"), FONT_TITLE, pal().text).strong());
     });
     ui.add_space(4.0);
-    egui::ScrollArea::vertical().id_salt("chat_list").auto_shrink([false, false]).show(ui, |ui| {
-        ui.spacing_mut().item_spacing.y = 4.0;
-        let list = crate::app::chat::rows(None, snapshot);
-        for &row in &list {
+    let list = crate::app::chat::rows(None, snapshot);
+    let (chats, actions): (Vec<Row>, Vec<Row>) = list.iter().partition(|r| matches!(r, Row::Conversation(_)));
+    let mut draw = |ui: &mut egui::Ui, row: Row| {
             let conversation = match row {
                 Row::Conversation(id) => snapshot.inbox.iter().find(|c| c.id == id),
                 _ => None,
             };
-            let height = if conversation.is_some() { 50.0 } else { 28.0 };
+            let height = if conversation.is_some() { 50.0 } else { 36.0 };
             let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), height), egui::Sense::click());
             let open = matches!(row, Row::Conversation(id) if screen.open == Some(id));
             let is_focused = focused == Some(row);
@@ -102,26 +141,41 @@ fn aside(
                 avatar(&painter, egui::pos2(rect.left() + 6.0 + AVATAR / 2.0, rect.center().y), name);
                 let left = rect.left() + AVATAR + 14.0;
                 let names = painter.with_clip_rect(egui::Rect::from_min_max(rect.min, rect.max - egui::vec2(30.0, 0.0)).intersect(painter.clip_rect()));
-                names.text(egui::pos2(left, rect.center().y - 9.0), egui::Align2::LEFT_CENTER, name, font(FONT_BODY), pal().text);
-                names.text(egui::pos2(left, rect.center().y + 10.0), egui::Align2::LEFT_CENTER, c.members.join(", "), font(FONT_MICRO), pal().text_dim);
+                // A direct chat's member list would only repeat its name.
+                let name_y = if c.is_group() { rect.center().y - 9.0 } else { rect.center().y };
+                names.text(egui::pos2(left, name_y), egui::Align2::LEFT_CENTER, name, font(FONT_BODY), pal().text);
+                if c.is_group() {
+                    names.text(egui::pos2(left, rect.center().y + 10.0), egui::Align2::LEFT_CENTER, c.members.join(", "), font(FONT_MICRO), pal().text_dim);
+                }
                 if c.unread > 0 {
                     let badge = egui::pos2(rect.right() - 16.0, rect.center().y);
                     painter.circle_filled(badge, 10.0, pal().primary);
                     painter.text(badge, egui::Align2::CENTER_CENTER, c.unread.min(99), font(FONT_MICRO), egui::Color32::WHITE);
                 }
             } else {
-                let key = match row {
-                    Row::NewDirect => "chat-new-direct",
-                    Row::NewGroup => "chat-new-group",
-                    _ => "chat-join",
+                let (key, glyph) = match row {
+                    Row::NewDirect => ("chat-new-direct", ChromeIcon::NewChat),
+                    Row::NewGroup => ("chat-new-group", ChromeIcon::Group),
+                    _ => ("chat-join", ChromeIcon::Join),
                 };
-                painter.text(rect.left_center() + egui::vec2(8.0, 0.0), egui::Align2::LEFT_CENTER, format!("+ {}", lang.tr(key)), font(FONT_SMALL), pal().accent_soft);
+                let at = egui::Rect::from_center_size(rect.left_center() + egui::vec2(17.0, 0.0), egui::Vec2::splat(17.0));
+                chrome_icons::paint(ui, glyph, at, pal().accent_soft);
+                painter.text(rect.left_center() + egui::vec2(34.0, 0.0), egui::Align2::LEFT_CENTER, lang.tr(key), font(FONT_SMALL), pal().accent_soft);
             }
             if response.clicked() {
                 commands.push(AppCommand::ChatActivate(row));
             }
-        }
-    });
+    };
+    ui.spacing_mut().item_spacing.y = 4.0;
+    // The "new chat" actions stay in place however long the list gets.
+    let pinned = actions.len() as f32 * 40.0 + 10.0;
+    egui::ScrollArea::vertical()
+        .id_salt("chat_list")
+        .auto_shrink([false, false])
+        .max_height((ui.available_height() - pinned).max(0.0))
+        .show(ui, |ui| chats.into_iter().for_each(|row| draw(ui, row)));
+    ui.separator();
+    actions.into_iter().for_each(|row| draw(ui, row));
 }
 
 fn header(ui: &mut egui::Ui, lang: Language, client: &Client, snapshot: &Snapshot, thread: Option<&Thread>) {
@@ -137,8 +191,11 @@ fn header(ui: &mut egui::Ui, lang: Language, client: &Client, snapshot: &Snapsho
                 ui.vertical(|ui| {
                     ui.spacing_mut().item_spacing.y = 0.0;
                     ui.label(text(name, FONT_TITLE, pal().text).strong());
-                    let keys = thread.fingerprints.iter().take(3).map(|(u, f)| format!("{u}: {f}")).collect::<Vec<_>>().join("   ");
-                    line(ui, format!("{} {keys}", lang.tr("chat-encrypted")), pal().text_faint);
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 4.0;
+                        icon(ui, ChromeIcon::Lock, FONT_MICRO, pal().success);
+                        line(ui, lang.tr("chat-encrypted"), pal().text_faint);
+                    });
                 });
             });
             if let Some(user) = &thread.key_changed {
@@ -148,9 +205,6 @@ fn header(ui: &mut egui::Ui, lang: Language, client: &Client, snapshot: &Snapsho
                 line(ui, lang.tr("chat-waiting-key"), pal().text_dim);
             }
             ui.separator();
-        }
-        None if !snapshot.my_fingerprint.is_empty() => {
-            line(ui, format!("{} {}", lang.tr("chat-my-key"), snapshot.my_fingerprint), pal().text_faint);
         }
         None => {}
     }
@@ -171,32 +225,46 @@ fn messages(ui: &mut egui::Ui, lang: Language, thread: &Thread, focused: Option<
         .auto_shrink([false, false])
         .stick_to_bottom(true)
         .show(ui, |ui| {
+            if thread.lines.is_empty() {
+                ui.vertical_centered(|ui| ui.label(text(lang.tr("chat-empty-thread"), FONT_BODY, pal().text_dim)));
+            }
             for (index, message) in thread.lines.iter().enumerate() {
                 let row = Row::Line(index);
-                let response = bubble(ui, lang, message, focused == Some(row));
+                // Consecutive messages from one person share a single name and avatar.
+                let first = index == 0 || thread.lines[index - 1].sender != message.sender;
+                if first && index > 0 {
+                    ui.add_space(6.0);
+                }
+                let response = bubble(ui, lang, message, first, focused == Some(row));
                 if focused == Some(row) {
                     follow_focus(ui, &response, (row, thread.lines.len()));
                 }
                 if response.clicked() {
                     commands.push(AppCommand::ChatActivate(row));
                 }
-                ui.add_space(4.0);
+            }
+            // Back on "Write" (also after sending) returns to the newest message.
+            if focused == Some(Row::Write) {
+                let end = ui.allocate_response(egui::Vec2::ZERO, egui::Sense::hover());
+                follow_focus(ui, &end, (Row::Write, thread.lines.len()));
             }
         });
 }
 
-fn bubble(ui: &mut egui::Ui, lang: Language, message: &Line, focused: bool) -> egui::Response {
+fn bubble(ui: &mut egui::Ui, lang: Language, message: &Line, first: bool, focused: bool) -> egui::Response {
     let side = if message.mine { egui::Align::Max } else { egui::Align::Min };
     let layout = if message.mine { egui::Layout::right_to_left(egui::Align::Min) } else { egui::Layout::left_to_right(egui::Align::Min) };
     ui.with_layout(layout, |ui| {
         if !message.mine {
-            let (rect, _) = ui.allocate_exact_size(egui::Vec2::splat(AVATAR), egui::Sense::hover());
-            avatar(ui.painter(), rect.center(), &message.sender);
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(AVATAR, if first { AVATAR } else { 0.0 }), egui::Sense::hover());
+            if first {
+                avatar(ui.painter(), rect.center(), &message.sender);
+            }
         }
         let width = ui.available_width() * 0.75;
         ui.with_layout(egui::Layout::top_down(side), |ui| {
             ui.spacing_mut().item_spacing.y = 2.0;
-            if !message.mine {
+            if !message.mine && first {
                 ui.label(text(message.sender.as_str(), FONT_MICRO, pal().accent_soft));
             }
             let body = message.text.clone().unwrap_or_else(|| lang.tr("chat-unreadable"));
@@ -219,61 +287,115 @@ fn bubble(ui: &mut egui::Ui, lang: Language, message: &Line, focused: bool) -> e
     .inner
 }
 
-fn composer(
-    ui: &mut egui::Ui,
-    lang: Language,
-    screen: &ChatScreen,
-    thread: &Thread,
-    rows: &[Row],
-    focused: Option<Row>,
-    commands: &mut Vec<AppCommand>,
-) {
+fn composer(ui: &mut egui::Ui, lang: Language, focused: Option<Row>, commands: &mut Vec<AppCommand>) {
     let ring = |on: bool| egui::Stroke::new(if on { 2.0_f32 } else { 1.0 }, if on { pal().focus } else { pal().separator });
     let writing = focused == Some(Row::Write);
     ui.horizontal(|ui| {
         let send_width = 44.0;
         let size = egui::vec2(ui.available_width() - send_width - ui.spacing().item_spacing.x, 36.0);
         let (field, field_response) = ui.allocate_exact_size(size, egui::Sense::click());
+        ui.painter().rect_filled(field, RADIUS_MD, pal().bg_card);
         ui.painter().rect_stroke(field, RADIUS_MD, ring(writing), egui::StrokeKind::Inside);
         ui.painter().text(field.left_center() + egui::vec2(12.0, 0.0), egui::Align2::LEFT_CENTER, lang.tr("chat-write"), font(FONT_BODY), pal().text_faint);
         let (send, send_response) = ui.allocate_exact_size(egui::vec2(send_width, 36.0), egui::Sense::click());
         ui.painter().rect_filled(send, RADIUS_MD, pal().primary);
-        // A paper plane; the subsetted icon font has none.
-        let c = send.center();
-        ui.painter().add(egui::Shape::convex_polygon(
-            vec![c + egui::vec2(-9.0, -8.0), c + egui::vec2(11.0, 0.0), c + egui::vec2(-9.0, 8.0), c + egui::vec2(-5.0, 0.0)],
-            egui::Color32::WHITE,
-            egui::Stroke::NONE,
-        ));
+        chrome_icons::paint(ui, ChromeIcon::Send, send.shrink2(egui::vec2(12.0, 8.0)), egui::Color32::WHITE);
         if field_response.clicked() || send_response.clicked() {
             commands.push(AppCommand::ChatActivate(Row::Write));
         }
     });
-    ui.horizontal_wrapped(|ui| {
-        // Everything after "Write" is a conversation action.
-        for &row in rows.iter().skip(thread.lines.len() + 1) {
-            let key = match row {
-                _ if screen.armed == Some(row) => "chat-confirm",
-                Row::Invite => "chat-invite",
-                Row::AddMember => "chat-add-member",
-                Row::RemoveMember => "chat-remove-member",
-                Row::Rename => "chat-rename",
-                Row::Leave => "chat-leave",
-                Row::Block => "chat-block",
-                _ => "chat-unblock",
-            };
-            let button = egui::Button::new(text(lang.tr(key), FONT_MICRO, pal().text)).stroke(ring(focused == Some(row)));
-            if ui.add(button).clicked() {
-                commands.push(AppCommand::ChatActivate(row));
-            }
-        }
-    });
+}
+
+/// Three dots in the thread's top-right corner, WhatsApp style.
+fn dots(ui: &mut egui::Ui, screen: &ChatScreen, focused: Option<Row>, commands: &mut Vec<AppCommand>) {
+    let top_right = ui.max_rect().right_top();
+    let rect = egui::Rect::from_min_size(top_right - egui::vec2(36.0, 0.0), egui::Vec2::splat(36.0));
+    let response = ui.interact(rect, egui::Id::new("chat_dots"), egui::Sense::click());
+    if screen.menu || focused == Some(Row::Menu) {
+        ui.painter().rect(rect, RADIUS_MD, pal().bg_card, egui::Stroke::new(2.0_f32, pal().focus), egui::StrokeKind::Inside);
+    }
+    for dy in [-7.0, 0.0, 7.0] {
+        ui.painter().circle_filled(rect.center() + egui::vec2(0.0, dy), 2.2, pal().text);
+    }
+    // While open, the menu's own outside-click closes it.
+    if response.clicked() && !screen.menu {
+        commands.push(AppCommand::ChatActivate(Row::Menu));
+    }
+}
+
+fn menu(
+    ctx: &egui::Context,
+    lang: Language,
+    screen: &ChatScreen,
+    rows: &[Row],
+    focused: Option<Row>,
+    commands: &mut Vec<AppCommand>,
+) {
+    let area = egui::Area::new(egui::Id::new("chat_menu"))
+        .order(egui::Order::Foreground)
+        .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-8.0, 48.0))
+        .show(ctx, |ui| {
+            let stroke = egui::Stroke::new(1.0_f32, pal().separator);
+            egui::Frame::NONE.fill(pal().bg_header).stroke(stroke).corner_radius(RADIUS_MD).inner_margin(4.0).show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 2.0;
+                for &row in rows {
+                    let (key, glyph) = match row {
+                        Row::Invite => ("chat-invite", ChromeIcon::Invite),
+                        Row::AddMember => ("chat-add-member", ChromeIcon::AddUser),
+                        Row::RemoveMember => ("chat-remove-member", ChromeIcon::RemoveUser),
+                        Row::Rename => ("chat-rename", ChromeIcon::Edit),
+                        Row::Leave => ("chat-leave", ChromeIcon::Leave),
+                        Row::Block => ("chat-block", ChromeIcon::Block),
+                        _ => ("chat-unblock", ChromeIcon::Unblock),
+                    };
+                    let armed = screen.armed == Some(row);
+                    let key = if armed { "chat-confirm" } else { key };
+                    let color = if armed || matches!(row, Row::Leave | Row::Block) { pal().danger } else { pal().text };
+                    let (rect, response) = ui.allocate_exact_size(egui::vec2(250.0, 36.0), egui::Sense::click());
+                    if focused == Some(row) {
+                        ui.painter().rect_filled(rect, RADIUS_SM, pal().primary.gamma_multiply(0.35));
+                    }
+                    let at = egui::Rect::from_center_size(rect.left_center() + egui::vec2(18.0, 0.0), egui::Vec2::splat(17.0));
+                    chrome_icons::paint(ui, glyph, at, color);
+                    ui.painter().text(rect.left_center() + egui::vec2(36.0, 0.0), egui::Align2::LEFT_CENTER, lang.tr(key), font(FONT_SMALL), color);
+                    if response.clicked() {
+                        commands.push(AppCommand::ChatActivate(row));
+                    }
+                }
+            });
+        });
+    if area.response.clicked_elsewhere() {
+        commands.push(AppCommand::ChatActivate(Row::Menu));
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::data::chat::Conversation;
+
+    #[test]
+    fn new_chat_stays_visible_under_a_long_list() {
+        let ctx = egui::Context::default();
+        apply_theme(&ctx);
+        let inbox = (1..60).map(|id| Conversation { id, kind: "group".into(), title: Some(format!("g{id}")), ..Default::default() }).collect();
+        let client = Client::fixed("me", Snapshot { loaded: true, inbox, ..Default::default() });
+        let mut lowest = None;
+        for _ in 0..3 {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(738.0, 418.0))),
+                ..Default::default()
+            };
+            let output = ctx.run(input, |ctx| {
+                chat_page(ctx, Language::English, &ChatScreen::default(), &client);
+            });
+            lowest = output.shapes.iter().find_map(|c| match &c.shape {
+                egui::Shape::Text(t) if t.galley.text() == "Join with a code" => Some(t.pos.y),
+                _ => None,
+            });
+        }
+        assert!(lowest.is_some_and(|y| y < 418.0 - HINT_BAR_HEIGHT), "{lowest:?}");
+    }
 
     #[test]
     fn list_and_thread_are_drawn_side_by_side() {

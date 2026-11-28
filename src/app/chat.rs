@@ -24,6 +24,8 @@ pub enum Row {
     /// Index into the open thread's lines.
     Line(usize),
     Write,
+    /// The three dots that open the conversation actions.
+    Menu,
     Invite,
     AddMember,
     RemoveMember,
@@ -41,20 +43,22 @@ pub struct ChatScreen {
     pub prompt: Option<Prompt>,
     /// Leave and block need a second press.
     pub armed: Option<Row>,
+    pub menu: bool,
 }
 
 /// The focused pane's rows: the conversation list, or the open thread's.
 pub fn rows(open: Option<i64>, snapshot: &Snapshot) -> Vec<Row> {
     let Some(open) = open else {
-        let mut rows = vec![Row::NewDirect, Row::NewGroup, Row::Join];
-        rows.extend(snapshot.inbox.iter().map(|c| Row::Conversation(c.id)));
+        // Conversations first: opening one is the common case.
+        let mut rows: Vec<Row> = snapshot.inbox.iter().map(|c| Row::Conversation(c.id)).collect();
+        rows.extend([Row::NewDirect, Row::NewGroup, Row::Join]);
         return rows;
     };
     // -1: a conversation being created, whose id isn't known yet.
     let Some(thread) = snapshot.thread.as_ref().filter(|t| open < 0 || t.conversation.id == open) else { return Vec::new() };
     let mut rows: Vec<Row> = (0..thread.lines.len()).map(Row::Line).collect();
     rows.push(Row::Write);
-    rows.extend(actions(&thread.conversation));
+    rows.push(Row::Menu);
     rows
 }
 
@@ -67,6 +71,20 @@ fn actions(conversation: &Conversation) -> Vec<Row> {
 }
 
 impl ChatScreen {
+    /// What the controller moves through: the open menu, or else the pane's rows.
+    pub fn rows(&self, snapshot: &Snapshot) -> Vec<Row> {
+        match &snapshot.thread {
+            Some(thread) if self.menu && self.open.is_some() => actions(&thread.conversation),
+            _ => rows(self.open, snapshot),
+        }
+    }
+
+    fn close_menu(&mut self, client: &Client) {
+        self.menu = false;
+        self.armed = None;
+        self.focus = rows(self.open, &client.snapshot()).iter().position(|r| *r == Row::Menu).unwrap_or(usize::MAX);
+    }
+
     /// Focus is clamped here so rows arriving or leaving can't strand it. A thread
     /// opens on "Write" (`usize::MAX` means "not placed yet").
     pub fn focused(&self, rows: &[Row]) -> usize {
@@ -93,7 +111,7 @@ impl ChatScreen {
             }
             return true;
         }
-        let rows = rows(self.open, &client.snapshot());
+        let rows = self.rows(&client.snapshot());
         let focus = self.focused(&rows);
         match command {
             AppCommand::Input(InputCommand::MoveUp) => self.focus = focus.saturating_sub(1),
@@ -109,10 +127,17 @@ impl ChatScreen {
                 }
                 self.activate(row, client);
             }
+            AppCommand::Input(InputCommand::MoveRight) => {
+                if let Some(&row @ Row::Conversation(_)) = rows.get(focus) {
+                    self.activate(row, client);
+                }
+            }
             AppCommand::CloseChat => return false,
+            AppCommand::Input(InputCommand::Back | InputCommand::MoveLeft) if self.menu => self.close_menu(client),
             AppCommand::Input(InputCommand::Back) if self.open.is_none() => return false,
             AppCommand::Input(InputCommand::Back | InputCommand::MoveLeft) => {
                 self.armed = None;
+                self.menu = false;
                 if let Some(id) = self.open.take() {
                     // Back onto the conversation just left.
                     let list = self::rows(None, &client.snapshot());
@@ -131,6 +156,11 @@ impl ChatScreen {
     fn activate(&mut self, row: Row, client: &Client) {
         let confirmed = self.armed == Some(row);
         self.armed = None;
+        // Choosing an action closes the menu; Leave and Block stay for their second press.
+        let arming = matches!(row, Row::Leave | Row::Block) && !confirmed;
+        if self.menu && row != Row::Menu && !arming {
+            self.close_menu(client);
+        }
         match row {
             Row::NewDirect => self.prompt = Some(Prompt::Direct),
             Row::NewGroup => self.prompt = Some(Prompt::NewGroup),
@@ -149,6 +179,11 @@ impl ChatScreen {
                 }
             }
             Row::Write => self.prompt = Some(Prompt::Message),
+            Row::Menu if self.menu => self.close_menu(client),
+            Row::Menu => {
+                self.menu = true;
+                self.focus = 0;
+            }
             Row::Invite => client.send(Command::Invite),
             Row::AddMember => self.prompt = Some(Prompt::AddMember),
             Row::RemoveMember => self.prompt = Some(Prompt::RemoveMember),
@@ -171,6 +206,7 @@ impl ChatScreen {
     fn enter(&mut self, id: i64) {
         self.open = Some(id);
         self.focus = usize::MAX;
+        self.menu = false;
     }
 
     fn submit(&mut self, prompt: Prompt, text: String, client: &Client) {
@@ -209,6 +245,15 @@ mod tests {
         let rows = rows(Some(0), &snapshot);
         let screen = ChatScreen { focus: usize::MAX, ..Default::default() };
         assert_eq!(rows[screen.focused(&rows)], Row::Write);
-        assert!(rows.contains(&Row::Invite));
+        assert!(!rows.contains(&Row::Invite));
+
+        let client = Client::fixed("me", snapshot);
+        let mut screen = ChatScreen { open: Some(0), focus: usize::MAX, ..Default::default() };
+        screen.handle(AppCommand::ChatActivate(Row::Menu), &client);
+        assert_eq!(screen.rows(&client.snapshot())[0], Row::Invite);
+        screen.handle(AppCommand::ChatActivate(Row::Leave), &client);
+        assert!(screen.menu && screen.armed == Some(Row::Leave));
+        assert!(screen.handle(AppCommand::Input(InputCommand::Back), &client));
+        assert!(!screen.menu && screen.armed.is_none() && screen.open == Some(0));
     }
 }

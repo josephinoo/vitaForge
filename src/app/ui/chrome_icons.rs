@@ -39,6 +39,19 @@ pub enum ChromeIcon {
     ChevronLeft,
     Check,
     User,
+    NewChat,
+    Group,
+    Join,
+    Send,
+    AddUser,
+    RemoveUser,
+    Edit,
+    Leave,
+    Block,
+    Unblock,
+    Invite,
+    Lock,
+    Messages,
 }
 
 impl ChromeIcon {
@@ -115,6 +128,19 @@ impl ChromeIcon {
             Self::ChevronLeft => '\u{e071}',
             Self::Check => '\u{e070}',
             Self::User => '\u{e19f}',
+            Self::NewChat => '\u{f000}',
+            Self::Group => '\u{f001}',
+            Self::Join => '\u{f002}',
+            Self::Send => '\u{f003}',
+            Self::AddUser => '\u{f004}',
+            Self::RemoveUser => '\u{f005}',
+            Self::Edit => '\u{f006}',
+            Self::Leave => '\u{f007}',
+            Self::Block => '\u{f008}',
+            Self::Unblock => '\u{f009}',
+            Self::Invite => '\u{f00a}',
+            Self::Lock => '\u{f00b}',
+            Self::Messages => '\u{f00c}',
         }
     }
 }
