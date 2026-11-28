@@ -35,6 +35,7 @@ pub enum TextTarget {
     AuthEmail,
     VerifyScore,
     VerifyNote,
+    Chat,
     /// Index into `roms::ROM_CONSOLES`.
     RomsDir(u8),
 }
@@ -93,7 +94,8 @@ impl ContentTypeGroup {
             ContentTypeGroup::Home => !matches!(category, Category::Theme),
             ContentTypeGroup::Games => matches!(
                 category,
-                Category::PsVitaGame
+                Category::PsGames
+                    | Category::PsVitaGame
                     | Category::Port
                     | Category::Original
                     | Category::PspGame
@@ -112,7 +114,7 @@ impl ContentTypeGroup {
         use crate::data::Category;
         match self {
             ContentTypeGroup::Home | ContentTypeGroup::Games => &[
-                Category::PsVitaGame,
+                Category::PsGames,
                 Category::Port,
                 Category::Original,
             ],
@@ -130,8 +132,17 @@ impl ContentTypeGroup {
         }
     }
 
-    pub fn categories(self) -> &'static [crate::data::Category] {
-        self.sidebar_categories()
+    /// Everything △ steps through: the sidebar rows plus the pills under "PS Games".
+    pub fn categories(self) -> Vec<crate::data::Category> {
+        use crate::data::Category;
+        let mut all = Vec::new();
+        for &category in self.sidebar_categories() {
+            all.push(category);
+            if category == Category::PsGames {
+                all.extend(Category::PS);
+            }
+        }
+        all
     }
 }
 
@@ -183,6 +194,8 @@ pub enum AppCommand {
     SetLanguage(crate::app::i18n::Language),
     ToggleInstallNotifications,
     ToggleSoundEffects,
+    TogglePspInstallTarget,
+    TogglePspStorage,
     ClearIconCache,
     ClearCatalogCache,
     PurgeAllCache,
@@ -213,6 +226,12 @@ pub enum AppCommand {
     AuthToggleMode,
     AuthSubmit,
     AuthLogout,
+    OpenChat,
+    CloseChat,
+    /// Touch on a chat row.
+    ChatActivate(crate::app::chat::Row),
+    SubmitChatText(String),
+    CloseChatEntry,
     VerifierApply,
     SelfUpdate,
     LaunchCurrent,
@@ -269,7 +288,8 @@ pub fn map_controller_button_event(event: &Event) -> Option<AppCommand> {
         Button::Y => return Some(AppCommand::CycleCategoryFilter),
         Button::Start => return Some(AppCommand::OpenSettings),
         Button::X => return Some(AppCommand::FlipSortDirection),
-        Button::Back => return Some(AppCommand::RequestSearch),
+        // Select.
+        Button::Back => return Some(AppCommand::OpenChat),
         Button::LeftShoulder => InputCommand::CategoryPrev,
         Button::RightShoulder => InputCommand::CategoryNext,
         // First press comes from the event so a tap shorter than a slow frame isn't lost; polling only repeats.

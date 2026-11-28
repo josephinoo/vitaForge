@@ -62,6 +62,7 @@ impl ChromeIcon {
     }
     pub fn for_category(category: Category) -> Self {
         match category {
+            Category::PsGames => Self::Games,
             Category::PsVitaGame => Self::Vita,
             Category::PspGame => Self::Psp,
             Category::Ps1Game => Self::Ps1,

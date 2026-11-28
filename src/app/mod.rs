@@ -1,3 +1,4 @@
+pub mod chat;
 pub mod detail_actions;
 pub mod disk_lru;
 pub mod i18n;
@@ -357,7 +358,7 @@ impl CatalogState {
             .filter(|&index| {
                 let app = &apps[index];
                 let matches_group = content_type_group.contains(app.category);
-                let matches_cat = category_filter.is_none_or(|c| c as u8 == app.category as u8);
+                let matches_cat = category_filter.is_none_or(|c| c.matches(app.category));
                 let matches_fav = !favorites_filter || app.user_liked;
                 let matches_genre = genre_filter.is_none_or(|genre| {
                     app.genres.iter().any(|app_genre| app_genre.eq_ignore_ascii_case(genre))
@@ -417,7 +418,7 @@ impl CatalogState {
             .sidebar_categories()
             .iter()
             .map(|&category| {
-                let count = apps.iter().filter(|app| app.category == category).count();
+                let count = apps.iter().filter(|app| category.matches(app.category)).count();
                 // Themes load page by page; show the full size from the start.
                 let count = if category == Category::Theme { count.max(data::psvt::total()) } else { count };
                 (category, count)
@@ -513,7 +514,15 @@ impl CatalogState {
             }
             crate::app::ui::sidebar::SidebarSlot::Category(category) => {
                 self.favorites_filter = false;
-                self.category_filter = Some(category);
+                // Pressing "PS Games" again walks its pills, since △ opens genres on the Games tab.
+                let next = match self.category_filter {
+                    Some(current) if category == Category::PsGames && current.is_ps() => {
+                        let at = Category::PS.iter().position(|&c| c == current);
+                        Category::PS.get(at.map_or(0, |i| i + 1)).copied().unwrap_or(category)
+                    }
+                    _ => category,
+                };
+                self.category_filter = Some(next);
                 self.refresh_filter();
             }
             crate::app::ui::sidebar::SidebarSlot::Featured => {
@@ -569,7 +578,7 @@ impl CatalogState {
     }
 
     fn cycle_category_filter(&mut self) {
-        let cats = self.content_type_group.sidebar_categories();
+        let cats = self.content_type_group.categories();
         let next = match self.category_filter {
             None => cats.first().copied(),
             Some(current) => {
@@ -800,6 +809,9 @@ pub struct App {
     verification_rx: Option<oneshot::Receiver<(String, data::api::Verification)>>,
     pub verify_modal: Option<VerifyDraft>,
     pub verify_entry: Option<crate::input::TextTarget>,
+    pub chat: Option<chat::ChatScreen>,
+    /// Lives while logged in, so new messages are announced with the screen closed.
+    pub chat_client: Option<crate::data::chat::Client>,
     social_rx: Option<oneshot::Receiver<(String, data::api::Social)>>,
     cache_stats_rx: Option<oneshot::Receiver<data::cache_manager::CacheStats>>,
     audio: crate::audio::AudioEngine,
@@ -813,6 +825,8 @@ pub struct App {
     detail_max_scroll: f32,
     detail_rating_at: f32,
     install_notifications: bool,
+    psp_install_target: data::settings::PspInstallTarget,
+    psp_storage: data::settings::PspStorage,
     pub roms_dirs: Vec<String>,
     update_queue: std::collections::VecDeque<AppEntry>,
     pub update_active: bool,
@@ -1088,6 +1102,8 @@ impl App {
             verification_rx: None,
             verify_modal: None,
             verify_entry: None,
+            chat: None,
+            chat_client: None,
             social_rx: None,
             cache_stats_rx: None,
             audio: crate::audio::AudioEngine::new(settings.sound_effects),
@@ -1099,6 +1115,8 @@ impl App {
             detail_rating_at: 0.0,
             icons_need_clear: false,
             install_notifications: settings.install_notifications,
+            psp_install_target: settings.psp_install_target,
+            psp_storage: settings.psp_storage,
             roms_dirs: data::settings::all_roms_dirs(&settings),
             update_queue: std::collections::VecDeque::new(),
             update_active: false,
@@ -1309,6 +1327,7 @@ impl App {
         }
         self.icons.publish_completed(ctx);
         self.roms.poll();
+        self.sync_chat_client();
         if self.needs_installed_rescan {
             let entries: &[AppEntry] = match &self.state {
                 AppState::Catalog(catalog) => &catalog.apps,
@@ -1689,6 +1708,8 @@ impl App {
             }
             Some(Row::Notifications) => AppCommand::ToggleInstallNotifications,
             Some(Row::SoundEffects) => AppCommand::ToggleSoundEffects,
+            Some(Row::PspTarget) => AppCommand::TogglePspInstallTarget,
+            Some(Row::PspStorage) => AppCommand::TogglePspStorage,
             Some(Row::ClearIcons) => AppCommand::ClearIconCache,
             Some(Row::ClearCatalog) => AppCommand::ClearCatalogCache,
             Some(Row::PurgeAll) => AppCommand::PurgeAllCache,
@@ -2276,6 +2297,16 @@ impl App {
         });
     }
 
+    /// One chat worker per logged-in user; logging out drops it.
+    fn sync_chat_client(&mut self) {
+        let user = data::auth::username();
+        if self.chat_client.as_ref().map(|c| c.username.as_str()) != user.as_deref() {
+            self.chat = None;
+            self.chat_client = user
+                .map(|user| crate::data::chat::Client::start(user, self.lang, self.install_notifications));
+        }
+    }
+
     pub fn handle_command(&mut self, command: AppCommand) -> Result<()> {
         self.sync_account_rows();
         if self.self_update_prompt {
@@ -2292,6 +2323,14 @@ impl App {
                 _ => return Ok(()),
             }
         }
+        if let (Some(screen), Some(client)) = (&mut self.chat, &self.chat_client) {
+            if !screen.handle(command, client) {
+                client.send(crate::data::chat::Command::Visible(false));
+                self.chat = None;
+                self.audio.play(crate::audio::Sfx::HideModal);
+            }
+            return Ok(());
+        }
         if self.verify_modal.is_some() {
             self.handle_verify_modal(command);
             return Ok(());
@@ -2305,6 +2344,27 @@ impl App {
         }
         match command {
             AppCommand::PickFilter(_) | AppCommand::CloseFilterPicker => {}
+            AppCommand::CloseChat
+            | AppCommand::ChatActivate(_)
+            | AppCommand::SubmitChatText(_)
+            | AppCommand::CloseChatEntry => {}
+            // Select keeps exporting on the profiles page.
+            AppCommand::OpenChat if self.in_profiles() => self.tai_profile_export(),
+            // Select still reports from the detail screen.
+            AppCommand::OpenChat if matches!(self.state, AppState::Detail { .. }) => {
+                return self.handle_command(AppCommand::RequestReport);
+            }
+            AppCommand::OpenChat if data::auth::username().is_none() => {
+                return self.handle_command(AppCommand::OpenSettings);
+            }
+            AppCommand::OpenChat => {
+                self.sync_chat_client();
+                if let Some(client) = &self.chat_client {
+                    client.send(crate::data::chat::Command::Visible(true));
+                    self.chat = Some(Default::default());
+                    self.audio.play(crate::audio::Sfx::ShowModal);
+                }
+            }
             AppCommand::RomsRetry => self.roms.load_catalog(),
             AppCommand::Input(InputCommand::Back) => {
                 if self.self_update_prompt {
@@ -3442,6 +3502,14 @@ impl App {
                 self.audio.set_enabled(enabled);
                 data::settings::set_sound_effects(enabled);
             }
+            AppCommand::TogglePspInstallTarget => {
+                self.psp_install_target = self.psp_install_target.toggle();
+                data::settings::set_psp_install_target(self.psp_install_target);
+            }
+            AppCommand::TogglePspStorage => {
+                self.psp_storage = self.psp_storage.toggle();
+                data::settings::set_psp_storage(self.psp_storage);
+            }
             AppCommand::ClearIconCache => {
                 let freed = data::cache_manager::clear_icon_cache();
                 self.icons.clear_disk_index();
@@ -3920,6 +3988,24 @@ impl App {
 }
 #[cfg(test)]
 mod sort_tests {
+    #[test]
+    fn ps_games_row_walks_its_pills() {
+        use crate::app::ui::sidebar::{sidebar_slots, SidebarSlot};
+        use crate::data::Category;
+        let mut state = super::CatalogState::empty();
+        state.group_category_counts = vec![(Category::PsGames, 0)];
+        state.sidebar_cursor = sidebar_slots(&state.group_category_counts)
+            .iter()
+            .position(|&s| s == SidebarSlot::Category(Category::PsGames))
+            .unwrap();
+        for expected in [Category::PsGames, Category::PsVitaGame, Category::PspGame, Category::Ps1Game, Category::PsGames] {
+            state.apply_sidebar_slot_at_cursor();
+            assert_eq!(state.category_filter, Some(expected));
+        }
+        assert!(Category::PsGames.matches(Category::Ps1Game));
+        assert!(!Category::PsGames.matches(Category::Port));
+    }
+
     use super::*;
     use crate::data::Category;
 

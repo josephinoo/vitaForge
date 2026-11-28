@@ -36,7 +36,7 @@ pub fn active_sidebar_index(
     let target = if favorites_filter {
         SidebarSlot::Favorites
     } else if let Some(cat) = selected {
-        SidebarSlot::Category(cat)
+        SidebarSlot::Category(cat.sidebar_group())
     } else {
         match sort_order {
             SortOrder::Rating => SidebarSlot::Featured,
@@ -141,7 +141,7 @@ pub(crate) fn catalog_sidebar(
                             |ui, rect, tint| chrome_icons::paint(ui, ChromeIcon::for_category(category), rect, tint),
                             lang.sidebar_platform_label(category),
                             Some(count),
-                            selected == Some(category) && !favorites_filter,
+                            selected.map(Category::sidebar_group) == Some(category) && !favorites_filter,
                             focused,
                         )
                         .clicked()

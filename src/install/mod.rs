@@ -578,7 +578,11 @@ async fn install_pbp_pkg(
     tx: &watch::Sender<Progress>,
     pkg_path: &Path,
     kind: pkg::PkgKind,
+    storage: crate::data::settings::PspStorage,
 ) -> Result<Progress> {
+    let mount = storage.mount();
+    let psp_game_dir = format!("{mount}pspemu/PSP/GAME");
+    let psp_license_dir = format!("{mount}pspemu/PSP/LICENSE");
     let _ = tx.send(Progress::Decrypting);
     let staging_dir = PathBuf::from(EXTRACT_DIR).join(format!("pbp_{:?}", kind));
     let pkg_path_owned = pkg_path.to_path_buf();
@@ -602,8 +606,8 @@ async fn install_pbp_pkg(
         entry.titleid.trim()
     };
 
-    let dest = PathBuf::from(PSP_GAME_DIR).join(final_id);
-    std::fs::create_dir_all(PSP_GAME_DIR)?;
+    let dest = PathBuf::from(&psp_game_dir).join(final_id);
+    std::fs::create_dir_all(&psp_game_dir)?;
     let _ = std::fs::remove_dir_all(&dest);
     if std::fs::rename(&staging_dir, &dest).is_err() {
         std::fs::create_dir_all(&dest)?;
@@ -623,10 +627,10 @@ async fn install_pbp_pkg(
     if licensing::is_module_present("NoPspEmuDrm_kern") {
         let content_id = licensing::resolve_content_id(entry)?;
         let psp_license = licensing::create_fake_license(&content_id);
-        std::fs::create_dir_all("ux0:pspemu/PSP/LICENSE")
+        std::fs::create_dir_all(&psp_license_dir)
             .context("couldn't create the PSP license folder")?;
         std::fs::write(
-            format!("ux0:pspemu/PSP/LICENSE/{content_id}.rif"),
+            format!("{psp_license_dir}/{content_id}.rif"),
             &psp_license,
         )
         .context("couldn't write the PSP license file")?;
@@ -638,6 +642,32 @@ async fn install_pbp_pkg(
         None,
     );
     Ok(Progress::Done)
+}
+async fn queue_bgdl_psp(entry: &AppEntry, _tx: &watch::Sender<Progress>) -> Result<Progress> {
+    if !Path::new("vs0:sys/external/libshellsvc.suprx").exists()
+        || !Path::new("ur0:shell/db/app.db").exists()
+    {
+        bail!("LiveArea BGDL unavailable in this environment");
+    }
+    if !licensing::is_module_present("NoPspEmuDrm_kern") {
+        bail!("NoPspEmuDrm is required for PSP/PS1 LiveArea installs (or switch target to Adrenaline in Settings)");
+    }
+    let content_id = licensing::resolve_content_id(entry)?;
+    let license = Some(licensing::create_fake_license(&content_id));
+    stage_bgdl_icon(entry).await;
+    log_file(&format!(
+        "Queueing PSP/PS1 BGDL for '{}' with url '{}', content_id={content_id}",
+        entry.name, entry.download_url,
+    ));
+    queue_livearea_install(
+        &entry.name,
+        &entry.download_url,
+        license,
+        bgdl::BGDL_TYPE_PSP,
+    )
+    .await
+    .context("Failed to queue PSP/PS1 background download (BGDL)")?;
+    Ok(Progress::Queued)
 }
 async fn queue_bgdl_vita(entry: &AppEntry, _tx: &watch::Sender<Progress>) -> Result<Progress> {
     if !Path::new("vs0:sys/external/libshellsvc.suprx").exists()
@@ -673,6 +703,15 @@ async fn run_psp(
         bail!("no download link for this app");
     }
     if entry.platform.is_nps() {
+        let settings = crate::data::settings::load();
+        if settings.psp_install_target == crate::data::settings::PspInstallTarget::LiveArea {
+            return queue_bgdl_psp(entry, tx).await;
+        }
+        if settings.psp_storage == crate::data::settings::PspStorage::Uma0
+            && !Path::new("uma0:").is_dir()
+        {
+            bail!("uma0: is not mounted — mount it or switch PSP/PS1 storage to ux0: in Settings");
+        }
         std::fs::create_dir_all(WORK_DIR).context("couldn't create the work folder")?;
         let pkg_path = Path::new(TEMP_PKG);
         download(&entry.download_url, pkg_path, tx, cancel).await?;
@@ -681,7 +720,7 @@ async fn run_psp(
             crate::data::Platform::NpsPsp => pkg::PkgKind::Psp,
             _ => bail!("unexpected platform in NPS block"),
         };
-        return install_pbp_pkg(entry, tx, pkg_path, kind).await;
+        return install_pbp_pkg(entry, tx, pkg_path, kind, settings.psp_storage).await;
     }
     std::fs::create_dir_all(WORK_DIR).context("couldn't create the work folder")?;
     download(&entry.download_url, Path::new(TEMP_VPK), tx, cancel).await?;

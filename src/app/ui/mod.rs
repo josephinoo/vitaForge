@@ -1,3 +1,4 @@
+pub mod chat;
 pub mod chrome_icons;
 pub mod detail;
 pub mod footer;
@@ -37,6 +38,11 @@ pub(crate) enum UpdateAllUi {
 
 pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
     theme::sync_visuals(ctx);
+    if let (Some(screen), Some(client)) = (&app.chat, &app.chat_client)
+        && !app.self_update_prompt
+    {
+        return chat::chat_page(ctx, app.lang, screen, client);
+    }
     let self_update = app.self_update.as_ref();
     // Fades and slides the settings modal in; snaps back to 0 while it is closed.
     let appear = ctx.animate_bool_with_time(
@@ -120,6 +126,8 @@ pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
                     cache_notice: app.cache_notice.as_deref(),
                     install_notifications: app.install_notifications,
                     sound_effects: app.audio.is_enabled(),
+                    psp_install_target: app.psp_install_target,
+                    psp_storage: app.psp_storage,
                     roms_dirs: &app.roms_dirs,
                     purge_armed: app.purge_armed,
                     plugins: settings::PluginsView {
@@ -491,6 +499,25 @@ fn catalog_screen(
 
                 ui.vertical(|ui| {
                     if tab == StoreTab::Categories
+                        && !favorites_filter
+                        && let Some(current) = category_filter.filter(|c| c.is_ps())
+                    {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 6.0;
+                            for category in std::iter::once(Category::PsGames).chain(Category::PS) {
+                                let label = if category == Category::PsGames {
+                                    lang.category_label(None)
+                                } else {
+                                    lang.sidebar_platform_label(category)
+                                };
+                                if platform_pill(ui, label, current == category) {
+                                    commands.push(AppCommand::SetCategoryFilter(Some(category)));
+                                }
+                            }
+                        });
+                        ui.add_space(4.0);
+                    }
+                    if tab == StoreTab::Categories
                         && content_type_group == ContentTypeGroup::Games
                     {
                         ui.horizontal(|ui| {
@@ -510,7 +537,7 @@ fn catalog_screen(
                                 },
                             );
                         });
-                        ui.add_space(6.0);
+                        ui.add_space(4.0);
                     }
 
                     if tab == StoreTab::Roms {
@@ -584,4 +611,36 @@ fn catalog_screen(
             });
         });
     commands
+}
+
+fn platform_pill(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
+    let galley = ui.painter().layout_no_wrap(
+        label.to_owned(),
+        font(FONT_SMALL),
+        if active { pal().text } else { pal().text_dim },
+    );
+    let size = egui::vec2(galley.size().x + 18.0, 26.0);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    let fill = if active {
+        pal().primary
+    } else if response.hovered() {
+        pal().bg_card_hover
+    } else {
+        pal().bg_card
+    };
+    ui.painter().rect_filled(rect, 13.0, fill);
+    if !active {
+        ui.painter().rect_stroke(
+            rect,
+            13.0,
+            egui::Stroke::new(1.0, pal().separator),
+            egui::StrokeKind::Inside,
+        );
+    }
+    ui.painter().galley(
+        rect.center() - galley.size() * 0.5,
+        galley,
+        if active { pal().text } else { pal().text_dim },
+    );
+    response.clicked()
 }

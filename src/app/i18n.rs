@@ -116,6 +116,7 @@ impl Language {
                 crate::data::Category::Tool => s.category_tool,
                 crate::data::Category::Utility => s.category_utility,
                 crate::data::Category::Other => s.category_other,
+                crate::data::Category::PsGames => s.sidebar_ps_games,
             },
         })
     }
@@ -705,6 +706,7 @@ impl Language {
     }
     pub fn sidebar_platform_label(self, cat: crate::data::Category) -> &'static str {
         self.strings(|s| match cat {
+            crate::data::Category::PsGames => s.sidebar_ps_games,
             crate::data::Category::PsVitaGame => s.sidebar_vita,
             crate::data::Category::PspGame => s.sidebar_psp,
             crate::data::Category::Ps1Game => s.sidebar_ps1,
@@ -909,6 +911,7 @@ struct LocalizedStrings {
     group_emulators: &'static str,
     group_plugins: &'static str,
     group_themes: &'static str,
+    sidebar_ps_games: &'static str,
     sidebar_vita: &'static str,
     sidebar_psp: &'static str,
     sidebar_ps1: &'static str,
@@ -1101,6 +1104,7 @@ impl LocalizedStrings {
             group_emulators: r("group-emulators"),
             group_plugins: r("group-plugins"),
             group_themes: r("group-themes"),
+            sidebar_ps_games: r("sidebar-ps-games"),
             sidebar_vita: r("sidebar-vita"),
             sidebar_psp: r("sidebar-psp"),
             sidebar_ps1: r("sidebar-ps1"),

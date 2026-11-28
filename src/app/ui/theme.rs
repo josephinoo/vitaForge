@@ -853,7 +853,7 @@ pub fn category_color(category: Category) -> egui::Color32 {
     match category {
         Category::Emulator => egui::Color32::from_rgb(0xd9, 0x8e, 0x24),
         Category::Original => egui::Color32::from_rgb(0x3b, 0x7c, 0xbf),
-        Category::PsVitaGame => egui::Color32::from_rgb(0xc4, 0x5c, 0x7a),
+        Category::PsGames | Category::PsVitaGame => egui::Color32::from_rgb(0xc4, 0x5c, 0x7a),
         Category::Ps1Game => egui::Color32::from_rgb(0xc9, 0xa2, 0x27),
         Category::PspGame => egui::Color32::from_rgb(0x4a, 0x7c, 0x59),
         Category::Utility => egui::Color32::from_rgb(0x2f, 0x9e, 0x7a),

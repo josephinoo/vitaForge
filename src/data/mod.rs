@@ -1,6 +1,7 @@
 pub mod api;
 pub mod auth;
 pub mod cache_manager;
+pub mod chat;
 pub mod client_id;
 pub mod settings;
 pub mod source;
@@ -21,12 +22,32 @@ pub enum Category {
     Tool,
     Utility,
     Other,
+    /// Sidebar filter only (never an app's own category): Vita, PSP and PS1 games.
+    PsGames,
 }
 impl Category {
-    pub const ALL: [Category; 7] = [
+    /// The platforms behind the "PS Games" filter, in pill order.
+    pub const PS: [Category; 3] = [Category::PsVitaGame, Category::PspGame, Category::Ps1Game];
+
+    pub fn matches(self, app: Category) -> bool {
+        if self == Category::PsGames { Self::PS.contains(&app) } else { self == app }
+    }
+
+    pub fn is_ps(self) -> bool {
+        self == Category::PsGames || Self::PS.contains(&self)
+    }
+
+    /// The sidebar row that stays lit while this filter is on.
+    pub fn sidebar_group(self) -> Category {
+        if self.is_ps() { Category::PsGames } else { self }
+    }
+
+    pub const ALL: [Category; 9] = [
         Category::Emulator,
         Category::Original,
         Category::PsVitaGame,
+        Category::PspGame,
+        Category::Ps1Game,
         Category::Plugin,
         Category::Port,
         Category::Utility,
@@ -45,6 +66,7 @@ impl Category {
             Category::Tool => "TOOL",
             Category::Utility => "UTILITY",
             Category::Other => "OTHER",
+            Category::PsGames => "PS GAMES",
         }
     }
 

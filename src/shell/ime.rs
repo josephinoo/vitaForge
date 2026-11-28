@@ -9,6 +9,8 @@ pub enum ImePurpose {
     AuthEmail,
     VerifyScore,
     VerifyNote,
+    ChatName,
+    ChatMessage,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

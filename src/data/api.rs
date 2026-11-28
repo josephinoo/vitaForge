@@ -274,13 +274,10 @@ impl RawApp {
             return None;
         }
         let platform = Platform::from_api_type(&self.kind);
-        if matches!(platform, Platform::Psp | Platform::NpsPsp | Platform::NpsPsx) {
+        if matches!(platform, Platform::Psp) {
             return None;
         }
         let category = Category::from_api(&self.category, &self.kind);
-        if matches!(category, Category::PspGame | Category::Ps1Game) {
-            return None;
-        }
         let titleid = self.title_id.unwrap_or_default();
         let author = self.author
             .map(|a| if a.trim().is_empty() { "unknown".to_owned() } else { a })
@@ -458,7 +455,7 @@ pub fn age_secs(stamp: &str) -> Option<u64> {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?.as_secs() as i64;
     Some((now - then).max(0) as u64)
 }
-fn request(method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
+pub(crate) fn request(method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
     let mut req = crate::net::client().request(method, endpoint(path)).header("X-Client-ID", client_id::get());
     if let Some(token) = super::auth::token() {
         req = req.header("Authorization", format!("Bearer {token}"));
@@ -517,9 +514,7 @@ fn save_cached_catalog_blocking(entries: &[AppEntry], version_info: CatalogVersi
     let _ = serde_json::to_writer(&mut version_file, &version_info);
     let _ = std::io::Write::flush(&mut version_file);
 }
-fn drop_unavailable_platforms(mut entries: Vec<AppEntry>) -> Vec<AppEntry> {
-    entries.retain(|entry| !matches!(entry.platform, Platform::NpsPsp | Platform::NpsPsx));
-    entries.shrink_to_fit();
+fn drop_unavailable_platforms(entries: Vec<AppEntry>) -> Vec<AppEntry> {
     entries
 }
 

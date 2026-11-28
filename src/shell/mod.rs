@@ -181,6 +181,7 @@ pub fn run(mut app: App) -> Result<()> {
                         TextTarget::VerifyScore | TextTarget::VerifyNote => {
                             app.handle_command(AppCommand::SubmitVerifyText(text))?;
                         }
+                        TextTarget::Chat => app.handle_command(AppCommand::SubmitChatText(text))?,
                     },
                     ime::ImeResult::Canceled if session.target == TextTarget::Search => {
                         app.handle_command(AppCommand::SetSearchQuery(session.query_before))?;
@@ -196,6 +197,7 @@ pub fn run(mut app: App) -> Result<()> {
                         app.handle_command(AppCommand::CloseAuthInput)?
                     }
                     TextTarget::VerifyScore | TextTarget::VerifyNote => app.handle_command(AppCommand::CloseVerifyEntry)?,
+                    TextTarget::Chat => app.handle_command(AppCommand::CloseChatEntry)?,
                 }
                 held_direction = None;
                 held_since = Instant::now();
@@ -254,6 +256,8 @@ pub fn run(mut app: App) -> Result<()> {
             Some(target)
         } else if let Some(target) = app.verify_entry {
             Some(target)
+        } else if app.chat.as_ref().is_some_and(|chat| chat.prompt.is_some()) {
+            Some(TextTarget::Chat)
         } else {
             None
         };
@@ -347,6 +351,10 @@ pub fn run(mut app: App) -> Result<()> {
                 TextTarget::VerifyScore => ime::ImePurpose::VerifyScore,
                 TextTarget::VerifyNote => ime::ImePurpose::VerifyNote,
                 TextTarget::RomsDir(_) => ime::ImePurpose::ProfileName,
+                TextTarget::Chat => match app.chat.as_ref().and_then(|chat| chat.prompt.as_ref()) {
+                    Some(crate::app::chat::Prompt::Message | crate::app::chat::Prompt::Edit(..)) => ime::ImePurpose::ChatMessage,
+                    _ => ime::ImePurpose::ChatName,
+                },
             };
             let query_before = match &app.state {
                 crate::app::AppState::Catalog(catalog) => catalog.search_query.clone(),
@@ -377,6 +385,13 @@ pub fn run(mut app: App) -> Result<()> {
                     initial_string = app.verify_modal.as_ref().map(|d| d.note.clone()).unwrap_or_default();
                     initial_string.as_str()
                 }
+                TextTarget::Chat => {
+                    initial_string = match app.chat.as_ref().and_then(|chat| chat.prompt.as_ref()) {
+                        Some(crate::app::chat::Prompt::Edit(_, text)) => text.clone(),
+                        _ => String::new(),
+                    };
+                    initial_string.as_str()
+                }
                 TextTarget::RomsDir(index) => {
                     initial_string = app.roms_dirs.get(index as usize).cloned().unwrap_or_default();
                     initial_string.as_str()
@@ -398,6 +413,7 @@ pub fn run(mut app: App) -> Result<()> {
                         app.handle_command(AppCommand::CloseAuthInput)?
                     }
                     TextTarget::VerifyScore | TextTarget::VerifyNote => app.handle_command(AppCommand::CloseVerifyEntry)?,
+                    TextTarget::Chat => app.handle_command(AppCommand::CloseChatEntry)?,
                 }
             }
         }

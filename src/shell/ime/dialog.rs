@@ -37,6 +37,8 @@ fn purpose_title(purpose: ImePurpose) -> &'static str {
         ImePurpose::AuthEmail => "Email",
         ImePurpose::VerifyScore => "Game Score (0-100)",
         ImePurpose::VerifyNote => "Comment",
+        ImePurpose::ChatName => "Chat",
+        ImePurpose::ChatMessage => "Message",
     }
 }
 
@@ -51,6 +53,8 @@ fn purpose_max_len(purpose: ImePurpose) -> usize {
         ImePurpose::AuthEmail => 128,
         ImePurpose::VerifyScore => 3,
         ImePurpose::VerifyNote => 256,
+        ImePurpose::ChatName => 60,
+        ImePurpose::ChatMessage => 1000,
     }
 }
 
@@ -85,6 +89,7 @@ pub fn open(
         ImePurpose::Search => SCE_IME_ENTER_LABEL_SEARCH,
         ImePurpose::Comment | ImePurpose::Report => SCE_IME_ENTER_LABEL_SEND,
         ImePurpose::ProfileName | ImePurpose::VerifyScore | ImePurpose::VerifyNote => SCE_IME_ENTER_LABEL_SEND,
+        ImePurpose::ChatName | ImePurpose::ChatMessage => SCE_IME_ENTER_LABEL_SEND,
         ImePurpose::AuthUsername | ImePurpose::AuthPassword | ImePurpose::AuthEmail => SCE_IME_ENTER_LABEL_SEND,
     };
 
